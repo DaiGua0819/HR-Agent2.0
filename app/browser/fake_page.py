@@ -80,6 +80,14 @@ class FakePage:
             return [FakeElement(self, selector, "未读")]
         if "btn-send" in selector or "new-send-button" in selector or "class*='send'" in selector:
             return [FakeElement(self, selector, "发送")]
+        if (
+            "el-message-box__btns" in selector
+            or "el-dialog__footer" in selector
+            or "km-modal--open" in selector
+            or "km-dialog" in selector
+            or "im-dialog" in selector
+        ):
+            return [FakeElement(self, selector, "确定")]
         if "btn-greet" in selector:
             if self.current_recommend_candidate():
                 return [FakeElement(self, selector, "打招呼")]
@@ -157,6 +165,25 @@ class FakePage:
             return self.current_conversation()
         if script == "job51.read_chat_context":
             return self.current_conversation()
+        if script == "job51.opened_candidate_state":
+            expected = arg if isinstance(arg, dict) else {}
+            current = self.current_conversation()
+            expected_label = str(expected.get("label") or "")
+            expected_name = str(expected.get("name") or "")
+            expected_position = str(expected.get("position") or "")
+            actual_label = str(current.get("label") or "")
+            actual_name = str(current.get("name") or "")
+            actual_position = str(current.get("position") or current.get("appliedPosition") or "")
+            opened = bool(
+                expected_label and expected_label == actual_label
+                or expected_name and expected_name == actual_name
+                or expected_position and expected_position == actual_position
+            )
+            return {
+                "opened": opened,
+                "chatReady": True,
+                "reason": "" if opened else "candidate_identity_mismatch",
+            }
         if script == "zhilian.inspect_resume_request_state":
             convo = self.current_conversation()
             return {
@@ -306,6 +333,8 @@ class FakePage:
         ):
             self.resume_requests += 1
             self.current_conversation()["resume_requested"] = True
+        elif "确定" in element.text_value or "确认" in element.text_value:
+            self.current_conversation()["resume_request_confirmed"] = True
         elif "打招呼" in element.text_value or "立即Hi聊" in element.text_value:
             candidate = self.current_recommend_candidate()
             if candidate:

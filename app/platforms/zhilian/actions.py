@@ -73,6 +73,8 @@ async def find_next_unread_thread(
         if allowed and not any(_position_matches(position, item) for item in allowed):
             continue
         await row.click()
+        if not await page.wait_for(selectors.CHAT_READY, timeout_ms=6500):
+            continue
         conversation_id = await row.attr("id") or label
         return ConversationRef(Platform.ZHILIAN, owner, conversation_id)
     return None
@@ -120,8 +122,8 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     sent = clicked or verified
     return SendResult(
         sent=sent,
-        verified=verified or sent,
-        blocked=not sent,
+        verified=verified,
+        blocked=not verified,
         message="智联已发送消息" if sent else "智联发送按钮点击失败",
     )
 
@@ -158,7 +160,8 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
     if button is None:
         return {"requested": False, "blocked": True, "reason": "request_resume_button_not_found"}
     await button.click()
-    return {"requested": True, "state": state}
+    confirmed = await _click_request_resume_confirm(page)
+    return {"requested": True, "confirmed": confirmed, "state": state}
 
 
 async def open_recommend_page(page: BrowserPage) -> None:
@@ -209,6 +212,15 @@ async def _find_button_by_text(
         if expected_text in (await element.text()):
             return element
     return None
+
+
+async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
+        label = await element.text()
+        if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
+            await element.click()
+            return True
+    return False
 
 
 async def _safe_eval_dict(

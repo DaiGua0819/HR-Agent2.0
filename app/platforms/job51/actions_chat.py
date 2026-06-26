@@ -82,9 +82,58 @@ async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef 
         label = await row.text()
         if should_skip_thread_label(label) or _safe_int(await row.attr("unread")) <= 0:
             continue
+        expected = {
+            "id": await row.attr("id") or label,
+            "label": label,
+            "name": await row.attr("name") or "",
+            "position": await row.attr("position") or "",
+        }
         await row.click()
-        return ConversationRef(Platform.JOB51, owner, await row.attr("id") or label)
+        ready = await wait_chat_ready(page, timeout_ms=6500)
+        opened = await verify_opened_candidate(page, expected, chat_ready=ready)
+        if opened.get("opened"):
+            return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
     return None
+
+
+async def verify_opened_candidate(
+    page: BrowserPage,
+    expected: dict[str, object],
+    *,
+    chat_ready: bool = False,
+) -> dict[str, object]:
+    """校验虚拟列表点击后，右侧聊天区确实切到了目标候选人。"""
+
+    raw = await _safe_eval_dict(page, "job51.opened_candidate_state", expected)
+    if raw:
+        return raw
+    context = await _safe_eval_dict(page, "job51.read_chat_context")
+    expected_name = str(expected.get("name") or "").strip()
+    expected_position = str(expected.get("position") or "").strip()
+    expected_label = str(expected.get("label") or "").strip()
+    actual_name = str(context.get("name") or context.get("candidate_name") or "").strip()
+    actual_position = str(context.get("position") or context.get("appliedPosition") or "").strip()
+    actual_label = str(context.get("label") or "").strip()
+    name_ok = bool(expected_name and actual_name and _text_matches(actual_name, expected_name))
+    position_ok = bool(
+        expected_position
+        and actual_position
+        and _position_matches(actual_position, expected_position)
+    )
+    label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
+    opened = bool(chat_ready and (label_ok or name_ok or (actual_name and position_ok)))
+    reason = "" if opened else "candidate_identity_mismatch"
+    return {
+        "opened": opened,
+        "reason": reason,
+        "chatReady": chat_ready,
+        "expected": expected,
+        "actual": {
+            "name": actual_name,
+            "position": actual_position,
+            "label": actual_label,
+        },
+    }
 
 
 async def visible_thread_summary(page: BrowserPage) -> dict[str, object]:
@@ -152,8 +201,8 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     sent = clicked or verified
     return SendResult(
         sent=sent,
-        verified=verified or sent,
-        blocked=not sent,
+        verified=verified,
+        blocked=not verified,
         message="51job 已发送消息" if sent else "51job 发送按钮点击失败",
     )
 
@@ -207,6 +256,18 @@ def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
         if message.sender != MessageSender.SYSTEM and message.text.strip():
             return message
     return None
+
+
+def _position_matches(actual: str, expected: str) -> bool:
+    left = "".join(actual.split())
+    right = "".join(expected.split())
+    return bool(left and right and (left in right or right in left))
+
+
+def _text_matches(actual: str, expected: str) -> bool:
+    left = "".join(actual.split())
+    right = "".join(expected.split())
+    return bool(left and right and (left in right or right in left))
 
 
 def _safe_int(value: Any) -> int:

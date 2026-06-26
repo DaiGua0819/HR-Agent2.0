@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, Callable
+from typing import Any
 
 from app.agent.judgement import JudgementResult, judge_candidate_reply
 from app.platforms.types import ChatMessage, MessageSender
@@ -290,10 +291,10 @@ def _rule_classify(question_text: str, answer_text: str) -> str:
             return "reject"
         if re.search(r"(有|做过|接触过|了解|熟悉|会|持有|考了|拿到)", compact):
             return "accept"
+    if re.search(r"(不能|不可以|不接受|不行|不考虑|不愿意|没有|没|无|暂时不|拒绝)", compact):
+        return "reject"
     if re.search(r"(可以|接受|能|愿意|没问题|符合|是的|对)", compact):
         return "accept"
-    if re.search(r"(没有|没|无|暂时不|拒绝|不愿意)", compact):
-        return "reject"
     return ""
 
 

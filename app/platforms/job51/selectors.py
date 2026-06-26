@@ -26,6 +26,12 @@ INTERRUPTION_CLOSE_TEXTS = ("不感兴趣", "跳过", "稍后再说", "知道了
 
 REQUEST_RESUME_BUTTON = "div.operate-item, button, [role='button']"
 REQUEST_RESUME_TEXT = "求简历"
+REQUEST_RESUME_CONFIRM_BUTTON = (
+    ".el-message-box__btns button.el-button--primary, "
+    ".el-dialog__footer button.el-button--primary, "
+    "button.el-button--primary, button, [role='button']"
+)
+REQUEST_RESUME_CONFIRM_TEXTS = ("确定", "确认", "发送")
 RESUME_CARD = "div.item.resume-card"
 ONLINE_RESUME_ENTRY = "div.item.resume-card, div.im-message-item .resume-card"
 ATTACHMENT_ENTRY = "a[href], div.im-message-item a[href]"

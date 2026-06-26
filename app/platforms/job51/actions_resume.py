@@ -74,7 +74,13 @@ async def request_or_download_resume(
     position = str(context.get("position") or context.get("appliedPosition") or "")
     payload = await _safe_eval_dict(page, "job51.resume_payload")
     if payload.get("previewOnly"):
-        return {"requested": True, "downloaded": False, "reason": "preview_only_rejected"}
+        clicked, confirmed = await _request_resume_with_confirm(page)
+        return {
+            "requested": clicked,
+            "confirmed": confirmed,
+            "downloaded": False,
+            "reason": "preview_only_rejected",
+        }
     content = await _generic_attachment_bytes(page, payload)
     if isinstance(content, str):
         content = content.encode("utf-8")
@@ -87,9 +93,10 @@ async def request_or_download_resume(
         )
         if result.get("ok"):
             return {"requested": False, "resumeReceived": True, **result}
-        return {"requested": True, "downloaded": False, **result}
-    clicked = await _click_request_resume(page)
-    return {"requested": clicked, "downloaded": False}
+        clicked, confirmed = await _request_resume_with_confirm(page)
+        return {"requested": clicked, "confirmed": confirmed, "downloaded": False, **result}
+    clicked, confirmed = await _request_resume_with_confirm(page)
+    return {"requested": clicked, "confirmed": confirmed, "downloaded": False}
 
 
 async def _generic_attachment_bytes(
@@ -184,6 +191,23 @@ async def _click_request_resume(page: BrowserPage) -> bool:
             await element.click()
             return True
     return False
+
+
+async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
+        label = await element.text()
+        if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
+            await element.click()
+            return True
+    return False
+
+
+async def _request_resume_with_confirm(page: BrowserPage) -> tuple[bool, bool]:
+    clicked = await _click_request_resume(page)
+    if not clicked:
+        return False, False
+    confirmed = await _click_request_resume_confirm(page)
+    return True, confirmed
 
 
 async def _safe_eval_dict(

@@ -12,7 +12,12 @@ from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
-from app.platforms.job51.actions_chat import read_unread_conversations, should_skip_thread_label
+from app.platforms.job51.actions_chat import (
+    find_next_thread,
+    read_unread_conversations,
+    should_skip_thread_label,
+    verify_opened_candidate,
+)
 from app.platforms.job51.actions_resume import (
     InMemoryResumeDownloadMemory,
     resume_download_suitability_guard,
@@ -66,6 +71,28 @@ def test_job51_skip_rules_do_not_repeat_replied_or_platform_rows() -> None:
     )
     refs = asyncio.run(read_unread_conversations(page, owner="和新红"))
     assert [item.conversation_id for item in refs] == ["conv-销售管培生"]
+
+
+def test_job51_find_next_thread_verifies_opened_candidate() -> None:
+    """51job 点开未读行后校验当前聊天区身份，避免虚拟列表误读上一个人。"""
+
+    page = FakePage(
+        conversations=[
+            conversation("销售管培生", [{"sender": "other", "text": "你好"}], label="候选人A"),
+            conversation("电气工程师", [{"sender": "other", "text": "你好"}], label="候选人B"),
+        ]
+    )
+    ref = asyncio.run(find_next_thread(page, owner="和新红"))
+    assert ref is not None
+    assert ref.conversation_id == "conv-销售管培生"
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {"label": "候选人A", "name": "候选人", "position": "销售管培生"},
+            chat_ready=True,
+        )
+    )
+    assert opened["opened"] is True
 
 
 def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
@@ -125,8 +152,10 @@ def test_job51_request_resume_rejects_preview_only() -> None:
     adapter = Job51Adapter(page, owner="和新红")
     result = asyncio.run(adapter.request_resume())
     assert result["requested"] is True
+    assert result["confirmed"] is True
     assert result["downloaded"] is False
     assert result["reason"] == "preview_only_rejected"
+    assert page.resume_requests == 1
 
 
 def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:

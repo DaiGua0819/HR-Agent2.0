@@ -36,6 +36,11 @@ REQUEST_RESUME_BUTTON = (
     ".hover-resume-footer__button--attachment, a,button,[role='button'],span,div"
 )
 REQUEST_RESUME_TEXT = "要附件简历"
+REQUEST_RESUME_CONFIRM_BUTTON = (
+    ".km-modal--open button, .km-dialog button, "
+    ".im-dialog button, button, [role='button']"
+)
+REQUEST_RESUME_CONFIRM_TEXTS = ("确定", "确认", "发送")
 ATTACHMENT_VIEW_TEXT = "查看附件简历"
 
 RECOMMEND_POSITION_ITEM = ".job-pane__item"

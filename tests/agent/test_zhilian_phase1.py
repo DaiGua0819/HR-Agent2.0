@@ -11,7 +11,7 @@ from app.agent.runner import ZhilianConversationRunner
 from app.browser.fake_page import FakePage
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
-from app.platforms.zhilian.actions import send_message
+from app.platforms.zhilian.actions import request_resume, send_message
 from app.platforms.zhilian.adapter import ZhilianAdapter
 
 
@@ -100,6 +100,47 @@ def test_operation_direct_resume_has_no_prompt() -> None:
     assert page.sent_messages == []
     assert page.resume_requests == 1
 
+    state, page = run_case(conversation("外部财务产品顾问", [{"sender": "other", "text": "你好"}]))
+    assert state["next_action"] == "request_resume"
+    assert page.sent_messages == ["你好，方便发一份简历过来吗"]
+    assert page.resume_requests == 1
+
+
+def test_zhilian_request_resume_state_and_confirm() -> None:
+    """智联求附件简历：已收/已求跳过，未求过则点击并确认。"""
+
+    received = FakePage(
+        conversations=[
+            {
+                **conversation("销售管培生", [{"sender": "other", "text": "你好"}]),
+                "has_resume_attachment": True,
+            }
+        ]
+    )
+    received_result = asyncio.run(request_resume(received))
+    assert received_result["resumeReceived"] is True
+    assert received.resume_requests == 0
+
+    requested = FakePage(
+        conversations=[
+            {
+                **conversation("销售管培生", [{"sender": "other", "text": "你好"}]),
+                "resume_requested": True,
+            }
+        ]
+    )
+    requested_result = asyncio.run(request_resume(requested))
+    assert requested_result["skipped"] is True
+    assert requested.resume_requests == 0
+
+    page = FakePage(
+        conversations=[conversation("销售管培生", [{"sender": "other", "text": "你好"}])]
+    )
+    result = asyncio.run(request_resume(page))
+    assert result["requested"] is True
+    assert result["confirmed"] is True
+    assert page.resume_requests == 1
+
 
 def test_knowledge_answer_and_unknown_question_escalation() -> None:
     """知识库命中则回答，未命中则不回复并转人工记录。"""
@@ -173,6 +214,12 @@ def sample_rules() -> dict[str, object]:
                 "directResume": True,
                 "resumeJobType": "运营A",
                 "resumeRequestPrompt": "可以发一份简历过来吗",
+            },
+            "外部财务产品顾问": {
+                "category": "finance_ai_direct_resume",
+                "directResume": True,
+                "resumeJobType": "外部财务产品顾问",
+                "resumeRequestPrompt": "你好，方便发一份简历过来吗",
             },
         },
         "companyKnowledgeBase": {
