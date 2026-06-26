@@ -109,13 +109,17 @@ INSPECT_RESUME_REQUEST_STATE_JS = r"""
   const itemTexts = messageItems.map((node) => visibleText(node)).join("\n");
   const chatText = [messageText, itemTexts].join("\n");
   const hasFileName = /\.(pdf|doc|docx|wps|rtf)(\s|$|[?）)\]])/i.test(chatText);
+  const pendingResumeConsent =
+    /(?:对方|牛人|候选人).{0,12}(?:想|申请|请求).{0,12}(?:发送|发).{0,12}(?:附件)?简历.{0,12}(?:是否同意|同意)/.test(chatText);
   const hasResumeCard =
+    !pendingResumeConsent &&
     /(?:已发送|发送|上传|收到|预览).{0,12}(?:简历|附件)|(?:简历|附件).{0,12}(?:已发送|预览|下载)/.test(chatText);
   const alreadyRequested =
     /(?:简历请求已发送|已求简历|已向.{0,8}(?:索要|请求).{0,8}简历|已发送求简历)/.test(chatText);
   return {
     hasResumeAttachment: Boolean(hasFileName || hasResumeCard),
     alreadyRequested: Boolean(alreadyRequested),
+    pendingResumeConsent: Boolean(pendingResumeConsent),
     summary: chatText.slice(-500),
     source: "boss_chat_message_dom",
   };

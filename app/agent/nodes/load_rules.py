@@ -14,6 +14,7 @@ async def load_rules(state: GraphState) -> GraphState:
     state["rules"] = rules
     if position_rule:
         state["position_rule"] = position_rule
+        state["rule_source"] = str(position_rule.get("ruleSource") or "")
         state["stage"] = "rules_loaded"
     else:
         state["stage"] = "unconfigured_position"

@@ -1,6 +1,9 @@
-"""招聘规则加载与匹配。
+"""招聘规则加载与岗位匹配。
 
-智联复用 `boss_chat_rules.json`。这里做结构化读取，不修改规则资产本身。
+规则资产仍以 `boss_chat_rules.json` 为准。本模块只做结构化读取与归一化：
+先保留 `positionReplies` 的直求简历 / AI 基础条件等特殊配置，再补充
+`companyKnowledgeBase.sections` 的岗位筛选与知识库 section，避免把岗位逻辑
+写散到 runner 中。
 """
 
 from __future__ import annotations
@@ -27,22 +30,29 @@ def load_chat_rules(path: str | Path | None = None) -> dict[str, Any]:
 def select_position_rule(
     position: str, rules: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
-    """按岗位名匹配 positionReplies。"""
+    """按岗位名匹配 positionReplies 与 companyKnowledgeBase.sections。"""
 
     data = rules or load_chat_rules()
-    position_rules = data.get("positionReplies") or {}
-    if position in position_rules:
-        return dict(position_rules[position])
-    compact = _compact(position)
-    for name, rule in position_rules.items():
-        rule_name = _compact(name)
-        if compact and rule_name and (compact in rule_name or rule_name in compact):
-            return dict(rule)
+    position_match = _best_position_reply_match(position, data)
+    section_match = _best_section_match(position, data)
+    if position_match and section_match:
+        rule = _normalize_position_reply_rule(position_match, position)
+        section_rule = _normalize_section_rule(section_match, position)
+        rule.setdefault("companyKnowledgeBase", section_rule.get("companyKnowledgeBase", {}))
+        rule.setdefault("knowledgeSectionKey", section_rule.get("knowledgeSectionKey", ""))
+        rule.setdefault("matchPositions", section_rule.get("matchPositions", []))
+        if not rule.get("screening") and section_rule.get("screening"):
+            rule["screening"] = section_rule["screening"]
+        return rule
+    if position_match:
+        return _normalize_position_reply_rule(position_match, position)
+    if section_match:
+        return _normalize_section_rule(section_match, position)
     return None
 
 
 def screening_questions(rule: dict[str, Any] | None) -> list[str]:
-    """提取岗位筛选问题，兼容旧 JSON 的多种字段形状。"""
+    """提取岗位筛选主问法，兼容旧 JSON 的多种字段形状。"""
 
     if not rule:
         return []
@@ -52,7 +62,13 @@ def screening_questions(rule: dict[str, Any] | None) -> list[str]:
     if isinstance(values, str):
         return [values]
     if isinstance(values, list):
-        return [str(item.get("question") if isinstance(item, dict) else item) for item in values]
+        out: list[str] = []
+        for item in values:
+            if isinstance(item, dict):
+                out.append(str(item.get("text") or item.get("question") or ""))
+            else:
+                out.append(str(item))
+        return [item for item in out if item.strip()]
     return []
 
 
@@ -87,6 +103,21 @@ def initial_common_phrase(rule: dict[str, Any] | None) -> str:
     """返回 AI 应用开发基础条件常用语。"""
 
     return str((rule or {}).get("initialCommonPhrase") or "").strip()
+
+
+def rule_screening(rule: dict[str, Any] | None) -> dict[str, Any]:
+    """返回岗位筛选配置。"""
+
+    screening = (rule or {}).get("screening")
+    if isinstance(screening, dict):
+        return screening
+    questions = screening_questions(rule)
+    if questions:
+        return {
+            "mode": "ask_required_questions",
+            "questions": [{"text": item, "required": True} for item in questions],
+        }
+    return {}
 
 
 def find_knowledge_answer(
@@ -164,3 +195,119 @@ def _collect_answer_candidates(value: Any) -> list[dict[str, Any]]:
 
 def _compact(value: str) -> str:
     return "".join(str(value or "").split()).lower()
+
+
+def _best_position_reply_match(
+    position: str,
+    rules: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    position_rules = rules.get("positionReplies") or {}
+    if not isinstance(position_rules, dict):
+        return None
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for name, raw_rule in position_rules.items():
+        if not isinstance(raw_rule, dict):
+            continue
+        names = [str(name)]
+        names.extend(_string_list(raw_rule.get("aliases")))
+        names.extend(_string_list(raw_rule.get("matchPositions")))
+        for item in names:
+            if item.strip():
+                candidates.append((item, str(name), raw_rule))
+    match = _best_named_match(position, candidates)
+    return (match[1], match[2]) if match else None
+
+
+def _best_section_match(
+    position: str,
+    rules: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    kb = (
+        rules.get("companyKnowledgeBase")
+        if isinstance(rules.get("companyKnowledgeBase"), dict)
+        else {}
+    )
+    sections = kb.get("sections") if isinstance(kb.get("sections"), (dict, list)) else {}
+    items: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(sections, dict):
+        items = [(str(key), value) for key, value in sections.items() if isinstance(value, dict)]
+    elif isinstance(sections, list):
+        items = [
+            (str(item.get("title") or item.get("name") or index), item)
+            for index, item in enumerate(sections)
+            if isinstance(item, dict)
+        ]
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for key, section in items:
+        names = [key, str(section.get("title") or ""), str(section.get("name") or "")]
+        names.extend(_string_list(section.get("aliases")))
+        names.extend(_string_list(section.get("matchPositions")))
+        for item in names:
+            if item.strip():
+                candidates.append((item, key, section))
+    match = _best_named_match(position, candidates)
+    return (match[1], match[2]) if match else None
+
+
+def _best_named_match(
+    position: str,
+    candidates: list[tuple[str, str, dict[str, Any]]],
+) -> tuple[str, str, dict[str, Any]] | None:
+    compact = _compact(position)
+    if not compact:
+        return None
+    scored: list[tuple[int, int, str, str, dict[str, Any]]] = []
+    for name, key, payload in candidates:
+        candidate = _compact(name)
+        if not candidate:
+            continue
+        if compact == candidate:
+            score = 3
+        elif candidate in compact:
+            score = 2
+        elif compact in candidate:
+            score = 1
+        else:
+            continue
+        scored.append((score, len(candidate), name, key, payload))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, _, name, key, payload = scored[0]
+    return name, key, payload
+
+
+def _normalize_position_reply_rule(
+    match: tuple[str, dict[str, Any]],
+    position: str,
+) -> dict[str, Any]:
+    key, raw_rule = match
+    rule = dict(raw_rule)
+    rule.setdefault("matchedPosition", position)
+    rule.setdefault("ruleSource", "positionReplies")
+    rule.setdefault("positionRuleKey", key)
+    return rule
+
+
+def _normalize_section_rule(
+    match: tuple[str, dict[str, Any]],
+    position: str,
+) -> dict[str, Any]:
+    key, section = match
+    rule = dict(section)
+    title = str(section.get("title") or section.get("name") or key)
+    rule.setdefault("category", title)
+    rule.setdefault("resumeJobType", title)
+    rule.setdefault("matchedPosition", position)
+    rule.setdefault("ruleSource", "companyKnowledgeBase.sections")
+    rule.setdefault("knowledgeSectionKey", key)
+    rule["companyKnowledgeBase"] = dict(section)
+    return rule
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return []

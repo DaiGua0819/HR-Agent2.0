@@ -61,6 +61,8 @@ async def process_boss_targets(
                 "lastMessage": messages[-1] if messages else _last_message_from_context(context),
                 "action": state.get("next_action") or "",
                 "stage": state.get("stage") or "",
+                "ruleSource": state.get("rule_source") or "",
+                "sentMessages": state.get("sent_messages") or [],
                 "decision": state.get("decision") or {},
             }
         )

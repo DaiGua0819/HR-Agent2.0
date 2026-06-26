@@ -6,6 +6,7 @@ Phase 2 测试通过 FakePage 验证顺序、选择器和业务分支。
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
@@ -190,6 +191,7 @@ async def inspect_resume_request_state(page: BrowserPage) -> ResumeRequestState:
     return ResumeRequestState(
         has_resume_attachment=bool(raw.get("hasResumeAttachment")),
         already_requested=bool(raw.get("alreadyRequested")),
+        pending_resume_consent=bool(raw.get("pendingResumeConsent")),
         summary=str(raw.get("summary") or ""),
     )
 
@@ -198,6 +200,15 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
     """点击 BOSS 聊天工具栏里的“求简历”。"""
 
     state = await inspect_resume_request_state(page)
+    if state.pending_resume_consent:
+        consent = await _find_button_by_text(
+            page,
+            selectors.REQUEST_RESUME_BUTTON,
+            selectors.RESUME_CONSENT_TEXT,
+        )
+        if consent is not None:
+            await consent.click()
+            return {"requested": True, "acceptedResumeConsent": True, "state": state}
     if state.has_resume_attachment:
         return {"requested": False, "resumeReceived": True, "state": state}
     if state.already_requested:
@@ -208,7 +219,16 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
     if button is None:
         return {"requested": False, "blocked": True, "reason": "request_resume_button_not_found"}
     await button.click()
-    return {"requested": True, "state": state}
+    confirmed = await _click_request_resume_confirm(page)
+    if not confirmed:
+        return {
+            "requested": False,
+            "blocked": True,
+            "reason": "request_resume_confirm_not_found",
+            "requestButtonClicked": True,
+            "state": state,
+        }
+    return {"requested": True, "confirmed": True, "state": state}
 
 
 async def open_recommend_page(page: BrowserPage) -> None:
@@ -286,6 +306,34 @@ async def _find_button_by_text(
     return None
 
 
+async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    """点击“求简历”后的确认弹窗按钮。"""
+
+    for _ in range(10):
+        button = await _find_button_by_any_text(
+            page,
+            selectors.REQUEST_RESUME_CONFIRM_BUTTON,
+            selectors.REQUEST_RESUME_CONFIRM_TEXTS,
+        )
+        if button is not None:
+            await button.click()
+            return True
+        await asyncio.sleep(0.2)
+    return False
+
+
+async def _find_button_by_any_text(
+    page: BrowserPage,
+    selector: str,
+    expected_texts: tuple[str, ...],
+) -> BrowserElement | None:
+    for element in await page.query_all(selector):
+        label = await element.text()
+        if any(expected in label for expected in expected_texts):
+            return element
+    return None
+
+
 async def _safe_eval_dict(
     page: BrowserPage, script: str, arg: object | None = None
 ) -> dict[str, object]:
@@ -354,6 +402,15 @@ def _resume_state_from_text(text: str) -> dict[str, object]:
     compact = _compact(text)
     file_markers = (".pdf", ".doc", ".docx", ".wps", ".rtf")
     has_file_name = any(marker in text.lower() for marker in file_markers)
+    pending_resume_consent = any(
+        marker in compact
+        for marker in (
+            "对方想发送附件简历给您您是否同意",
+            "对方想发送简历给您您是否同意",
+            "牛人想发送附件简历给您您是否同意",
+            "候选人想发送附件简历给您您是否同意",
+        )
+    )
     has_resume_card = any(
         marker in compact
         for marker in (
@@ -364,7 +421,7 @@ def _resume_state_from_text(text: str) -> dict[str, object]:
             "附件预览",
             "下载简历",
         )
-    )
+    ) and not pending_resume_consent
     already_requested = any(
         marker in compact
         for marker in (
@@ -377,6 +434,7 @@ def _resume_state_from_text(text: str) -> dict[str, object]:
     return {
         "hasResumeAttachment": has_file_name or has_resume_card,
         "alreadyRequested": already_requested,
+        "pendingResumeConsent": pending_resume_consent,
         "summary": text[-500:],
         "source": "text_fallback",
     }

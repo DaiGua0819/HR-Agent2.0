@@ -84,6 +84,10 @@
       "directResume": true,
       "resumeJobType": "外部财务产品顾问",
       "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+      "resumeRequestPrompts": [
+        "你好，方便发一份简历过来吗",
+        "你好，可以看看简历吗"
+      ],
       "rolePrompt": "外部财务产品顾问 / 业财智能化顾问 / AI财务场景顾问按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先发送“你好，方便发一份简历过来吗”，再执行求简历；若候选人已发送简历则直接接收/下载，入库岗位为外部财务产品顾问。",
       "talkingPoints": [
         "财务产品顾问",
@@ -105,6 +109,10 @@
       "directResume": true,
       "resumeJobType": "AI智能体解决方案负责人",
       "resumeRequestPrompt": "你好，可以看看简历吗",
+      "resumeRequestPrompts": [
+        "你好，方便发一份简历过来吗",
+        "你好，可以看看简历吗"
+      ],
       "rolePrompt": "AI智能体解决方案负责人 / AI Solution Architect / AI FDE / AI Workflow Engineer按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先发送“你好，可以看看简历吗”，再执行求简历；若候选人已发送简历则直接接收/下载，入库岗位为AI智能体解决方案负责人。",
       "talkingPoints": [
         "AI智能体解决方案",
@@ -119,6 +127,31 @@
         "已收到或已求过简历时不重复发送话术、不重复求简历。",
         "简历入库岗位归类为AI智能体解决方案负责人。",
         "不进行简历评分。"
+      ]
+    },
+    "投资交易策略研究员（量化与市场情绪方向）": {
+      "category": "finance_ai_direct_resume",
+      "template": "该岗位不发送筛选问题，先从两句简历话术里随机发送一句，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "投资交易策略研究员",
+      "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+      "resumeRequestPrompts": [
+        "你好，方便发一份简历过来吗",
+        "你好，可以看看简历吗"
+      ],
+      "rolePrompt": "投资交易策略研究员（量化与市场情绪方向）按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先在“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再执行求简历；若候选人已请求发送附件简历，则直接同意/求简历。",
+      "talkingPoints": [
+        "投资交易策略",
+        "量化",
+        "市场情绪",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，从两句简历话术里随机发送一句，再点击求简历。",
+        "候选人请求发送附件简历时直接同意/求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为投资交易策略研究员。"
       ]
     }
   },
@@ -2594,6 +2627,10 @@
         "directResume": true,
         "resumeJobType": "外部财务产品顾问",
         "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+        "resumeRequestPrompts": [
+          "你好，方便发一份简历过来吗",
+          "你好，可以看看简历吗"
+        ],
         "screening": {},
         "topics": {},
         "faq": []
@@ -2616,6 +2653,29 @@
         "directResume": true,
         "resumeJobType": "AI智能体解决方案负责人",
         "resumeRequestPrompt": "你好，可以看看简历吗",
+        "resumeRequestPrompts": [
+          "你好，方便发一份简历过来吗",
+          "你好，可以看看简历吗"
+        ],
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "投资交易策略研究员": {
+        "matchPositions": [
+          "投资交易策略研究员",
+          "投资交易策略研究员（量化与市场情绪方向）",
+          "量化与市场情绪方向"
+        ],
+        "inheritsRoot": true,
+        "description": "投资交易策略研究员（量化与市场情绪方向）直求简历岗位。不发送筛选问题；未收到简历且未求过简历时从“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再点击求简历；候选人请求发送附件简历时直接同意/求简历。",
+        "directResume": true,
+        "resumeJobType": "投资交易策略研究员",
+        "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+        "resumeRequestPrompts": [
+          "你好，方便发一份简历过来吗",
+          "你好，可以看看简历吗"
+        ],
         "screening": {},
         "topics": {},
         "faq": []

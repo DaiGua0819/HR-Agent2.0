@@ -113,6 +113,8 @@ class FakePage:
                 FakeElement(self, selector, "求简历"),
                 FakeElement(self, selector, "不合适"),
             ]
+        if "boss-dialog" in selector or "dialog-wrap.active" in selector:
+            return [FakeElement(self, selector, "确认")]
         if "operate-item" in selector:
             return [FakeElement(self, selector, "求简历")]
         if "textarea" in selector or "drop-area" in selector:

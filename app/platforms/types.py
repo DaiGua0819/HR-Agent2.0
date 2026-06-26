@@ -65,6 +65,7 @@ class ResumeRequestState:
 
     has_resume_attachment: bool = False
     already_requested: bool = False
+    pending_resume_consent: bool = False
     summary: str = ""
 
 

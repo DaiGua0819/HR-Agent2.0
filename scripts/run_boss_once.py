@@ -271,6 +271,8 @@ async def _process_boss(adapter: BossAdapter, limit: int) -> list[dict[str, Any]
                 "lastMessage": last_message,
                 "action": state.get("next_action") or "",
                 "stage": state.get("stage") or "",
+                "ruleSource": state.get("rule_source") or "",
+                "sentMessages": state.get("sent_messages") or [],
                 "decision": state.get("decision") or {},
             }
         )
@@ -312,6 +314,7 @@ def _print_summary(items: list[dict[str, Any]], *, live: bool) -> None:
         print(f"\n[{index}] 会话: {item.get('conversationId')}")
         print(f"候选人: {candidate.get('name') or ''}")
         print(f"识别岗位: {item.get('job') or candidate.get('applied_position') or '未识别'}")
+        print(f"规则来源: {item.get('ruleSource') or '未命中'}")
         last_message = json.dumps(
             _jsonable(item.get("lastMessage") or {}),
             ensure_ascii=False,
@@ -319,6 +322,19 @@ def _print_summary(items: list[dict[str, Any]], *, live: bool) -> None:
         print(f"最后消息: {last_message}")
         print(f"打算动作: {item.get('action') or '无'}")
         print(f"原因/阶段: {item.get('stage') or ''}")
+        sent_messages = (
+            item.get("sentMessages")
+            if isinstance(item.get("sentMessages"), list)
+            else []
+        )
+        if sent_messages:
+            print(f"拟发送/已发送文本: {json.dumps(_jsonable(sent_messages), ensure_ascii=False)}")
+        screening = decision.get("screening") if isinstance(decision.get("screening"), dict) else {}
+        if screening:
+            print(
+                "筛选状态: "
+                f"{screening.get('status') or ''} / {screening.get('reason') or ''}"
+            )
         print(f"决策详情: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
 
 

@@ -43,6 +43,13 @@ REQUEST_RESUME_BUTTON = (
     ".toolbar button, .chat-op button, .btn-request-resume"
 )
 REQUEST_RESUME_TEXT = "求简历"
+REQUEST_RESUME_CONFIRM_BUTTON = (
+    ".boss-dialog__wrapper button, .boss-dialog button, "
+    ".dialog-wrap.active button, [role='dialog'] button, "
+    ".modal button, .dialog-footer button"
+)
+REQUEST_RESUME_CONFIRM_TEXTS = ("确认", "确定", "发送请求", "发起请求", "继续")
+RESUME_CONSENT_TEXT = "同意"
 UNSUITABLE_BUTTON_TEXT = "不合适"
 
 COMMON_PHRASE_BUTTON = "button, [role='button'], .common-phrase, .phrase-entry"
@@ -73,6 +80,7 @@ BOSS_SELECTORS: dict[str, str] = {
     "chatInput": CHAT_INPUT,
     "sendButton": SEND_BUTTON,
     "requestResumeButton": REQUEST_RESUME_BUTTON,
+    "requestResumeConfirmButton": REQUEST_RESUME_CONFIRM_BUTTON,
     "recommendPositionLabel": RECOMMEND_POSITION_LABEL,
     "recommendCard": RECOMMEND_CARD,
     "recommendDialog": RECOMMEND_DIALOG,

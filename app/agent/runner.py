@@ -6,7 +6,11 @@ from dataclasses import asdict
 from typing import Any
 
 from app.agent.judgement import judge_candidate_reply
-from app.agent.policy import prephrase_text, should_send_prephrase, should_use_company_info
+from app.agent.policy import (
+    prephrase_candidates,
+    prephrase_text,
+    should_use_company_info,
+)
 from app.agent.rules import (
     find_knowledge_answer,
     initial_common_phrase,
@@ -14,8 +18,12 @@ from app.agent.rules import (
     is_direct_resume_rule,
     load_chat_rules,
     looks_like_question,
-    screening_questions,
+    rule_screening,
     select_position_rule,
+)
+from app.agent.screening import (
+    analyze_position_screening,
+    select_position_screening_question_text,
 )
 from app.agent.state import GraphState
 from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSink
@@ -59,6 +67,7 @@ class ConversationRunner:
         if not rule:
             return self._finish(state, "skip", "unconfigured_position")
         state["position_rule"] = rule
+        state["rule_source"] = rule.get("ruleSource", "")
 
         last = _last_non_system(conversation)
         if not last or last.sender != MessageSender.CANDIDATE:
@@ -66,8 +75,31 @@ class ConversationRunner:
 
         answer = self._knowledge_answer(last.text, conversation)
         if answer:
-            await self.adapter.send_message(answer)
-            state["sent_messages"] = [answer]
+            screening = rule_screening(rule)
+            if is_direct_resume_rule(rule):
+                await self._send_knowledge_answer(state, answer)
+                return await self._handle_direct_resume(
+                    state,
+                    conversation,
+                    rule,
+                    knowledge_answer=answer,
+                )
+            if screening:
+                analysis = await analyze_position_screening(
+                    conversation.messages,
+                    screening,
+                    llm=self.llm,
+                )
+                if analysis.get("status") == "accept":
+                    await self._send_knowledge_answer(state, answer)
+                    return await self._handle_screening(
+                        state,
+                        conversation,
+                        rule,
+                        analysis=analysis,
+                        knowledge_answer=answer,
+                    )
+            await self._send_knowledge_answer(state, answer)
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
         if looks_like_question(last.text):
             state["pending_question"] = last.text
@@ -84,21 +116,54 @@ class ConversationRunner:
         state: GraphState,
         conversation: Conversation,
         rule: dict[str, Any],
+        *,
+        knowledge_answer: str = "",
     ) -> GraphState:
         request_state = await self.adapter.inspect_resume_request_state()
         position = conversation.candidate.applied_position
-        if (
-            not request_state.has_resume_attachment
-            and not request_state.already_requested
-            and should_send_prephrase(conversation.platform, position, rule)
-        ):
+        if request_state.has_resume_attachment:
+            return self._finish(
+                state,
+                "wait",
+                "resume_attachment_received",
+                knowledgeAnswer=knowledge_answer,
+                result={"skipped": True, "reason": "resume_attachment_received"},
+            )
+        if request_state.already_requested:
+            return self._finish(
+                state,
+                "wait",
+                "resume_already_requested",
+                knowledgeAnswer=knowledge_answer,
+                result={"skipped": True, "reason": "already_requested"},
+            )
+        if request_state.pending_resume_consent:
+            result = await self.adapter.request_resume()
+            state["resume_requested"] = bool(
+                result.get("requested") or result.get("resumeReceived")
+            )
+            return self._finish(
+                state,
+                "request_resume",
+                "resume_consent_requested",
+                knowledgeAnswer=knowledge_answer,
+                result=result,
+            )
+        candidates = prephrase_candidates(conversation.platform, position, rule)
+        if candidates and not any(_message_sent(conversation, item) for item in candidates):
             prompt = prephrase_text(conversation.platform, position, rule)
-            if prompt and not _message_sent(conversation, prompt):
+            if prompt:
                 await self.adapter.send_message(prompt)
-                state["sent_messages"] = [prompt]
+                _append_sent(state, prompt)
         result = await self.adapter.request_resume()
         state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
-        return self._finish(state, "request_resume", "direct_resume", result=result)
+        return self._finish(
+            state,
+            "request_resume",
+            "direct_resume",
+            knowledgeAnswer=knowledge_answer,
+            result=result,
+        )
 
     async def _handle_ai_basic(
         self,
@@ -114,7 +179,7 @@ class ConversationRunner:
                 await self.adapter.send_company_info(phrase=phrase, phrase_key="basic_conditions")
             else:
                 await self.adapter.send_message(phrase)
-            state["sent_messages"] = [phrase]
+            _append_sent(state, phrase)
             return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
         judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
         if judgement.status == "accept":
@@ -136,22 +201,42 @@ class ConversationRunner:
         state: GraphState,
         conversation: Conversation,
         rule: dict[str, Any],
-        reply_text: str,
+        reply_text: str = "",
+        *,
+        analysis: dict[str, Any] | None = None,
+        knowledge_answer: str = "",
     ) -> GraphState:
-        questions = screening_questions(rule)
-        if not questions:
+        screening = rule_screening(rule)
+        if not screening:
             return self._finish(state, "wait", "no_screening_questions")
-        next_question = next(
-            (item for item in questions if not _message_sent(conversation, item)), ""
+        analysis = analysis or await analyze_position_screening(
+            conversation.messages,
+            screening,
+            llm=self.llm,
         )
-        if next_question:
-            await self.adapter.send_message(next_question)
-            state["sent_messages"] = [next_question]
-            return self._finish(
-                state, "ask_screening", "screening_question_sent", reply=next_question
+        state["screening_analysis"] = analysis
+        status = str(analysis.get("status") or "")
+        if status == "not_configured":
+            return self._finish(state, "wait", "no_screening_questions", screening=analysis)
+        if status == "not_asked":
+            question = (
+                analysis.get("nextQuestion")
+                if isinstance(analysis.get("nextQuestion"), dict)
+                else {}
             )
-        judgement = await judge_candidate_reply(reply_text, question=questions[-1], llm=self.llm)
-        if judgement.status == "accept":
+            next_question = select_position_screening_question_text(question)
+            if not next_question:
+                return self._finish(state, "wait", "no_screening_question_text", screening=analysis)
+            await self.adapter.send_message(next_question)
+            _append_sent(state, next_question)
+            return self._finish(
+                state,
+                "ask_screening",
+                "screening_question_sent",
+                reply=next_question,
+                screening=analysis,
+            )
+        if status == "accept":
             result = await self.adapter.request_resume()
             state["resume_requested"] = bool(
                 result.get("requested") or result.get("resumeReceived")
@@ -160,13 +245,25 @@ class ConversationRunner:
                 state,
                 "request_resume",
                 "screening_accept",
-                judgement=asdict(judgement),
+                knowledgeAnswer=knowledge_answer,
+                screening=analysis,
                 result=result,
             )
-        if judgement.status == "reject":
-            return self._finish(state, "skip", "screening_reject", judgement=asdict(judgement))
+        if status == "reject":
+            return self._finish(
+                state,
+                "skip",
+                "screening_reject",
+                screening=analysis,
+            )
+        if not analysis.get("latestAnswerText") and reply_text:
+            judgement = await judge_candidate_reply(reply_text, llm=self.llm)
+            analysis = {**analysis, "fallbackJudgement": asdict(judgement)}
         return self._finish(
-            state, "wait", f"screening_{judgement.status}", judgement=asdict(judgement)
+            state,
+            "wait",
+            f"screening_{status or 'waiting'}",
+            screening=analysis,
         )
 
     def _knowledge_answer(self, text: str, conversation: Conversation) -> str | None:
@@ -203,10 +300,15 @@ class ConversationRunner:
                 "job": state.get("applied_position"),
                 "action": action,
                 "reason": reason,
+                "ruleSource": state.get("rule_source", ""),
                 **extra,
             }
         )
         return state
+
+    async def _send_knowledge_answer(self, state: GraphState, answer: str) -> None:
+        await self.adapter.send_message(answer)
+        _append_sent(state, answer)
 
 
 def _last_non_system(conversation: Conversation):
@@ -222,6 +324,14 @@ def _message_sent(conversation: Conversation, text: str) -> bool:
         message.sender == MessageSender.ME and needle and needle in "".join(message.text.split())
         for message in conversation.messages
     )
+
+
+def _append_sent(state: GraphState, message: str) -> None:
+    sent = state.get("sent_messages")
+    if not isinstance(sent, list):
+        sent = []
+    sent.append(message)
+    state["sent_messages"] = sent
 
 
 ZhilianConversationRunner = ConversationRunner
