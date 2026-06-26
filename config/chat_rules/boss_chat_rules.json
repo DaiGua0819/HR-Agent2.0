@@ -1,0 +1,3398 @@
+{
+  "version": 1,
+  "default": {
+    "category": "default",
+    "template": "你好，我这边想跟你确认下目前求职意向与可沟通时间。"
+  },
+  "positionReplies": {
+    "AI应用开发实习生": {
+      "category": "ai_app_intern",
+      "template": "你好，我看到你投递的是{job}，想先了解下你做过的大模型/Agent项目，以及每周可实习几天？",
+      "initialCommonPhrase": "我先介绍下基本情况，日薪150，偶尔加班，加班1.5倍薪资，单休，需要线下工作，并且最少实习六个月，工作地点都能接受吗",
+      "rolePrompt": "该岗位按 AI应用开发实习生基础筛选流程处理：先确认候选人是否接受日薪150、偶尔加班1.5倍、单休、线下办公、至少实习六个月；对方明确接受后再求简历。重点关注大模型应用、Agent、RAG、Workflow、工具调用、MCP、Python/JS工程能力、每周可实习天数和到岗时间。",
+      "talkingPoints": [
+        "关注大模型应用、Agent、RAG、Workflow、工具调用、MCP 或 Coze 项目经历",
+        "关注 Python/JavaScript/前端/后端基础和工程落地能力",
+        "关注每周可实习天数、可到岗时间、实习周期"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "先发送基础情况常用语，等待候选人明确是否接受。",
+        "候选人明确接受后再求简历；只部分接受或含糊时先跳过等待。",
+        "候选人询问岗位/公司问题时先按知识库解答；无法回答只记录待补充问题，再继续筛选。"
+      ]
+    },
+    "AI应用开发工程师": {
+      "category": "ai_app_intern",
+      "template": "你好，我看到你投递的是{job}，想先了解下你做过的大模型/Agent项目，以及每周可实习几天？",
+      "initialCommonPhrase": "我先介绍下基本情况，日薪150，偶尔加班，加班1.5倍薪资，单休，需要线下工作，并且最少实习六个月，工作地点都能接受吗",
+      "rolePrompt": "该岗位按 AI应用开发实习生基础筛选流程处理：先确认候选人是否接受日薪150、偶尔加班1.5倍、单休、线下办公、至少实习六个月；对方明确接受后再求简历。重点关注大模型应用、Agent、RAG、Workflow、工具调用、MCP、Python/JS工程能力、每周可实习天数和到岗时间。",
+      "talkingPoints": [
+        "关注大模型应用、Agent、RAG、Workflow、工具调用、MCP 或 Coze 项目经历",
+        "关注 Python/JavaScript/前端/后端基础和工程落地能力",
+        "关注每周可实习天数、可到岗时间、实习周期"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "先发送基础情况常用语，等待候选人明确是否接受。",
+        "候选人明确接受后再求简历；只部分接受或含糊时先跳过等待。",
+        "候选人询问岗位/公司问题时先按知识库解答；无法回答只记录待补充问题，再继续筛选。"
+      ]
+    },
+    "企业内容运营负责人（B2B/短视频方向）": {
+      "category": "operation_direct_resume",
+      "template": "该岗位不发送筛选问题，先发送“可以发一份简历过来吗”，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "运营A",
+      "resumeRequestPrompt": "可以发一份简历过来吗",
+      "rolePrompt": "企业内容运营负责人（B2B/短视频方向）按 BOSS 运营岗位直求简历流程处理：不发送筛选问题，不主动答疑；若未收到简历且未求过简历，先在聊天界面发送“可以发一份简历过来吗”，再点击求简历；若候选人已发送简历则直接接收/下载，入库岗位为运营A。",
+      "talkingPoints": [
+        "B2B内容运营",
+        "短视频方向",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，先发送“可以发一份简历过来吗”，再点击求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为运营A。",
+        "不进行简历评分。"
+      ]
+    },
+    "B端社交媒体运营": {
+      "category": "operation_direct_resume",
+      "template": "该岗位不发送筛选问题，先发送“可以发一份简历过来吗”，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "运营B",
+      "resumeRequestPrompt": "可以发一份简历过来吗",
+      "rolePrompt": "B端社交媒体运营按 BOSS 运营岗位直求简历流程处理：不发送筛选问题，不主动答疑；若未收到简历且未求过简历，先在聊天界面发送“可以发一份简历过来吗”，再点击求简历；若候选人已发送简历则直接接收/下载，入库岗位为运营B。",
+      "talkingPoints": [
+        "B端社交媒体运营",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，先发送“可以发一份简历过来吗”，再点击求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为运营B。",
+        "不进行简历评分。"
+      ]
+    },
+    "外部财务产品顾问": {
+      "category": "finance_ai_direct_resume",
+      "template": "该岗位不发送筛选问题，先发送“你好，方便发一份简历过来吗”，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "外部财务产品顾问",
+      "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+      "rolePrompt": "外部财务产品顾问 / 业财智能化顾问 / AI财务场景顾问按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先发送“你好，方便发一份简历过来吗”，再执行求简历；若候选人已发送简历则直接接收/下载，入库岗位为外部财务产品顾问。",
+      "talkingPoints": [
+        "财务产品顾问",
+        "业财智能化",
+        "AI财务场景",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，先发送“你好，方便发一份简历过来吗”，再点击求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为外部财务产品顾问。",
+        "不进行简历评分。"
+      ]
+    },
+    "AI智能体解决方案负责人": {
+      "category": "finance_ai_direct_resume",
+      "template": "该岗位不发送筛选问题，先发送“你好，可以看看简历吗”，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "AI智能体解决方案负责人",
+      "resumeRequestPrompt": "你好，可以看看简历吗",
+      "rolePrompt": "AI智能体解决方案负责人 / AI Solution Architect / AI FDE / AI Workflow Engineer按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先发送“你好，可以看看简历吗”，再执行求简历；若候选人已发送简历则直接接收/下载，入库岗位为AI智能体解决方案负责人。",
+      "talkingPoints": [
+        "AI智能体解决方案",
+        "AI Solution Architect",
+        "FDE",
+        "Workflow Engineer",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，先发送“你好，可以看看简历吗”，再点击求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为AI智能体解决方案负责人。",
+        "不进行简历评分。"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "category": "java_backend",
+      "match": {
+        "includes_any": [
+          "Java",
+          "后端",
+          "Spring",
+          "微服务"
+        ],
+        "regex_any": [
+          "\\bjava\\b",
+          "spring(boot)?"
+        ]
+      },
+      "template": "你好，我看你是做 Java/后端方向的，我这边有个{job}岗位想和你简单沟通下：你现在主要技术栈和期望城市/薪资是怎样的？"
+    },
+    {
+      "category": "frontend",
+      "match": {
+        "includes_any": [
+          "前端",
+          "React",
+          "Vue",
+          "TypeScript"
+        ],
+        "regex_any": [
+          "\\breact\\b",
+          "\\bvue\\b",
+          "typescript"
+        ]
+      },
+      "template": "你好，我这边在招{job}，看到你前端技术栈匹配度挺高。方便说下你目前在用的框架/工程化、以及可入职时间吗？"
+    },
+    {
+      "category": "intern",
+      "match": {
+        "includes_any": [
+          "实习",
+          "应届",
+          "2026",
+          "在校"
+        ],
+        "regex_any": []
+      },
+      "template": "你好，我这边有{job}实习/校招机会，想了解下你毕业时间、可到岗时间和期望方向可以吗？"
+    }
+  ],
+  "placeholders": {
+    "job": "候选人应聘岗位，会从页面自动识别"
+  },
+  "agentWorkflows": {
+    "recruiterBasicConditionsListScan": [
+      "When no candidate needing basic-condition screening is visible, do not stop immediately.",
+      "Scroll the left recruiter conversation list down and rescan the newly visible rows.",
+      "BOSS recruiter list may use overflow:hidden with a JS scroll container; treat it as scrollable when scrollHeight is greater than clientHeight.",
+      "Rows near the top of the viewport are still valid candidates; use viewport overlap instead of a hard y-position cutoff.",
+      "For batch tasks, continue list scrolling several times according to the requested batch size before reporting no more candidates."
+    ],
+    "aiInternUnreadRecruiterWorkflow": {
+      "name": "AI应用开发实习生未读消息处理流程",
+      "scope": "仅用于已经在 BOSS 页面筛选到 AI应用开发实习生岗位后的招聘端会话列表。",
+      "triggerExamples": [
+        "处理所有未读消息",
+        "把所有消息处理一下",
+        "按照基础情况筛选流程处理未读",
+        "直到没有未读消息就结束"
+      ],
+      "loop": [
+        "先点击候选列表上方的“未读”筛选，再拟人化滑动到联系人列表最上方。",
+        "扫描当前可见列表里的未读数字/红点，优先打开最靠上的未读会话。",
+        "打开会话后读取当前候选人的聊天历史和岗位信息。",
+        "根据聊天历史判断是否已经发送过公司/岗位基本情况。",
+        "完成当前会话处理后，继续扫描可见列表；当前区域没有未读时，拟人化向下滚动列表继续查找。",
+        "一轮到底后，再拟人化滑回顶部，重新检查是否有新未读插入顶部。",
+        "完整复查后没有未读，才结束。"
+      ],
+      "actions": {
+        "sendCompanyInfo": {
+          "functionCall": "recruiter_send_company_info",
+          "when": [
+            "候选人没有收到过基础情况话术。",
+            "候选人只是初次打招呼、表达感兴趣、询问是否还招、想进一步沟通。"
+          ],
+          "messageSource": "positionReplies.AI应用开发实习生.initialCommonPhrase"
+        },
+        "requestResume": {
+          "functionCall": "recruiter_request_resume",
+          "when": [
+            "候选人明确接受日薪150、偶尔加班1.5倍、单休、线下、至少实习六个月等基础条件。",
+            "候选人主动发送简历、附件简历、在线简历或 PDF，且最近几轮对话里没有明确拒绝任一硬性条件。",
+            "候选人先表达接受，后续又追问住宿、线上面试、工作内容、加班频率等问题时，仍以先前接受为准，继续求简历。",
+            "如果候选人只接受部分条件，或表示只能实习少于六个月，即使其他条件都接受，也不能求简历。"
+          ]
+        },
+        "skipTemporarily": {
+          "when": [
+            "候选人只是考虑下、再看看、晚点回复。",
+            "候选人只提出问题但没有明确接受，例如：包住宿吗、可以线上面试吗、转正后多少、主要工作内容是什么。",
+            "候选人回复含糊，无法判断是否接受基础条件。"
+          ],
+          "next": "等待对方后续回复，下一轮未读处理时重新判断。"
+        },
+        "rejectSkip": {
+          "when": [
+            "候选人明确不接受单休。",
+            "候选人明确不能线下工作。",
+            "候选人不能至少实习六个月。",
+            "候选人说只能、最多、只可以实习三个月/四个月/五个月等少于六个月。",
+            "候选人明确不考虑。"
+          ],
+          "next": "本轮不求简历；如用户后续要求，可再执行不合适流程。"
+        }
+      },
+      "safetyAndReliability": [
+        "点击未读候选人时如果列表虚拟刷新导致元素失效，记录为阻塞并继续处理其他未读，不中断整轮任务。",
+        "求简历后必须处理页面内二次确认。",
+        "已求过简历或页面显示简历请求已发送时跳过重复求简历。",
+        "每次滚动联系人列表必须走拟人化滚轮轨迹，不直接瞬移列表。",
+        "批量流程设置安全上限，防止页面异常导致无限循环。"
+      ]
+    },
+    "recentContactsFollowupWorkflow": {
+      "name": "最近联系人基础筛选与30秒回访流程",
+      "functionCall": "recruiter_screen_recent_with_followup",
+      "triggerExamples": [
+        "处理最近十个联系人，30秒内没人回复就结束",
+        "最近10个联系人先发公司情况，接受就求简历，然后观察后续回复",
+        "先看最近十个人，只处理这十个人的后续消息"
+      ],
+      "steps": [
+        "先拟人化滑动到联系人列表顶部。",
+        "逐个打开最近 N 个联系人并读取聊天历史。",
+        "如果我方最后已回复、候选人没有新回复，则跳过。",
+        "如果候选人是初次主动发消息且还没收到基础情况，则发送公司基础情况常用语，然后跳到下一个联系人。",
+        "如果候选人已经明确接受基础条件，则点击求简历并完成二次确认。",
+        "初始 N 人处理完后，把这 N 人保存成观察名单。",
+        "回到列表顶部，只监控观察名单里的候选人新回复。",
+        "如果观察名单里有人新回复，则打开并按基础筛选流程处理，处理后重置 30 秒等待窗口。",
+        "如果连续 30 秒观察名单内无人新回复，则结束流程。"
+      ],
+      "guards": [
+        "不要处理观察名单以外的未读联系人。",
+        "不要因为其他联系人红点打断本轮观察名单。",
+        "候选人回复不明确或表示考虑中时，暂时跳过，不求简历。",
+        "同一条候选人回复只处理一次，避免重复求简历或重复发送基础情况。"
+      ]
+    }
+  },
+  "companyKnowledgeBase": {
+    "enabled": true,
+    "description": "AI应用开发实习生招聘知识库。用于回答候选人关于公司、岗位、薪资、工时、住宿、面试、入职和转正的问题。",
+    "defaultTitle": "AI实习生",
+    "common": {
+      "topics": {
+        "contractAndConversion": [
+          "应届毕业生实习合同签到 6 月 30 日。",
+          "6 月后可以签署正式劳动合同。",
+          "6 月前的实习时间可以算作试用期时间。",
+          "试用期总共 6 个月。",
+          "6 个月后根据表现进行转正。"
+        ]
+      },
+      "silentQuestionPatterns": [
+        "请问有什么顾虑",
+        "有什么顾虑",
+        "有顾虑吗",
+        "是否还有机会",
+        "还有机会吗",
+        "还有机会",
+        "能否给个机会",
+        "给一个机会",
+        "希望可以给一个",
+        "团队目前主要在做哪些项目",
+        "团队主要在做哪些项目",
+        "主要在做哪些项目",
+        "主要做哪些项目",
+        "团队项目",
+        "AI团队目前有多少名开发人员",
+        "AI团队有多少名开发人员",
+        "AI团队多少人",
+        "AI团队人数",
+        "开发人员数量",
+        "有多少开发人员",
+        "实习生平时具体会参与哪些工作",
+        "实习生具体会参与",
+        "具体会参与哪些工作",
+        "参与哪些工作",
+        "真正接触AI应用开发",
+        "多积累一些实战经验",
+        "Agent、RAG",
+        "Agent和RAG",
+        "加微信",
+        "加个微信",
+        "交换微信",
+        "微信好友",
+        "通过微信",
+        "方便微信",
+        "方不方便加个微信",
+        "能加微信吗",
+        "是否觉得候选人适合该岗位",
+        "候选人是否适合该岗位",
+        "您看我是否合适",
+        "我是否合适",
+        "是否合适",
+        "建筑行业和桩基经历与岗位差距大吗",
+        "建筑行业和桩基经历",
+        "桩基经历与岗位差距",
+        "具体多久",
+        "具体多长时间",
+        "大概多久",
+        "等多久",
+        "等多长时间",
+        "具体什么时候",
+        "具体时间",
+        "具体面试时间",
+        "具体流程时间"
+      ],
+      "faq": [
+        {
+          "topic": "interviewProcess",
+          "questionPatterns": [
+            "什么时候面试",
+            "什么时候安排面试",
+            "面试时间",
+            "约面试",
+            "能约面试吗",
+            "可以约个面试吗",
+            "面试大概什么时候",
+            "简历结果出来了吗",
+            "简历是否认可",
+            "简历是否考虑",
+            "后续流程",
+            "接下来流程",
+            "流程要怎么安排",
+            "流程怎么安排",
+            "后续怎么处理"
+          ],
+          "answer": "还要等一段时间"
+        },
+        {
+          "topic": "resumeSendPermission",
+          "questionPatterns": [
+            "可以发简历吗",
+            "能发简历吗",
+            "能不能发简历",
+            "是否可以发简历",
+            "可以给您发简历吗",
+            "可以投递简历吗",
+            "能投递简历吗",
+            "能给您发简历看看吗",
+            "可以发一份简历",
+            "能发一份简历"
+          ],
+          "answer": "可以"
+        },
+        {
+          "topic": "contractAndConversion",
+          "questionPatterns": [
+            "实习合同",
+            "实习协议",
+            "合同签到什么时候",
+            "签到什么时候",
+            "签到几号",
+            "签到多久"
+          ],
+          "answer": "实习合同签到6月30日"
+        },
+        {
+          "topic": "contractAndConversion",
+          "questionPatterns": [
+            "毕业证",
+            "正式劳动合同",
+            "劳动合同",
+            "正式合同",
+            "什么时候签正式合同",
+            "6月底",
+            "六月底"
+          ],
+          "answer": "6月后可以签正式劳动合同，6月前实习算试用期"
+        },
+        {
+          "topic": "contractAndConversion",
+          "questionPatterns": [
+            "考察期",
+            "试用期",
+            "多久转正",
+            "什么时候转正",
+            "几个月转正",
+            "转正周期"
+          ],
+          "answer": "试用期总共6个月，转正看表现"
+        }
+      ]
+    },
+    "sections": {
+      "AI实习生": {
+        "matchPositions": [
+          "AI应用开发实习生",
+          "AI实习生",
+          "AI应用开发工程师"
+        ],
+        "inheritsRoot": true,
+        "description": "AI实习生招聘知识库。继承当前公共知识库内容，后续可在本标题下追加岗位专属问答。",
+        "faq": [
+          {
+            "topic": "interviewProcess",
+            "questionPatterns": [
+              "线上面试",
+              "线下面试",
+              "到面",
+              "现场面试"
+            ],
+            "answer": "实习生可以线上面试"
+          },
+          {
+            "topic": "internshipDuration",
+            "questionPatterns": [
+              "短期实习",
+              "实习多久",
+              "实习时长",
+              "实习周期",
+              "必须六个月",
+              "最少六个月",
+              "少于六个月",
+              "三个月",
+              "四个月",
+              "五个月",
+              "能不能请假",
+              "回学校",
+              "回校",
+              "答辩",
+              "毕业手续",
+              "学校有事",
+              "来回往返"
+            ],
+            "answer": "实习时间必须够六个月，最好中间不来回往返学校；如果实在有事，公司允许请假"
+          },
+          {
+            "topic": "internshipEligibility",
+            "questionPatterns": [
+              "马上大四",
+              "到时候可以去实习",
+              "大四再来",
+              "之后可以来实习",
+              "等可以实习的时候来"
+            ],
+            "answer": "不可以"
+          },
+          {
+            "topic": "internshipEligibility",
+            "questionPatterns": [
+              "大三可以来实习吗",
+              "大三能来实习吗",
+              "大三可以实习吗",
+              "在校生可以实习吗",
+              "本科在读可以实习吗",
+              "还没毕业可以实习吗"
+            ],
+            "answer": "可以"
+          },
+          {
+            "topic": "internshipMentoring",
+            "questionPatterns": [
+              "有人带",
+              "一带一",
+              "带教",
+              "导师",
+              "独立上手",
+              "没人带",
+              "需要独立"
+            ],
+            "answer": "需要独立上手，没有传统的一带一"
+          }
+        ]
+      },
+      "销售管培生": {
+        "matchPositions": [
+          "销售管培生"
+        ],
+        "inheritsRoot": false,
+        "description": "销售管培生岗位筛选问题库。保存需要主动询问的问题、通过/不合适规则和加分项评分信息。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "education_college",
+              "text": "大专及以上"
+            },
+            {
+              "id": "age_under_25",
+              "text": "25 岁以下"
+            },
+            {
+              "id": "fresh_graduate",
+              "text": "应届生"
+            },
+            {
+              "id": "training_location",
+              "text": "接受总部培训 1-3 个月，地点湖州"
+            },
+            {
+              "id": "business_trip",
+              "text": "接受出差"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "sales_experience",
+              "text": "有销售经验",
+              "score": 25
+            },
+            {
+              "id": "marketing_major",
+              "text": "市场营销专业",
+              "score": 20
+            },
+            {
+              "id": "science_or_jd_major",
+              "text": "理工科或 JD 对口专业",
+              "score": 15
+            },
+            {
+              "id": "student_leader",
+              "text": "班干部或学生会经历",
+              "score": 15
+            },
+            {
+              "id": "extroversion_drive",
+              "text": "沟通外向，有外驱力",
+              "score": 25
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "topics": {
+          "salesVisitAndTrip": [
+            "销售岗每周至少拜访 8 家客户。",
+            "销售岗出差不是长期出差。",
+            "销售岗一般一次出差一周左右。"
+          ],
+          "salesExperienceRequirement": [
+            "应届生最好有销售相关经历。",
+            "26 岁以上必须有销售相关经历。",
+            "销售管培生可以接受无经验。",
+            "其他销售岗最好有销售经验。"
+          ],
+          "salesCustomerDevelopment": [
+            "销售客户主要靠自己开发。",
+            "销售主要是陌拜。",
+            "销售需要自己开发客户。",
+            "客户类型包括经销商、工厂、终端客户和大客户等。"
+          ],
+          "salesSchedule": [
+            "销售管培生没有固定工作时间。",
+            "销售管培生主要自己跑客户。",
+            "销售管培生以业绩结果为导向。"
+          ],
+          "salesCompensation": [
+            "销售有独立的薪酬制度。",
+            "销售岗位有提成。",
+            "具体提成制度目前不清楚。",
+            "销售管培生培训期间一天 150 元。"
+          ],
+          "salesRegion": [
+            "所有销售都有负责的区域或者行业。",
+            "销售岗培训完成后会根据公司业务情况分配区域。"
+          ],
+          "salesTripAndExpense": [
+            "销售出差经过审批的费用都可以报销。",
+            "销售岗最好有车。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "拜访客户",
+              "客户拜访",
+              "一周拜访",
+              "每周拜访",
+              "拜访几家",
+              "几家客户"
+            ],
+            "answer": "每周至少拜访8家客户"
+          },
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "长期出差",
+              "一直出差",
+              "出差多久",
+              "出差周期",
+              "一次出差",
+              "出差一周",
+              "出差时间"
+            ],
+            "answer": "不是长期出差，一次约一周"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "需要销售经验",
+              "销售经历要求",
+              "销售经验要求",
+              "必须有销售",
+              "没有销售经验",
+              "没做过销售",
+              "应届生销售经验",
+              "26岁销售经验"
+            ],
+            "answer": "应届生最好有，26岁以上必须有"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户来源",
+              "客户怎么来",
+              "公司给客户",
+              "自己开发客户",
+              "陌拜",
+              "自己陌拜",
+              "自己去开发",
+              "自己去开发客户",
+              "自己找客户"
+            ],
+            "answer": "主要是陌拜，要自己开发客户"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户类型",
+              "什么客户",
+              "拜访谁",
+              "经销商",
+              "工厂",
+              "终端客户",
+              "大客户"
+            ],
+            "answer": "经销商、工厂、终端客户和大客户都有"
+          },
+          {
+            "topic": "salesSchedule",
+            "questionPatterns": [
+              "工作时间",
+              "上班时间",
+              "下班时间",
+              "几点上班",
+              "几点下班",
+              "固定工作时间",
+              "坐班时间",
+              "工时",
+              "作息"
+            ],
+            "answer": "没有固定工作时间，主要自己跑客户，有业绩就行"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "提成",
+              "销售提成",
+              "奖金",
+              "薪酬制度"
+            ],
+            "answer": "销售有提成，具体制度暂不清楚"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "带薪培训",
+              "培训薪资",
+              "培训工资",
+              "培训期间多少钱",
+              "培训期间薪资",
+              "培训期间工资"
+            ],
+            "answer": "培训期间一天150"
+          },
+          {
+            "topic": "salesRegion",
+            "questionPatterns": [
+              "负责区域",
+              "负责行业",
+              "分配区域",
+              "培训后去哪"
+            ],
+            "answer": "会根据公司业务情况分配区域"
+          },
+          {
+            "topic": "salesWorkLocation",
+            "questionPatterns": [
+              "工作地点",
+              "办公地点",
+              "在哪里上班",
+              "固定工位",
+              "坐班",
+              "固定坐班",
+              "传统工位",
+              "上海工作地点",
+              "销售工作地点"
+            ],
+            "answer": "销售岗位没有明确工作地点，需要自己跑客户，所以没有传统意义上的固定工位去坐班"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "差旅",
+              "报销",
+              "出差费用",
+              "住宿报销",
+              "交通报销"
+            ],
+            "answer": "审批后的出差费用都报销"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "需要车",
+              "自带车",
+              "有车",
+              "驾照"
+            ],
+            "answer": "销售岗最好有车"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "无经验",
+              "没有经验",
+              "没做过销售",
+              "接受无经验"
+            ],
+            "answer": "销售管培生接受无经验"
+          }
+        ],
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "所有必问问题都明确接受，才可以继续求简历。",
+          "failRule": "任意一个必问问题明确不接受，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "changxing_single_rest",
+              "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+              "variants": [
+                "你好，我们这边在湖州长兴，还是单休，你可以接受吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "training_location",
+              "text": "你好，我们前期需要在湖州总部培训 1-3 个月，可以接受吗",
+              "variants": [
+                "你好，这边会先在湖州总部培训 1-3 个月，你能接受吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "business_trip",
+              "text": "你好，我们这边需要出差可以接受吗",
+              "variants": [
+                "你好，你可以接受出差吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "膨润土销售": {
+        "matchPositions": [
+          "膨润土销售",
+          "膨润土业务",
+          "涂料原料销售",
+          "膨润土销售人员"
+        ],
+        "inheritsRoot": false,
+        "description": "膨润土销售岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "education_college",
+              "text": "大专及以上"
+            },
+            {
+              "id": "age_under_35",
+              "text": "35 岁以下"
+            },
+            {
+              "id": "resume_keyword_any",
+              "text": "简历中包含涂料、膨润土或流变助剂任意一个字眼"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "bentonite_sales",
+              "text": "膨润土销售经验",
+              "score": 35
+            },
+            {
+              "id": "coating_additive_sales",
+              "text": "涂料助剂销售经验",
+              "score": 25
+            },
+            {
+              "id": "building_material_raw_sales",
+              "text": "建筑材料原料销售经验",
+              "score": 15
+            },
+            {
+              "id": "general_sales",
+              "text": "销售经验",
+              "score": 10
+            },
+            {
+              "id": "bentonite_awareness",
+              "text": "了解膨润土",
+              "score": 15
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "topics": {
+          "salesVisitAndTrip": [
+            "销售岗每周至少拜访 8 家客户。",
+            "销售岗出差不是长期出差。",
+            "销售岗一般一次出差一周左右。"
+          ],
+          "salesExperienceRequirement": [
+            "应届生最好有销售相关经历。",
+            "26 岁以上必须有销售相关经历。",
+            "销售管培生可以接受无经验。",
+            "其他销售岗最好有销售经验。"
+          ],
+          "salesCustomerDevelopment": [
+            "销售客户主要靠自己开发。",
+            "客户类型包括经销商、工厂、终端客户和大客户等。"
+          ],
+          "salesCompensation": [
+            "销售有独立的薪酬制度。",
+            "销售岗位有提成。",
+            "具体提成制度目前不清楚。"
+          ],
+          "salesRegion": [
+            "所有销售都有负责的区域或者行业。",
+            "销售岗培训完成后会根据公司业务情况分配区域。"
+          ],
+          "salesTripAndExpense": [
+            "销售出差经过审批的费用都可以报销。",
+            "销售岗最好有车。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "拜访客户",
+              "客户拜访",
+              "一周拜访",
+              "每周拜访",
+              "拜访几家",
+              "几家客户"
+            ],
+            "answer": "每周至少拜访8家客户"
+          },
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "长期出差",
+              "一直出差",
+              "出差多久",
+              "出差周期",
+              "一次出差",
+              "出差一周",
+              "出差时间"
+            ],
+            "answer": "不是长期出差，一次约一周"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "需要销售经验",
+              "销售经历要求",
+              "销售经验要求",
+              "必须有销售",
+              "没有销售经验",
+              "没做过销售",
+              "应届生销售经验",
+              "26岁销售经验"
+            ],
+            "answer": "应届生最好有，26岁以上必须有"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户来源",
+              "客户怎么来",
+              "公司给客户",
+              "自己开发客户",
+              "陌拜"
+            ],
+            "answer": "客户主要自己开发"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户类型",
+              "什么客户",
+              "拜访谁",
+              "经销商",
+              "工厂",
+              "终端客户",
+              "大客户"
+            ],
+            "answer": "经销商、工厂、终端客户和大客户都有"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "提成",
+              "销售提成",
+              "奖金",
+              "薪酬制度"
+            ],
+            "answer": "销售有提成，具体制度暂不清楚"
+          },
+          {
+            "topic": "salesRegion",
+            "questionPatterns": [
+              "负责区域",
+              "负责行业",
+              "分配区域",
+              "培训后去哪"
+            ],
+            "answer": "会根据公司业务情况分配区域"
+          },
+          {
+            "topic": "salesWorkLocation",
+            "questionPatterns": [
+              "工作地点",
+              "办公地点",
+              "在哪里上班",
+              "固定工位",
+              "坐班",
+              "固定坐班",
+              "传统工位",
+              "上海工作地点",
+              "销售工作地点"
+            ],
+            "answer": "销售岗位没有明确工作地点，需要自己跑客户，所以没有传统意义上的固定工位去坐班"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "差旅",
+              "报销",
+              "出差费用",
+              "住宿报销",
+              "交通报销"
+            ],
+            "answer": "审批后的出差费用都报销"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "需要车",
+              "自带车",
+              "有车",
+              "驾照"
+            ],
+            "answer": "销售岗最好有车"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "无经验",
+              "没有经验",
+              "没做过销售",
+              "销售经验"
+            ],
+            "answer": "这个销售岗最好有经验"
+          }
+        ],
+        "screening": {
+          "mode": "ask_any_required_question",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "了解过膨润土，或熟悉涂料原料，任意一点明确符合就可以继续求简历。",
+          "failRule": "两个问题都明确不符合，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "bentonite_awareness",
+              "text": "你好，你之前有了解过膨润土吗",
+              "variants": [
+                "你好，方便问下你对膨润土有没有接触过"
+              ],
+              "required": true
+            },
+            {
+              "id": "coating_raw_material",
+              "text": "你好，你熟悉涂料原料吗",
+              "variants": [
+                "你好，之前有接触过涂料原料吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "应用技术": {
+        "matchPositions": [
+          "应用技术",
+          "工业涂料应用技术",
+          "涂料应用技术",
+          "应用技术经理（工业涂料领域）"
+        ],
+        "inheritsRoot": false,
+        "description": "应用技术岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "industrial_coating_rd",
+              "text": "工业涂料研发经历"
+            },
+            {
+              "id": "industrial_coating_formula",
+              "text": "熟悉工业涂料配方"
+            },
+            {
+              "id": "rheology_additives",
+              "text": "熟悉工业涂料流变助剂"
+            },
+            {
+              "id": "bentonite_familiarity",
+              "text": "熟悉膨润土"
+            },
+            {
+              "id": "age_under_45",
+              "text": "45 岁以下"
+            },
+            {
+              "id": "bachelor_or_above",
+              "text": "本科及以上"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "large_coating_company",
+              "text": "涂料大厂经验",
+              "score": 30
+            },
+            {
+              "id": "anticorrosive_coating",
+              "text": "防腐涂料研发经验",
+              "score": 30
+            },
+            {
+              "id": "deep_industrial_coating_rd",
+              "text": "工业涂料研发经验较深",
+              "score": 25
+            },
+            {
+              "id": "application_support",
+              "text": "应用测试、技术支持或产品改进经验",
+              "score": 15
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "所有必问问题都明确接受，才可以继续求简历。",
+          "failRule": "任意一个必问问题明确不接受，就判定不合适并跳过。",
+          "rejectIfCandidateMessageMatches": [
+            {
+              "id": "conductive_slurry_not_fit",
+              "patterns": [
+                "导电浆料"
+              ],
+              "reason": "导电浆料经历不符合应用技术岗位要求"
+            }
+          ],
+          "questions": [
+            {
+              "id": "changxing_single_rest",
+              "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+              "variants": [
+                "你好，我们这边在湖州长兴，还是单休，你可以接受吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "industrial_coating_formula",
+              "text": "你好，你熟悉工业涂料配方吗",
+              "variants": [
+                "你好，方便问下你做过工业涂料配方吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "rheology_additives",
+              "text": "你好，你熟悉工业涂料的流变助剂吗",
+              "variants": [
+                "你好，之前有接触过工业涂料流变助剂吗"
+              ],
+              "required": true
+            }
+          ]
+        },
+        "topics": {
+          "applicationTechnologyProducts": [
+            "应用技术岗位方向是工业涂料、流变助剂、膨润土。"
+          ],
+          "applicationTechnologyWork": [
+            "应用技术岗位不需要研发。",
+            "应用技术岗位主要做技术支持。",
+            "应用技术岗位需要向客户讲解产品。",
+            "应用技术岗位需要对客户问题进行技术服务讲解。"
+          ],
+          "applicationTechnologyTrip": [
+            "应用技术岗位需要出差。",
+            "应用技术岗位需要跟销售拜访客户。",
+            "出差频率主要看业务需要，业务多出差就会较多。"
+          ],
+          "applicationTechnologyExperience": [
+            "涂料大厂经验最好有，但不是必须。"
+          ],
+          "applicationTechnologyCompensation": [
+            "应用技术岗位薪资 10-20K。",
+            "职级主要看个人经历确定。",
+            "汇报对象是公司经理。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "applicationTechnologyProducts",
+            "questionPatterns": [
+              "产品方向",
+              "做什么产品",
+              "工业涂料",
+              "流变助剂",
+              "膨润土"
+            ],
+            "answer": "方向是工业涂料、流变助剂、膨润土"
+          },
+          {
+            "topic": "applicationTechnologyWork",
+            "questionPatterns": [
+              "研发",
+              "技术支持",
+              "工作内容",
+              "客户问题",
+              "讲解产品"
+            ],
+            "answer": "不做研发，主要做技术支持"
+          },
+          {
+            "topic": "applicationTechnologyTrip",
+            "questionPatterns": [
+              "出差",
+              "出差频率",
+              "跟销售",
+              "拜访客户"
+            ],
+            "answer": "需要跟销售拜访客户，频率看业务"
+          },
+          {
+            "topic": "applicationTechnologyExperience",
+            "questionPatterns": [
+              "大厂",
+              "涂料大厂",
+              "必须大厂"
+            ],
+            "answer": "最好有，不是必须"
+          },
+          {
+            "topic": "applicationTechnologyCompensation",
+            "questionPatterns": [
+              "薪资",
+              "工资",
+              "职级",
+              "汇报",
+              "汇报对象"
+            ],
+            "answer": "薪资10-20K，职级看经历"
+          },
+          {
+            "topic": "interviewProcess",
+            "questionPatterns": [
+              "终面",
+              "到面",
+              "线下面试",
+              "现场面试"
+            ],
+            "answer": "应用技术终面需要到面"
+          }
+        ]
+      },
+      "HRBP": {
+        "matchPositions": [
+          "HRBP",
+          "hrbp",
+          "人力资源业务伙伴"
+        ],
+        "extendsSection": "人力资源",
+        "description": "HRBP岗位筛选问题库。仅用于 HRBP 岗位，先确认湖州长兴和单休，再继续出差、一线学习等必问项。",
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "所有必问问题都明确接受，才可以继续求简历。",
+          "failRule": "任意一个必问问题明确不接受，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "changxing_single_rest",
+              "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+              "variants": [
+                "你好，我们这边在湖州长兴，还是单休，你可以接受吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "business_trip",
+              "text": "你好，这个岗位需要出差，可以接受吗",
+              "variants": [
+                "你好，你可以接受出差吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "frontline_learning",
+              "text": "你好，这个岗位要深入一线了解产品，可以接受吗",
+              "variants": [
+                "你好，需要到一线学习产品和业务，你能接受吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "人力资源管培生": {
+        "matchPositions": [
+          "人力资源管培生",
+          "人资管培",
+          "人力资源管理培训"
+        ],
+        "extendsSection": "人力资源",
+        "description": "人力资源管培生岗位筛选问题库。仅用于人力资源管培生，先确认湖州长兴和单休，再继续出差、一线学习等必问项。",
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "所有必问问题都明确接受，才可以继续求简历。",
+          "failRule": "任意一个必问问题明确不接受，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "changxing_single_rest",
+              "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+              "variants": [
+                "你好，我们这边在湖州长兴，还是单休，你可以接受吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "business_trip",
+              "text": "你好，这个岗位需要出差，可以接受吗",
+              "variants": [
+                "你好，你可以接受出差吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "frontline_learning",
+              "text": "你好，这个岗位要深入一线了解产品，可以接受吗",
+              "variants": [
+                "你好，需要到一线学习产品和业务，你能接受吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "人力资源": {
+        "matchPositions": [
+          "人力资源",
+          "HR",
+          "招聘"
+        ],
+        "inheritsRoot": false,
+        "description": "人力资源岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "hr_related_major",
+              "text": "人力资源、人力资源相关专业或理工科专业"
+            },
+            {
+              "id": "age_under_30",
+              "text": "30 岁以下"
+            },
+            {
+              "id": "hrbp_sales_team",
+              "text": "接受服务销售团队、理解销售流程并招聘销售人员"
+            },
+            {
+              "id": "frontline_learning",
+              "text": "接受深入一线学习产品和销售流程"
+            },
+            {
+              "id": "business_trip",
+              "text": "能接受出差，细节可协商"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "science_background",
+              "text": "高中理工科背景",
+              "score": 10
+            },
+            {
+              "id": "hr_internship",
+              "text": "人力资源实习经历",
+              "score": 25
+            },
+            {
+              "id": "headhunter_internship",
+              "text": "猎头实习经历",
+              "score": 20
+            },
+            {
+              "id": "student_leader",
+              "text": "班干部或学生会经历",
+              "score": 15
+            },
+            {
+              "id": "communication",
+              "text": "沟通能力好",
+              "score": 20
+            },
+            {
+              "id": "fresh_or_junior",
+              "text": "应届生或大三",
+              "score": 10
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "两个必问问题都明确接受，才可以继续求简历。",
+          "failRule": "任意一条明确不接受，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "business_trip",
+              "text": "你好，这个岗位需要出差，可以接受吗",
+              "variants": [
+                "你好，你可以接受出差吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "frontline_learning",
+              "text": "你好，这个岗位要深入一线了解产品，可以接受吗",
+              "variants": [
+                "你好，需要到一线学习产品和业务，你能接受吗"
+              ],
+              "required": true
+            }
+          ]
+        },
+        "topics": {
+          "hrbpRole": [
+            "HRBP 主要服务于销售团队。",
+            "人力资源管培生主要服务于销售团队。",
+            "HRBP 相当于给销售团队配置的 HR。",
+            "人力资源管培生和 HRBP 都需要懂销售流程。",
+            "人力资源管培生和 HRBP 都需要招聘销售人员。",
+            "人力资源管培生和 HRBP 没有销售指标。",
+            "人力资源管培生和 HRBP 只需要理解销售内容，不会去做销售工作。",
+            "HRBP 需要做招聘、绩效、考核等工作。",
+            "HRBP 需要对销售团队各种指标进行评估。"
+          ],
+          "hrbpLearning": [
+            "人力资源管培生培训时间是一周。",
+            "人力资源管培生和 HRBP 都需要去一线学习。",
+            "一线学习主要了解公司产品、销售流程和销售人员实际工作方式。",
+            "一线学习时间不确定，根据业务安排。"
+          ],
+          "hrbpTrip": [
+            "HRBP 每次出差大约一周。",
+            "HRBP 出差天数和频率都不固定，一般一次时间是一周左右。",
+            "HRBP 出差频率和地点不确定。",
+            "人力资源管培生和 HRBP 出差没有固定地址。",
+            "人力资源管培生和 HRBP 出差没有固定地点。",
+            "HRBP 需要跟着业务人员一起出差。",
+            "人力资源岗主要服务销售团队，所以需要跟着销售了解业务。"
+          ],
+          "hrbpSalary": [
+            "HR 实习薪资是 150 元一天。",
+            "HR 转正后薪资看试用期表现。",
+            "具体工资由老板根据面试和个人情况定。"
+          ],
+          "hrbpSchedule": [
+            "HR 上班时间是 8:00-11:00，13:00-17:00。",
+            "HR 岗位不用加班。",
+            "HR 岗位单休。"
+          ],
+          "hrbpAccommodation": [
+            "HR 岗位公司包住宿。"
+          ],
+          "hrbpMealsAndBenefits": [
+            "公司食堂 3 元一顿。"
+          ],
+          "hrbpCandidateRequirement": [
+            "HR 岗位最好是应届生。",
+            "HR 岗位需要在长兴工作。"
+          ],
+          "hrbpMajor": [
+            "HRBP 可以接受理工科专业。",
+            "理工科候选人需要有人力资源知识。"
+          ],
+          "hrbpInterview": [
+            "HR 管培生面试也是线上面试。"
+          ],
+          "hrbpTripExpense": [
+            "HR 出差费用公司会报销。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "hrbpRole",
+            "questionPatterns": [
+              "服务哪个团队",
+              "服务销售",
+              "销售强关联",
+              "负责销售",
+              "不负责销售",
+              "制造业不负责销售",
+              "销售团队",
+              "岗位匹配",
+              "岗位发展",
+              "发展方向",
+              "职业发展",
+              "HRBP做什么",
+              "人力资源管培生做什么",
+              "懂销售流程",
+              "销售流程",
+              "招聘销售",
+              "招聘销售人员",
+              "销售指标",
+              "业绩指标",
+              "销售业绩",
+              "销售任务",
+              "背指标",
+              "要做销售",
+              "做销售工作",
+              "需要做销售",
+              "是不是销售",
+              "主要做招聘",
+              "绩效",
+              "考核"
+            ],
+            "answer": "主要服务销售团队，需要懂销售流程，也会招聘销售人员；没有销售指标，不做销售工作"
+          },
+          {
+            "topic": "hrbpLearning",
+            "questionPatterns": [
+              "培训",
+              "培训多久",
+              "培训时间",
+              "一线学习",
+              "学习产品",
+              "学习内容",
+              "下车间",
+              "实验室",
+              "跑客户",
+              "学多久",
+              "学习多久",
+              "学习时间",
+              "学习多长时间"
+            ],
+            "answer": "人力资源管培生培训一周；一线学习时间不确定，主要学习产品和销售流程"
+          },
+          {
+            "topic": "hrbpTrip",
+            "questionPatterns": [
+              "具体出差要去哪些地方",
+              "出差要去哪些地方",
+              "具体去哪里出差",
+              "具体去哪出差",
+              "出差地点有哪些"
+            ],
+            "answer": "出差没有固定地点"
+          },
+          {
+            "topic": "hrbpTrip",
+            "questionPatterns": [
+              "HRBP出差",
+              "出差频率",
+              "出差天数",
+              "出差的天数",
+              "一个月出差",
+              "半年出差",
+              "半年多少次",
+              "短期还是长期",
+              "经常出差",
+              "长期出差",
+              "短期出差",
+              "出差多久",
+              "出差时间",
+              "出差多少次",
+              "出差去哪",
+              "出差地方",
+              "出差地点",
+              "具体出差",
+              "去哪出差",
+              "去哪里出差",
+              "固定地址",
+              "固定地点",
+              "固定工作地点",
+              "有没有固定地址",
+              "有没有固定地点",
+              "出差一般去哪",
+              "出差一般哪里",
+              "为什么出差",
+              "为什么需要出差",
+              "为什么还需要出差",
+              "为什么人力资源岗还需要出差",
+              "为什么人力资源岗需要出差",
+              "为什么人力资源还需要出差",
+              "人力资源为什么出差",
+              "人力资源岗为什么还需要出差",
+              "HR为什么出差",
+              "HRBP为什么出差",
+              "为什么要跟着销售出差",
+              "出差原因"
+            ],
+            "answer": "出差没有固定地点；天数和频率都不固定，一般一次时间是一周左右"
+          },
+          {
+            "topic": "hrbpTripExpense",
+            "questionPatterns": [
+              "出差补贴",
+              "出差费用",
+              "补贴标准",
+              "差旅报销",
+              "出差报销",
+              "报销"
+            ],
+            "answer": "出差费用公司会报销"
+          },
+          {
+            "topic": "hrbpInterview",
+            "questionPatterns": [
+              "线上面试",
+              "线下面试",
+              "面试方式",
+              "面试形式",
+              "能线上面试吗",
+              "可以线上面试吗",
+              "视频面试",
+              "远程面试"
+            ],
+            "answer": "HR管培生也是线上面试"
+          },
+          {
+            "topic": "hrbpSalary",
+            "questionPatterns": [
+              "薪资",
+              "工资",
+              "日薪",
+              "实习薪资",
+              "单休薪资",
+              "转正薪资",
+              "转正工资",
+              "多少钱"
+            ],
+            "answer": "具体工资由老板根据面试和个人情况定"
+          },
+          {
+            "topic": "hrbpSchedule",
+            "questionPatterns": [
+              "上班时间",
+              "工作时间",
+              "几点上班",
+              "几点下班",
+              "工时",
+              "加班",
+              "需要加班",
+              "不用加班"
+            ],
+            "answer": "8-11点，13-17点，不用加班"
+          },
+          {
+            "topic": "hrbpAccommodation",
+            "questionPatterns": [
+              "包住宿",
+              "包住",
+              "住宿",
+              "宿舍",
+              "食宿",
+              "吃住",
+              "包吃住",
+              "包食宿",
+              "管吃住"
+            ],
+            "answer": "公司包住宿"
+          },
+          {
+            "topic": "hrbpMealsAndBenefits",
+            "questionPatterns": [
+              "食宿",
+              "吃住",
+              "包吃住",
+              "包食宿",
+              "管吃住",
+              "包吃",
+              "管饭",
+              "吃饭",
+              "食堂",
+              "餐补"
+            ],
+            "answer": "食堂3元一顿"
+          },
+          {
+            "topic": "hrbpCandidateRequirement",
+            "questionPatterns": [
+              "非应届",
+              "不是应届",
+              "已有毕业证",
+              "应届生",
+              "招应届",
+              "不在长兴",
+              "人在外地",
+              "要在长兴",
+              "是否影响"
+            ],
+            "answer": "最好是应届生，需要在长兴"
+          },
+          {
+            "topic": "hrbpMajor",
+            "questionPatterns": [
+              "理工科",
+              "非人力专业",
+              "专业不对口"
+            ],
+            "answer": "理工科可以，但要有人力资源知识"
+          }
+        ]
+      },
+      "外贸销售": {
+        "matchPositions": [
+          "外贸销售",
+          "膨润土外贸销售",
+          "化工原料外贸销售",
+          "国际业务管培生",
+          "外贸销售经理（流变助剂）"
+        ],
+        "inheritsRoot": false,
+        "description": "外贸销售岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "bachelor",
+              "text": "本科及以上"
+            },
+            {
+              "id": "age_under_25",
+              "text": "25 岁以下"
+            },
+            {
+              "id": "major_or_stem_cet6",
+              "text": "国际贸易、英语、俄语、翻译专业；或理工科专业且英语六级"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "bentonite_foreign_trade",
+              "text": "膨润土外贸销售经验",
+              "score": 30
+            },
+            {
+              "id": "bentonite_familiarity",
+              "text": "熟悉膨润土",
+              "score": 15
+            },
+            {
+              "id": "rheology_additive_sales",
+              "text": "流变助剂销售经历",
+              "score": 20
+            },
+            {
+              "id": "tem8_english",
+              "text": "英语专八",
+              "score": 20
+            },
+            {
+              "id": "russian",
+              "text": "俄语能力",
+              "score": 15
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "topics": {
+          "salesVisitAndTrip": [
+            "销售岗每周至少拜访 8 家客户。",
+            "销售岗出差不是长期出差。",
+            "销售岗一般一次出差一周左右。"
+          ],
+          "salesExperienceRequirement": [
+            "应届生最好有销售相关经历。",
+            "26 岁以上必须有销售相关经历。",
+            "销售管培生可以接受无经验。",
+            "其他销售岗最好有销售经验。"
+          ],
+          "salesCustomerDevelopment": [
+            "销售客户主要靠自己开发。",
+            "客户类型包括经销商、工厂、终端客户和大客户等。"
+          ],
+          "salesCompensation": [
+            "销售有独立的薪酬制度。",
+            "销售岗位有提成。",
+            "具体提成制度目前不清楚。"
+          ],
+          "salesRegion": [
+            "所有销售都有负责的区域或者行业。",
+            "销售岗培训完成后会根据公司业务情况分配区域。"
+          ],
+          "salesTripAndExpense": [
+            "销售出差经过审批的费用都可以报销。",
+            "销售岗最好有车。"
+          ],
+          "foreignTradeMarkets": [
+            "外贸销售目标市场包括东欧（俄罗斯）、东南亚、北美、非洲、欧洲和国内。"
+          ],
+          "foreignTradeTravel": [
+            "外贸销售需要出国或参加展会。"
+          ],
+          "foreignTradeLanguage": [
+            "英语至少要六级。",
+            "外贸销售更看重英语口语。"
+          ],
+          "foreignTradeChannels": [
+            "外贸平台和渠道包括阿里国际站、展会、海关数据、独立站等。",
+            "客户来源主要是展会和国际站。",
+            "外贸销售有提成，具体制度暂不清楚。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "拜访客户",
+              "客户拜访",
+              "一周拜访",
+              "每周拜访",
+              "拜访几家",
+              "几家客户"
+            ],
+            "answer": "每周至少拜访8家客户"
+          },
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "长期出差",
+              "一直出差",
+              "出差多久",
+              "出差周期",
+              "一次出差",
+              "出差一周",
+              "出差时间"
+            ],
+            "answer": "不是长期出差，一次约一周"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "需要销售经验",
+              "销售经历要求",
+              "销售经验要求",
+              "必须有销售",
+              "没有销售经验",
+              "没做过销售",
+              "应届生销售经验",
+              "26岁销售经验"
+            ],
+            "answer": "应届生最好有，26岁以上必须有"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户来源",
+              "客户怎么来",
+              "公司给客户",
+              "自己开发客户",
+              "陌拜"
+            ],
+            "answer": "客户主要自己开发"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户类型",
+              "什么客户",
+              "拜访谁",
+              "经销商",
+              "工厂",
+              "终端客户",
+              "大客户"
+            ],
+            "answer": "经销商、工厂、终端客户和大客户都有"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "提成",
+              "销售提成",
+              "奖金",
+              "薪酬制度"
+            ],
+            "answer": "销售有提成，具体制度暂不清楚"
+          },
+          {
+            "topic": "salesRegion",
+            "questionPatterns": [
+              "负责区域",
+              "负责行业",
+              "分配区域",
+              "培训后去哪"
+            ],
+            "answer": "会根据公司业务情况分配区域"
+          },
+          {
+            "topic": "salesWorkLocation",
+            "questionPatterns": [
+              "工作地点",
+              "办公地点",
+              "在哪里上班",
+              "固定工位",
+              "坐班",
+              "固定坐班",
+              "传统工位",
+              "上海工作地点",
+              "销售工作地点"
+            ],
+            "answer": "销售岗位没有明确工作地点，需要自己跑客户，所以没有传统意义上的固定工位去坐班"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "差旅",
+              "报销",
+              "出差费用",
+              "住宿报销",
+              "交通报销"
+            ],
+            "answer": "审批后的出差费用都报销"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "需要车",
+              "自带车",
+              "有车",
+              "驾照"
+            ],
+            "answer": "销售岗最好有车"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "无经验",
+              "没有经验",
+              "没做过销售",
+              "销售经验"
+            ],
+            "answer": "这个销售岗最好有经验"
+          },
+          {
+            "topic": "foreignTradeMarkets",
+            "questionPatterns": [
+              "目标市场",
+              "哪个国家",
+              "哪些区域",
+              "俄罗斯",
+              "东南亚",
+              "北美",
+              "非洲",
+              "欧洲"
+            ],
+            "answer": "市场包括东欧、东南亚、北美、非洲、欧洲和国内"
+          },
+          {
+            "topic": "foreignTradeTravel",
+            "questionPatterns": [
+              "出国",
+              "展会",
+              "参展"
+            ],
+            "answer": "需要出国或参加展会"
+          },
+          {
+            "topic": "foreignTradeLanguage",
+            "questionPatterns": [
+              "英语要求",
+              "六级",
+              "口语",
+              "专八"
+            ],
+            "answer": "英语至少六级，更看重口语"
+          },
+          {
+            "topic": "foreignTradeChannels",
+            "questionPatterns": [
+              "外贸平台",
+              "阿里国际站",
+              "海关数据",
+              "独立站",
+              "客户来源"
+            ],
+            "answer": "主要是展会和国际站，也有其他平台"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "提成",
+              "外贸提成"
+            ],
+            "answer": "有提成，具体制度暂不清楚"
+          }
+        ],
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "必须明确有化工原料外贸销售经历，才可以继续求简历。",
+          "failRule": "没有化工原料外贸销售经历，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "chemical_raw_material_foreign_trade",
+              "text": "你好，你有化工原料外贸销售经历吗",
+              "variants": [
+                "你好，方便问下你之前做过化工原料外贸销售吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "石油销售": {
+        "matchPositions": [
+          "石油销售",
+          "石油助剂销售",
+          "钻井泥浆销售",
+          "销售工程师（石油钻井泥浆膨润土）_湖州",
+          "销售工程师（石油钻井泥浆膨润土）"
+        ],
+        "inheritsRoot": false,
+        "description": "石油销售岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "education_college",
+              "text": "大专及以上"
+            },
+            {
+              "id": "age_under_45",
+              "text": "45 岁以下"
+            },
+            {
+              "id": "oil_additive_or_drilling_mud",
+              "text": "有石油助剂销售经验，或懂钻井泥浆，二者至少满足一个"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "both_oil_additive_and_mud",
+              "text": "同时具备石油助剂销售经验和懂钻井泥浆",
+              "score": 35
+            },
+            {
+              "id": "oil_additive_sales",
+              "text": "石油助剂销售经验",
+              "score": 25
+            },
+            {
+              "id": "drilling_mud",
+              "text": "懂钻井泥浆",
+              "score": 25
+            },
+            {
+              "id": "oilfield_service_sales",
+              "text": "油服公司销售经验",
+              "score": 10
+            },
+            {
+              "id": "oilfield_service_technical",
+              "text": "油服公司技术经历",
+              "score": 5
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "topics": {
+          "salesVisitAndTrip": [
+            "销售岗每周至少拜访 8 家客户。",
+            "销售岗出差不是长期出差。",
+            "销售岗一般一次出差一周左右。"
+          ],
+          "salesExperienceRequirement": [
+            "应届生最好有销售相关经历。",
+            "26 岁以上必须有销售相关经历。",
+            "销售管培生可以接受无经验。",
+            "其他销售岗最好有销售经验。"
+          ],
+          "salesCustomerDevelopment": [
+            "销售客户主要靠自己开发。",
+            "客户类型包括经销商、工厂、终端客户和大客户等。"
+          ],
+          "salesCompensation": [
+            "销售有独立的薪酬制度。",
+            "销售岗位有提成。",
+            "具体提成制度目前不清楚。"
+          ],
+          "salesRegion": [
+            "所有销售都有负责的区域或者行业。",
+            "销售岗培训完成后会根据公司业务情况分配区域。"
+          ],
+          "salesTripAndExpense": [
+            "销售出差经过审批的费用都可以报销。",
+            "销售岗最好有车。"
+          ],
+          "oilSalesProducts": [
+            "石油销售具体产品是膨润土。"
+          ],
+          "oilSalesExperience": [
+            "油田、油服等经历是简历上的内容。",
+            "最好有油田或油服相关经历。",
+            "石油销售销售背景优先。"
+          ],
+          "oilSalesTrip": [
+            "石油销售主要出差地点是各大油田。",
+            "客户所在地也是各大油田。",
+            "石油销售不用长期驻外。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "拜访客户",
+              "客户拜访",
+              "一周拜访",
+              "每周拜访",
+              "拜访几家",
+              "几家客户"
+            ],
+            "answer": "每周至少拜访8家客户"
+          },
+          {
+            "topic": "salesVisitAndTrip",
+            "questionPatterns": [
+              "长期出差",
+              "一直出差",
+              "出差多久",
+              "出差周期",
+              "一次出差",
+              "出差一周",
+              "出差时间"
+            ],
+            "answer": "不是长期出差，一次约一周"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "需要销售经验",
+              "销售经历要求",
+              "销售经验要求",
+              "必须有销售",
+              "没有销售经验",
+              "没做过销售",
+              "应届生销售经验",
+              "26岁销售经验"
+            ],
+            "answer": "应届生最好有，26岁以上必须有"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户来源",
+              "客户怎么来",
+              "公司给客户",
+              "自己开发客户",
+              "陌拜"
+            ],
+            "answer": "客户主要自己开发"
+          },
+          {
+            "topic": "salesCustomerDevelopment",
+            "questionPatterns": [
+              "客户类型",
+              "什么客户",
+              "拜访谁",
+              "经销商",
+              "工厂",
+              "终端客户",
+              "大客户"
+            ],
+            "answer": "经销商、工厂、终端客户和大客户都有"
+          },
+          {
+            "topic": "salesCompensation",
+            "questionPatterns": [
+              "提成",
+              "销售提成",
+              "奖金",
+              "薪酬制度"
+            ],
+            "answer": "销售有提成，具体制度暂不清楚"
+          },
+          {
+            "topic": "salesRegion",
+            "questionPatterns": [
+              "负责区域",
+              "负责行业",
+              "分配区域",
+              "培训后去哪"
+            ],
+            "answer": "会根据公司业务情况分配区域"
+          },
+          {
+            "topic": "salesWorkLocation",
+            "questionPatterns": [
+              "工作地点",
+              "办公地点",
+              "在哪里上班",
+              "固定工位",
+              "坐班",
+              "固定坐班",
+              "传统工位",
+              "上海工作地点",
+              "销售工作地点"
+            ],
+            "answer": "销售岗位没有明确工作地点，需要自己跑客户，所以没有传统意义上的固定工位去坐班"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "差旅",
+              "报销",
+              "出差费用",
+              "住宿报销",
+              "交通报销"
+            ],
+            "answer": "审批后的出差费用都报销"
+          },
+          {
+            "topic": "salesTripAndExpense",
+            "questionPatterns": [
+              "需要车",
+              "自带车",
+              "有车",
+              "驾照"
+            ],
+            "answer": "销售岗最好有车"
+          },
+          {
+            "topic": "salesExperienceRequirement",
+            "questionPatterns": [
+              "无经验",
+              "没有经验",
+              "没做过销售",
+              "销售经验"
+            ],
+            "answer": "这个销售岗最好有经验"
+          },
+          {
+            "topic": "oilSalesProducts",
+            "questionPatterns": [
+              "具体产品",
+              "卖什么",
+              "石油产品",
+              "膨润土"
+            ],
+            "answer": "主要是膨润土"
+          },
+          {
+            "topic": "oilSalesExperience",
+            "questionPatterns": [
+              "油田经验",
+              "油服经验",
+              "必须油田",
+              "技术背景",
+              "销售背景"
+            ],
+            "answer": "最好有油田油服经历，销售背景优先"
+          },
+          {
+            "topic": "oilSalesTrip",
+            "questionPatterns": [
+              "出差去哪",
+              "油田",
+              "驻外",
+              "长期驻外"
+            ],
+            "answer": "主要去各大油田，不长期驻外"
+          }
+        ],
+        "screening": {
+          "mode": "ask_any_required_question",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "有石油助剂销售经历，或懂钻井泥浆，任意一点明确符合就可以继续求简历。",
+          "failRule": "两个问题都明确不符合，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "oilfield_additive_sales",
+              "text": "你好，你有石油助剂销售经历吗",
+              "variants": [
+                "你好，之前接触过石油助剂销售吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "drilling_mud",
+              "text": "你好，你了解钻井泥浆吗",
+              "variants": [
+                "你好，之前有接触过钻井泥浆吗"
+              ],
+              "required": true
+            }
+          ]
+        }
+      },
+      "电气工程师": {
+        "matchPositions": [
+          "电气工程师",
+          "电器工程师",
+          "电气自动化"
+        ],
+        "inheritsRoot": false,
+        "description": "电气工程师岗位筛选问题库。这里只保存需要主动询问的问题和通过/不合适规则。",
+        "scoring": {
+          "mode": "must_have_gate_bonus_score",
+          "mustHaveScoring": "gate_only",
+          "bonusMaxScore": 100,
+          "mustHave": [
+            {
+              "id": "bachelor",
+              "text": "本科"
+            },
+            {
+              "id": "age_under_35",
+              "text": "35 岁以下"
+            },
+            {
+              "id": "electrical_or_automation_major",
+              "text": "电气工程或自动化专业"
+            },
+            {
+              "id": "plc",
+              "text": "简历中体现 PLC"
+            },
+            {
+              "id": "weak_current_certificate",
+              "text": "有弱电电工证"
+            },
+            {
+              "id": "yangyuan_factory",
+              "text": "接受河北阳原工厂"
+            }
+          ],
+          "bonusItems": [
+            {
+              "id": "plc_project_experience",
+              "text": "PLC 项目、编程或调试经验",
+              "score": 35
+            },
+            {
+              "id": "factory_electrical_experience",
+              "text": "工厂现场电气经验",
+              "score": 25
+            },
+            {
+              "id": "hmi_or_drawings",
+              "text": "HMI、电气图纸或控制柜经验",
+              "score": 15
+            },
+            {
+              "id": "maintenance_or_commissioning",
+              "text": "施工调试或设备维护经验",
+              "score": 15
+            },
+            {
+              "id": "supplier_coordination",
+              "text": "供应商技术沟通或现场协作",
+              "score": 10
+            }
+          ],
+          "levels": [
+            {
+              "minScore": 80,
+              "label": "强推荐"
+            },
+            {
+              "minScore": 60,
+              "label": "可推进"
+            },
+            {
+              "minScore": 40,
+              "label": "一般"
+            },
+            {
+              "minScore": 0,
+              "label": "加分项较弱"
+            }
+          ],
+          "decisionPolicy": "必须项只做门槛判断；必须项明确不满足则不推荐；必须项满足后按加分项计算 0-100 分。"
+        },
+        "screening": {
+          "mode": "ask_required_questions",
+          "successAction": "request_resume",
+          "rejectAction": "skip",
+          "passRule": "懂 PLC，有弱电电工证，并且接受河北阳原工厂，三个条件都明确接受才可以继续求简历。",
+          "failRule": "不懂 PLC，没有弱电电工证，或不接受河北阳原工厂，就判定不合适并跳过。",
+          "questions": [
+            {
+              "id": "plc",
+              "text": "你好，你熟悉 PLC 吗",
+              "variants": [
+                "你好，之前做过 PLC 相关项目吗"
+              ],
+              "required": true
+            },
+            {
+              "id": "weak_current_certificate",
+              "text": "你好，你有弱电电工证吗",
+              "variants": [],
+              "required": true
+            },
+            {
+              "id": "yangyuan_factory",
+              "text": "你好，工作地点在河北阳原工厂，地方比较偏僻，可以接受吗",
+              "variants": [
+                "你好，河北阳原工厂位置偏一些，你能接受吗"
+              ],
+              "required": true
+            }
+          ]
+        },
+        "topics": {
+          "yangyuanFactoryLife": [
+            "河北阳原工厂包住宿。",
+            "河北阳原工厂吃饭 5 元一顿。",
+            "电气工程师需要长期驻厂。",
+            "电气工程师只有河北阳原一个工作地点。"
+          ],
+          "electricalRequirements": [
+            "电气工程师必须有弱电电工证。",
+            "电气工程师必须懂 PLC。",
+            "PLC 主要用西门子。"
+          ],
+          "electricalWorkContent": [
+            "电气工程师具体工作内容目前还不清楚。"
+          ]
+        },
+        "faq": [
+          {
+            "topic": "yangyuanFactoryLife",
+            "questionPatterns": [
+              "河北住宿",
+              "阳原住宿",
+              "吃饭",
+              "饭费",
+              "驻厂",
+              "长期驻厂",
+              "其他地方",
+              "其他地点",
+              "别的地方",
+              "别的地点",
+              "还有其他地方吗",
+              "还有其他地点吗"
+            ],
+            "answer": "只有河北阳原一个地点，包住宿，吃饭5元一顿"
+          },
+          {
+            "topic": "electricalRequirements",
+            "questionPatterns": [
+              "弱电证",
+              "电工证",
+              "弱电电工证",
+              "PLC",
+              "必须懂PLC"
+            ],
+            "answer": "必须有弱电电工证，PLC必须懂"
+          },
+          {
+            "topic": "electricalRequirements",
+            "questionPatterns": [
+              "PLC品牌",
+              "哪个品牌的PLC",
+              "什么品牌的PLC",
+              "用的什么PLC",
+              "使用的哪个品牌的PLC",
+              "使用什么品牌的PLC",
+              "PLC用什么品牌",
+              "PLC用哪个品牌",
+              "PLC什么牌子",
+              "PLC用什么牌子",
+              "PLC用哪个牌子",
+              "西门子",
+              "三菱",
+              "欧姆龙"
+            ],
+            "answer": "PLC主要用西门子"
+          },
+          {
+            "topic": "electricalWorkContent",
+            "questionPatterns": [
+              "具体工作内容",
+              "工作内容",
+              "做什么"
+            ],
+            "answer": "具体工作内容目前还不清楚"
+          }
+        ]
+      },
+      "外部财务产品顾问": {
+        "matchPositions": [
+          "外部财务产品顾问",
+          "业财智能化顾问",
+          "AI财务场景顾问",
+          "财务场景顾问",
+          "财务产品顾问",
+          "财务数字化顾问",
+          "CFO顾问"
+        ],
+        "inheritsRoot": true,
+        "description": "外部财务产品顾问 / 业财智能化顾问 / AI财务场景顾问直求简历岗位。六个账号、BOSS/51job/智联均不发送筛选问题；未收到简历且未求过简历时先发送“你好，方便发一份简历过来吗”，再点击求简历；已收到或已求过则不重复，入库岗位为外部财务产品顾问。",
+        "directResume": true,
+        "resumeJobType": "外部财务产品顾问",
+        "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "AI智能体解决方案负责人": {
+        "matchPositions": [
+          "AI智能体解决方案负责人",
+          "智能体解决方案负责人",
+          "AI Solution Architect",
+          "Solution Architect",
+          "AI FDE",
+          "FDE",
+          "AI Workflow Engineer",
+          "Workflow Engineer",
+          "AI智能体方案",
+          "Agent解决方案"
+        ],
+        "inheritsRoot": true,
+        "description": "AI智能体解决方案负责人 / AI Solution Architect / AI FDE / AI Workflow Engineer直求简历岗位。六个账号、BOSS/51job/智联均不发送筛选问题；未收到简历且未求过简历时先发送“你好，可以看看简历吗”，再点击求简历；已收到或已求过则不重复，入库岗位为AI智能体解决方案负责人。",
+        "directResume": true,
+        "resumeJobType": "AI智能体解决方案负责人",
+        "resumeRequestPrompt": "你好，可以看看简历吗",
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "运营A": {
+        "matchPositions": [
+          "运营A",
+          "企业内容运营负责人（B2B/短视频方向）",
+          "企业内容运营负责人",
+          "B2B短视频",
+          "短视频方向"
+        ],
+        "inheritsRoot": true,
+        "description": "企业内容运营负责人（B2B/短视频方向）BOSS 运营直求简历岗位。不发送筛选问题，不主动答疑；未收到简历且未求过简历时先发送“可以发一份简历过来吗”，再点击求简历；已收到或已求过则不重复，入库岗位为运营A。",
+        "directResume": true,
+        "resumeJobType": "运营A",
+        "resumeRequestPrompt": "可以发一份简历过来吗",
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "运营B": {
+        "matchPositions": [
+          "运营B",
+          "B端社交媒体运营",
+          "社交媒体运营",
+          "B端运营"
+        ],
+        "inheritsRoot": true,
+        "description": "B端社交媒体运营 BOSS 运营直求简历岗位。不发送筛选问题，不主动答疑；未收到简历且未求过简历时先发送“可以发一份简历过来吗”，再点击求简历；已收到或已求过则不重复，入库岗位为运营B。",
+        "directResume": true,
+        "resumeJobType": "运营B",
+        "resumeRequestPrompt": "可以发一份简历过来吗",
+        "screening": {},
+        "topics": {},
+        "faq": []
+      }
+    },
+    "answerPolicy": [
+      "候选人提问时，优先从 companyKnowledgeBase 的 faq 和 topics 中检索答案。",
+      "知识库没有明确答案时，不主动回复，只记录到用户提问/待补充问题，不要编造。",
+      "招聘要求、面试准备等暂不做详细回复的问题，不主动回复。",
+      "薪资、工作地点、工时、住宿、转正、面试安排等敏感信息必须以知识库为准。",
+      "回复尽可能简短，优先不超过 20 个中文字符，可分 1-2 个短句。",
+      "回复末尾不要加句号、感叹号或英文句点。",
+      "短时间内不要对同一候选人重复发送完全相同的答案。",
+      "候选人询问 AI 应用开发岗位具体技术栈是否必须、不会某技术能否投、作品项目要求、每周到岗天数、学历年级要求时，不主动回复，记录为待补充或转人工。",
+      "候选人询问面试方式、线上面试或线下面试时，可以按知识库回复。",
+      "候选人询问具体面试时间、面试结果、是否已经面过或后续怎么处理时，不主动回复，记录为待补充或转人工。",
+      "候选人询问面试通知渠道、通过什么方式通知、BOSS/微信/邮箱通知时，不主动回复，记录为待补充或转人工。",
+      "候选人询问岗位是否符合、简历是否合适、个人经历是否匹配时，不主动回复，记录为待补充或转人工。",
+      "候选人询问岗位停止招聘原因时，不主动回复，记录为待补充或转人工。",
+      "候选人询问转正标准时，只回复看表现，不做具体解释。",
+      "候选人询问具体面试内容时，不透露具体内容。"
+    ],
+    "repeatControl": {
+      "windowMinutes": 10,
+      "sameTopicLimit": 1,
+      "fallbackReply": "按刚刚那条为准"
+    },
+    "company": {
+      "publicName": "我们公司",
+      "department": "数字化部门",
+      "departmentCanBeSaid": true,
+      "location": "浙江省湖州市长兴县泗安镇",
+      "business": "膨润土",
+      "mainProducts": [
+        "膨润土"
+      ],
+      "customerGroups": [
+        "建材",
+        "石油",
+        "化妆品",
+        "农药"
+      ]
+    },
+    "topics": {
+      "jobBasics": [
+        "AI实习生主要做服务公司内部的智能体。",
+        "智能体方向包括财务智能体、商务智能体等。",
+        "工作目标是提升公司内部效率。",
+        "工作方式主要使用 OpenClaw 和 Codex 辅助完成任务。",
+        "办公平台主要使用飞书。"
+      ],
+      "mentorshipAndWorkStyle": [
+        "公司没有传统一对一带教。",
+        "很多问题需要自己先解决。",
+        "公司有技术顾问，遇到不懂的可以问。",
+        "刚来需要先了解对应智能体的业务流程。",
+        "做财务智能体需要去财务部了解流程，其他智能体同理。"
+      ],
+      "salaryAndOvertime": [
+        "实习薪资是 150 元一天。",
+        "加班工资按 1.5 倍计算。",
+        "最近比较忙，需要加班。",
+        "加班不是强制的，有事可以请假。",
+        "工资每月 10 号发放。",
+        "数字化部门没有绩效奖金。",
+        "夏天有高温补贴。",
+        "AI 应用开发岗位每周一到周三需要加班。",
+        "AI 应用开发岗位加班时间是 18:00-21:00。",
+        "周六不算加班。",
+        "其他岗位不用加班。",
+        "AI 应用开发岗位加班工资按 1.5 倍计算。"
+      ],
+      "workLocation": [
+        "公司在浙江省湖州市长兴县泗安镇。",
+        "只支持线下实习。",
+        "不可以线上实习。",
+        "泗安镇比较偏僻。",
+        "公司距离高铁站 15 公里左右。",
+        "公司有班车。"
+      ],
+      "internshipDuration": [
+        "实习最少六个月。",
+        "能力强可以酌情考虑。",
+        "最好一周内到岗。",
+        "学校考试可以请假回去。",
+        "可以长期实习。"
+      ],
+      "scheduleAndRest": [
+        "平常工作时间是 8:00-11:00，13:00-17:00。",
+        "午休两小时。",
+        "AI 岗位每周一到周三 18:00-21:00 加班。",
+        "周六不算加班。",
+        "单休，每周上 6 天班。",
+        "不需要调休。"
+      ],
+      "accommodation": [
+        "公司包住宿。",
+        "住宿是两人间。",
+        "水电费由公司承担。",
+        "住宿离公司很近。",
+        "宿舍固定 2 人间。",
+        "宿舍有空调。",
+        "女生宿舍有卫生间。",
+        "男生宿舍没有独立卫生间。",
+        "宿舍和工位都有网。",
+        "住宿不用交押金。",
+        "不收取电费。"
+      ],
+      "mealsAndBenefits": [
+        "公司食堂 3 元一顿。",
+        "节假日没有饭。",
+        "没有交通补贴。",
+        "没有租房补贴。",
+        "公司提供办公电脑。",
+        "食堂每天中午和下午提供饭菜。",
+        "食堂 3 元一顿。",
+        "放假期间不提供饭菜。"
+      ],
+      "interviewProcess": [
+        "面试以线上面试为主。",
+        "会有复试，也可能有三面。",
+        "没有笔试。",
+        "面试准备暂不做详细回复。",
+        "目前主要会有 2-3 轮面试。",
+        "应用技术岗位和销售岗位终面需要到面。",
+        "所有实习生都可以线上面试。",
+        "具体面试内容不透露。"
+      ],
+      "resumePolicy": [
+        "简历收到后不主动回复。",
+        "候选人问简历是否合适、简历是否收到、具体面试时间、面试结果、是否已经面过或后续怎么处理时，不主动回复，只记录为待补充或转人工。",
+        "候选人问接下来有没有面试、面试流程怎么安排、招聘流程怎么安排时，不主动回复。",
+        "候选人问我们有什么顾虑、是否还有机会、能不能再给机会时，不主动回复。",
+        "候选人接受基础条件后追问团队当前项目、实习生具体参与工作、AI 应用开发/Agent/RAG 实战机会时，不主动回复该追问。"
+      ],
+      "conversionPolicy": [
+        "转正后待遇约 8-12K。",
+        "保险转正后缴纳。",
+        "转正看表现。",
+        "不对转正标准做具体解释。",
+        "实习生可以转正，具体看表现。",
+        "实习期 6 个月。"
+      ],
+      "entryRequirements": [
+        "入职需要体检。",
+        "入职需要身份证和学生证。",
+        "入职后需要签实习合同。"
+      ],
+      "doNotSay": [
+        "不要编造招聘要求。",
+        "不要详细回答面试准备。",
+        "不要承诺一定转正。",
+        "不要说线上实习可以。",
+        "不要承诺简历一定会回复。",
+        "不要回答 AI 应用开发岗位具体技术栈是否必须。",
+        "不要回答不会 Python/JS/RAG/Agent 等是否可以投。",
+        "不要回答是否必须 GitHub、Demo、项目经历、论文或比赛。",
+        "不要回答每周至少到岗几天。",
+        "不要回答学历、年级、应届/非应届、专科/本科是否可投等细节。",
+        "不要透露具体面试内容。",
+        "不要详细解释转正标准，只说看表现。",
+        "不要回答公司名称、哪个公司、公司全称、官网等公司身份问题。",
+        "不要回答简历是否合适、简历是否收到、具体面试时间、面试结果、是否已经面过或后续怎么处理等问题。",
+        "不要回答接下来有没有面试、面试流程怎么安排、招聘流程怎么安排等问题。",
+        "不要回答团队当前具体项目、实习生平时具体参与哪些工作、是否能接触 Agent/RAG 实战机会等问题。",
+        "不要回答候选人询问我方顾虑、是否还有机会、能否再给机会等问题。"
+      ],
+      "companyIdentity": [
+        "候选人问公司名称、哪个公司、公司全称或官网时，不主动回复，只记录为待补充或转人工。"
+      ],
+      "companyBusiness": [
+        "我们公司主要做膨润土。",
+        "主营业务也是膨润土。",
+        "客户群体主要涉及建材、石油、化妆品、农药等行业。"
+      ],
+      "hiringStatus": [
+        "候选人问岗位是否还在招、还能不能聊时，统一回复还在招的。"
+      ],
+      "leavePolicy": [
+        "请假会按照实际请假情况扣薪。"
+      ]
+    },
+    "faq": [
+      {
+        "topic": "workLocation",
+        "questionPatterns": [
+          "在哪",
+          "哪里",
+          "地点",
+          "地址",
+          "base"
+        ],
+        "answer": "在湖州长兴泗安镇"
+      },
+      {
+        "topic": "workLocation",
+        "questionPatterns": [
+          "线上实习",
+          "远程实习",
+          "远程办公",
+          "居家办公",
+          "在家实习",
+          "不到公司实习"
+        ],
+        "answer": "不可以线上实习"
+      },
+      {
+        "topic": "aiInternResponsibilities",
+        "questionPatterns": [
+          "桌面运维",
+          "运维",
+          "桌面",
+          "不包括桌面运维",
+          "包括运维"
+        ],
+        "answer": "是AI应用开发，不做桌面运维"
+      },
+      {
+        "topic": "conversionPolicy",
+        "questionPatterns": [
+          "五险",
+          "五险一金",
+          "保险",
+          "社保"
+        ],
+        "answer": "保险转正后缴纳"
+      },
+      {
+        "topic": "jobBasics",
+        "questionPatterns": [
+          "做什么",
+          "工作内容",
+          "岗位内容",
+          "职责"
+        ],
+        "answer": ""
+      },
+      {
+        "topic": "jobBasics",
+        "questionPatterns": [
+          "智能体",
+          "项目",
+          "Agent"
+        ],
+        "answer": ""
+      },
+      {
+        "topic": "mentorshipAndWorkStyle",
+        "questionPatterns": [
+          "有人带",
+          "导师",
+          "带教",
+          "指导"
+        ],
+        "answer": "需要独立上手，没有传统的一带一"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "薪资",
+          "工资",
+          "日薪",
+          "多少钱"
+        ],
+        "answer": "实习是150一天"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "加班时间",
+          "几点加班",
+          "加班几点",
+          "加班到几点"
+        ],
+        "answer": "每周一到周三加班，18点到21点"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "加班",
+          "加班费",
+          "忙吗"
+        ],
+        "answer": "AI岗位每周一到周三18点到21点加班，周六不算加班"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "强制加班",
+          "必须加班"
+        ],
+        "answer": "每周一到周三加班，18点到21点，周六不算加班"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "几号发",
+          "什么时候发工资"
+        ],
+        "answer": "每月10号发工资"
+      },
+      {
+        "topic": "scheduleAndRest",
+        "questionPatterns": [
+          "工作时间",
+          "几点上班",
+          "几点下班"
+        ],
+        "answer": "8-11点，13-17点"
+      },
+      {
+        "topic": "scheduleAndRest",
+        "questionPatterns": [
+          "午休",
+          "休息多久"
+        ],
+        "answer": "午休两个小时"
+      },
+      {
+        "topic": "scheduleAndRest",
+        "questionPatterns": [
+          "单休",
+          "双休",
+          "休息",
+          "上几天"
+        ],
+        "answer": "单休，每周6天"
+      },
+      {
+        "topic": "internshipDuration",
+        "questionPatterns": [
+          "多久",
+          "几个月",
+          "实习时长",
+          "六个月"
+        ],
+        "answer": "最少实习六个月"
+      },
+      {
+        "topic": "internshipDuration",
+        "questionPatterns": [
+          "尽快入职",
+          "什么时候入职",
+          "到岗"
+        ],
+        "answer": "最好一周内到岗"
+      },
+      {
+        "topic": "internshipDuration",
+        "questionPatterns": [
+          "考试",
+          "请假",
+          "学校有事"
+        ],
+        "answer": "学校考试可以请假"
+      },
+      {
+        "topic": "accommodation",
+        "questionPatterns": [
+          "住宿",
+          "包住",
+          "宿舍",
+          "食宿",
+          "吃住",
+          "包吃住",
+          "包食宿",
+          "管吃住",
+          "食宿自费"
+        ],
+        "answer": "公司包住，两人间"
+      },
+      {
+        "topic": "accommodation",
+        "questionPatterns": [
+          "水电",
+          "水电费"
+        ],
+        "answer": "水电费公司承担"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "吃饭",
+          "食堂",
+          "餐补",
+          "包饭",
+          "包吃",
+          "管饭",
+          "食宿",
+          "吃住",
+          "包吃住",
+          "包食宿",
+          "管吃住",
+          "食宿自费"
+        ],
+        "answer": "食堂3元一顿"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "电脑",
+          "设备"
+        ],
+        "answer": "公司提供办公电脑"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "交通",
+          "交通补贴"
+        ],
+        "answer": "没有交通补贴"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "房补",
+          "住房补贴",
+          "租房补贴"
+        ],
+        "answer": "公司提供宿舍，没有租房补贴"
+      },
+      {
+        "topic": "interviewProcess",
+        "questionPatterns": [
+          "线上面试",
+          "线下面试",
+          "到面",
+          "现场面试",
+          "面试方式",
+          "面试形式",
+          "可以线上面",
+          "能线上面",
+          "可不可以线上面试",
+          "能不能线上面试",
+          "可以线上面试吗",
+          "视频面试",
+          "远程面试"
+        ],
+        "answer": "面试基本都是线上，应用技术和销售岗位终面需要到面"
+      },
+      {
+        "topic": "interviewProcess",
+        "questionPatterns": [
+          "笔试"
+        ],
+        "answer": "没有笔试"
+      },
+      {
+        "topic": "resumePolicy",
+        "questionPatterns": [
+          "多久出结果",
+          "几天回复",
+          "面试结果",
+          "面试反馈",
+          "通过了吗",
+          "过了吗"
+        ],
+        "answer": ""
+      },
+      {
+        "topic": "resumePolicy",
+        "questionPatterns": [
+          "简历收到",
+          "简历合适",
+          "什么时候安排面试",
+          "什么时候面试",
+          "面试时间",
+          "约面试",
+          "下周面试",
+          "通知方式",
+          "怎么通知",
+          "什么方式通知",
+          "微信通知",
+          "邮箱通知",
+          "boss通知",
+          "下周一",
+          "下周二",
+          "下周三",
+          "下周四",
+          "下周五",
+          "明天面试",
+          "今天面试",
+          "已经面过",
+          "面过贵公司",
+          "后续怎么处理",
+          "岗位符合",
+          "是否符合",
+          "经历符合",
+          "经验符合",
+          "岗位匹配",
+          "停止招聘",
+          "为什么停止招聘",
+          "怎么停止招聘"
+        ],
+        "answer": ""
+      },
+      {
+        "topic": "conversionPolicy",
+        "questionPatterns": [
+          "转正",
+          "转正待遇",
+          "转正工资"
+        ],
+        "answer": "转正薪资看试用期表现，约8-12K"
+      },
+      {
+        "topic": "entryRequirements",
+        "questionPatterns": [
+          "入职材料",
+          "需要什么",
+          "身份证",
+          "学生证"
+        ],
+        "answer": "需身份证和学生证"
+      },
+      {
+        "topic": "entryRequirements",
+        "questionPatterns": [
+          "体检"
+        ],
+        "answer": "入职需要体检"
+      },
+      {
+        "topic": "entryRequirements",
+        "questionPatterns": [
+          "实习协议",
+          "合同"
+        ],
+        "answer": "入职后签实习合同"
+      },
+      {
+        "topic": "conversionPolicy",
+        "questionPatterns": [
+          "保险",
+          "社保",
+          "五险",
+          "五险一金"
+        ],
+        "answer": "保险转正后缴纳"
+      },
+      {
+        "topic": "companyIdentity",
+        "questionPatterns": [
+          "公司名",
+          "公司名称",
+          "贵司",
+          "哪个公司",
+          "什么公司",
+          "公司全称",
+          "官网"
+        ],
+        "answer": ""
+      },
+      {
+        "topic": "companyBusiness",
+        "questionPatterns": [
+          "公司做什么",
+          "主营业务",
+          "主要产品",
+          "什么行业",
+          "客户群体",
+          "客户类型"
+        ],
+        "answer": "主要做膨润土"
+      },
+      {
+        "topic": "companyBusiness",
+        "questionPatterns": [
+          "建材",
+          "石油",
+          "化妆品",
+          "农药",
+          "哪些客户"
+        ],
+        "answer": "客户涉及建材、石油、化妆品、农药等"
+      },
+      {
+        "topic": "hiringStatus",
+        "questionPatterns": [
+          "还招",
+          "还在招",
+          "还招聘",
+          "还能聊",
+          "还缺人",
+          "岗位还在吗"
+        ],
+        "answer": "还在招的"
+      },
+      {
+        "topic": "interviewProcess",
+        "questionPatterns": [
+          "几轮面试",
+          "几面",
+          "面试流程",
+          "招聘流程",
+          "几轮",
+          "后面流程"
+        ],
+        "answer": "一般2-3轮面试"
+      },
+      {
+        "topic": "interviewProcess",
+        "questionPatterns": [
+          "线上面试",
+          "线下面试",
+          "到面",
+          "现场面试",
+          "终面",
+          "可以线上面",
+          "能线上面",
+          "可不可以线上面试",
+          "能不能线上面试",
+          "可以线上面试吗",
+          "视频面试",
+          "远程面试"
+        ],
+        "answer": "面试基本都是线上，应用技术和销售岗位终面需要到面"
+      },
+      {
+        "topic": "interviewProcess",
+        "questionPatterns": [
+          "面试内容",
+          "面试问什么",
+          "面试准备",
+          "怎么准备"
+        ],
+        "answer": "具体面试内容不透露"
+      },
+      {
+        "topic": "workLocation",
+        "questionPatterns": [
+          "偏僻",
+          "远吗",
+          "离高铁",
+          "高铁站",
+          "班车",
+          "通勤"
+        ],
+        "answer": "泗安镇较偏，距高铁站约15公里，有班车"
+      },
+      {
+        "topic": "accommodation",
+        "questionPatterns": [
+          "住宿",
+          "宿舍",
+          "包住",
+          "几人间"
+        ],
+        "answer": "公司包住，固定2人间"
+      },
+      {
+        "topic": "accommodation",
+        "questionPatterns": [
+          "空调",
+          "独卫",
+          "卫生间",
+          "网络",
+          "网",
+          "押金",
+          "电费",
+          "水电"
+        ],
+        "answer": "宿舍有空调和网，不收押金电费"
+      },
+      {
+        "topic": "accommodation",
+        "questionPatterns": [
+          "女生宿舍",
+          "男生宿舍"
+        ],
+        "answer": "女生宿舍有卫生间，男生没有"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "食堂",
+          "吃饭",
+          "饭菜",
+          "餐费",
+          "餐补",
+          "包饭"
+        ],
+        "answer": "食堂中午和下午供餐，3元一顿"
+      },
+      {
+        "topic": "mealsAndBenefits",
+        "questionPatterns": [
+          "放假吃饭",
+          "节假日吃饭",
+          "放假食堂"
+        ],
+        "answer": "放假期间食堂不供餐"
+      },
+      {
+        "topic": "scheduleAndRest",
+        "questionPatterns": [
+          "节假日放假",
+          "法定节假日",
+          "节假日正常休息",
+          "正常放假吗"
+        ],
+        "answer": "节假日会正常放假"
+      },
+      {
+        "topic": "leavePolicy",
+        "questionPatterns": [
+          "请假",
+          "扣薪",
+          "扣工资",
+          "事假",
+          "病假"
+        ],
+        "answer": "请假按实际情况扣薪"
+      },
+      {
+        "topic": "salaryAndOvertime",
+        "questionPatterns": [
+          "加班",
+          "需要加班",
+          "其他岗位加班",
+          "AI加班"
+        ],
+        "answer": "AI应用开发每周一到周三18点到21点加班，周六不算加班，其他岗位不用"
+      },
+      {
+        "topic": "conversionPolicy",
+        "questionPatterns": [
+          "转正标准",
+          "怎么转正",
+          "转正看什么",
+          "能转正吗"
+        ],
+        "answer": "转正看表现"
+      },
+      {
+        "topic": "conversionPolicy",
+        "questionPatterns": [
+          "实习生转正",
+          "实习能转正",
+          "实习期多久"
+        ],
+        "answer": "实习生可以转正，实习期6个月"
+      }
+    ]
+  }
+}

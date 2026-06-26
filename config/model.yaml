@@ -1,0 +1,11 @@
+llm:
+  provider: openai-compatible
+  api_key_env: OPENAI_API_KEY
+  base_url_env: OPENAI_BASE_URL
+  model_env: OPENAI_MODEL
+  default_model: gpt-5.5
+  timeout_seconds: 60
+
+metadata:
+  source: agent_model_config.json
+  secret_policy: 原文件中的明文 key 与内网 baseUrl 不迁入；运行时只从 env 读取。

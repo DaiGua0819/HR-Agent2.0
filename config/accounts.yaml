@@ -1,0 +1,19 @@
+workers:
+  - owner: 和新红
+    port: 8801
+    profile_dir: profiles/hexinhong
+    cdp_port: 9222
+    accounts: [boss, job51, zhilian]
+  - owner: 宋峰峰
+    port: 8802
+    profile_dir: profiles/songfengfeng
+    cdp_port: 9223
+    accounts: [boss, job51, zhilian]
+
+open_order:
+  - {platform: boss, owner: 和新红}
+  - {platform: boss, owner: 宋峰峰}
+  - {platform: job51, owner: 和新红}
+  - {platform: job51, owner: 宋峰峰}
+  - {platform: zhilian, owner: 和新红}
+  - {platform: zhilian, owner: 宋峰峰}
