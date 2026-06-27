@@ -20,11 +20,13 @@ class PlaywrightElement:
     def __init__(self, locator: Any) -> None:
         self.locator = locator
 
-    async def click(self) -> None:
-        await self.locator.click()
+    async def click(self, timeout_ms: int | None = None) -> None:
+        kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
+        await self.locator.click(**kwargs)
 
-    async def fill(self, value: str) -> None:
-        await self.locator.fill(value)
+    async def fill(self, value: str, timeout_ms: int | None = None) -> None:
+        kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
+        await self.locator.fill(value, **kwargs)
 
     async def text(self) -> str:
         return await self.locator.inner_text()
@@ -39,6 +41,7 @@ class PlaywrightCDPPage:
     def __init__(self, page: Any, *, name: str = "") -> None:
         self.page = page
         self.name = name
+        self.reliable_actions: list[dict[str, object]] = []
 
     async def goto(self, url: str) -> None:
         await self.page.goto(url, wait_until="domcontentloaded")
@@ -51,18 +54,18 @@ class PlaywrightCDPPage:
         locator = self.page.locator(selector)
         return [PlaywrightElement(locator.nth(index)) for index in range(await locator.count())]
 
-    async def click(self, selector: str) -> bool:
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
         element = await self.query(selector)
         if element is None:
             return False
-        await element.click()
+        await element.click(timeout_ms=timeout_ms)
         return True
 
-    async def fill(self, selector: str, value: str) -> bool:
+    async def fill(self, selector: str, value: str, timeout_ms: int | None = None) -> bool:
         element = await self.query(selector)
         if element is None:
             return False
-        await element.fill(value)
+        await element.fill(value, timeout_ms=timeout_ms)
         return True
 
     async def text(self, selector: str | None = None) -> str:

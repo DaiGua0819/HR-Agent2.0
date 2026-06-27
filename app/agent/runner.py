@@ -73,6 +73,9 @@ class ConversationRunner:
         if not last or last.sender != MessageSender.CANDIDATE:
             return self._finish(state, "wait", "last_message_not_candidate")
 
+        if self._needs_initial_ai_basic_phrase(conversation, rule):
+            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
+
         answer = self._knowledge_answer(last.text, conversation)
         if answer:
             screening = rule_screening(rule)
@@ -101,12 +104,13 @@ class ConversationRunner:
                     )
             await self._send_knowledge_answer(state, answer)
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
+
+        if is_direct_resume_rule(rule):
+            return await self._handle_direct_resume(state, conversation, rule)
         if looks_like_question(last.text):
             state["pending_question"] = last.text
             return self._finish(state, "escalate", "unknown_question", evidence=last.text)
 
-        if is_direct_resume_rule(rule):
-            return await self._handle_direct_resume(state, conversation, rule)
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
             return await self._handle_ai_basic(state, conversation, rule, last.text)
         return await self._handle_screening(state, conversation, rule, last.text)
@@ -174,13 +178,33 @@ class ConversationRunner:
     ) -> GraphState:
         phrase = initial_common_phrase(rule)
         if phrase and not _message_sent(conversation, phrase):
-            position = conversation.candidate.applied_position
-            if should_use_company_info(conversation.platform, position, rule):
-                await self.adapter.send_company_info(phrase=phrase, phrase_key="basic_conditions")
-            else:
-                await self.adapter.send_message(phrase)
-            _append_sent(state, phrase)
-            return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
+            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
+        request_state = await self.adapter.inspect_resume_request_state()
+        if request_state.has_resume_attachment:
+            return self._finish(
+                state,
+                "wait",
+                "resume_attachment_received",
+                result={"skipped": True, "reason": "resume_attachment_received"},
+            )
+        if request_state.already_requested:
+            return self._finish(
+                state,
+                "wait",
+                "resume_already_requested",
+                result={"skipped": True, "reason": "already_requested"},
+            )
+        if request_state.pending_resume_consent:
+            result = await self.adapter.request_resume()
+            state["resume_requested"] = bool(
+                result.get("requested") or result.get("resumeReceived")
+            )
+            return self._finish(
+                state,
+                "request_resume",
+                "resume_consent_requested",
+                result=result,
+            )
         judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
         if judgement.status == "accept":
             result = await self.adapter.request_resume()
@@ -195,6 +219,25 @@ class ConversationRunner:
                 result=result,
             )
         return self._finish(state, "wait", f"basic_{judgement.status}", judgement=asdict(judgement))
+
+    async def _send_initial_ai_basic_phrase(
+        self,
+        state: GraphState,
+        conversation: Conversation,
+        rule: dict[str, Any],
+    ) -> GraphState:
+        """AI 应用开发岗位首轮固定先发基础条件，再处理候选人问题。"""
+
+        phrase = initial_common_phrase(rule)
+        if not phrase:
+            return self._finish(state, "wait", "basic_phrase_missing")
+        position = conversation.candidate.applied_position
+        if should_use_company_info(conversation.platform, position, rule):
+            await self.adapter.send_company_info(phrase=phrase, phrase_key="basic_conditions")
+        else:
+            await self.adapter.send_message(phrase)
+        _append_sent(state, phrase)
+        return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
 
     async def _handle_screening(
         self,
@@ -271,6 +314,18 @@ class ConversationRunner:
             text,
             self.rules,
             position=conversation.candidate.applied_position,
+        )
+
+    @staticmethod
+    def _needs_initial_ai_basic_phrase(
+        conversation: Conversation,
+        rule: dict[str, Any],
+    ) -> bool:
+        phrase = initial_common_phrase(rule)
+        return bool(
+            phrase
+            and is_ai_basic_rule(conversation.candidate.applied_position, rule)
+            and not _message_sent(conversation, phrase)
         )
 
     def _state_from_conversation(self, conversation: Conversation) -> GraphState:

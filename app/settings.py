@@ -122,6 +122,8 @@ class AppSettings(BaseSettings):
     control_plane_host: str = Field(default="127.0.0.1", validation_alias="CONTROL_PLANE_HOST")
     control_plane_port: int = Field(default=8080, validation_alias="CONTROL_PLANE_PORT")
     dry_run: bool = Field(default=True, validation_alias="DRY_RUN")
+    interaction_enabled: bool = Field(default=True, validation_alias="INTERACTION_ENABLED")
+    interaction_profile: str = Field(default="normal", validation_alias="INTERACTION_PROFILE")
     database_path: Path = Field(
         default=Path("data/resumes.sqlite"),
         validation_alias="DATABASE_PATH",

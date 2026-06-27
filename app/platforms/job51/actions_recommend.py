@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
 from app.browser.base import BrowserPage
+from app.browser.reliable_actions import reliable_click, reliable_click_element, reliable_scroll
 from app.platforms.job51 import selectors
 from app.platforms.job51.actions_mode import ensure_recommend_traditional_mode
 
@@ -11,8 +12,8 @@ from app.platforms.job51.actions_mode import ensure_recommend_traditional_mode
 async def open_recommend_page(page: BrowserPage) -> None:
     """通过人才望远镜入口进入推荐页，不直接打开 URL。"""
 
-    clicked = await page.click(selectors.RECOMMEND_ENTRY)
-    if not clicked:
+    click = await reliable_click(page, selectors.RECOMMEND_ENTRY, label="51job推荐入口")
+    if not click.get("ok"):
         raise RuntimeError("job51_recommend_entry_missing")
 
 
@@ -22,9 +23,11 @@ async def select_recommend_position(page: BrowserPage, target_position: str) -> 
     result = await page.eval_js("job51.select_recommend_position", target_position)
     if isinstance(result, dict):
         return result
+    click = await reliable_click(page, selectors.RECOMMEND_POSITION_TAB, label="51job推荐岗位")
     return {
-        "selected": bool(await page.click(selectors.RECOMMEND_POSITION_TAB)),
+        "selected": bool(click.get("ok")),
         "label": target_position,
+        "click": click,
     }
 
 
@@ -69,8 +72,11 @@ async def proactive_greet(
             if button is None:
                 skipped.append({"index": index, "reason": "greet_button_missing"})
                 continue
-            await button.click()
-            greeted += 1
+            click = await reliable_click_element(page, button, label="51job立即Hi聊")
+            if click.get("ok"):
+                greeted += 1
+            else:
+                skipped.append({"index": index, "reason": "greet_click_failed", "click": click})
     return {"greeted": greeted, "matched": matched, "skipped": skipped, "dryRun": dry_run}
 
 
@@ -85,7 +91,9 @@ async def scroll_recommend_cards(page: BrowserPage) -> dict[str, object]:
     """推荐卡片小幅滚动边界。"""
 
     value = await page.eval_js("job51.scroll_recommend_cards")
-    return value if isinstance(value, dict) else {"scrolled": False}
+    if isinstance(value, dict) and value.get("scrolled"):
+        return value
+    return await reliable_scroll(page, amount=600)
 
 
 def extract_recommend_candidate_name(text: str) -> str:

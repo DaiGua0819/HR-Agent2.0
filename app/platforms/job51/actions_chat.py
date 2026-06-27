@@ -10,6 +10,11 @@ import re
 from typing import Any
 
 from app.browser.base import BrowserPage
+from app.browser.reliable_actions import (
+    reliable_click,
+    reliable_click_element,
+    reliable_fill,
+)
 from app.core.constants import Platform
 from app.platforms.job51 import selectors
 from app.platforms.types import (
@@ -28,16 +33,16 @@ REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 async def open_chat_page(page: BrowserPage) -> None:
     """进入 51job 人才沟通页。"""
 
-    clicked = await page.click(selectors.CHAT_ENTRY)
-    if not clicked:
+    click = await reliable_click(page, selectors.CHAT_ENTRY, label="51job人才沟通入口")
+    if not click.get("ok"):
         await page.goto("about:blank#job51-chat-entry-missing")
 
 
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """切换 51job 未读筛选。"""
 
-    clicked = await page.click(selectors.UNREAD_FILTER)
-    return {"selected": clicked, "selector": selectors.UNREAD_FILTER}
+    click = await reliable_click(page, selectors.UNREAD_FILTER, label="51job未读筛选")
+    return {"selected": bool(click.get("ok")), "selector": selectors.UNREAD_FILTER, "click": click}
 
 
 async def select_positions(
@@ -46,7 +51,8 @@ async def select_positions(
     """选择全部岗位或目标岗位。"""
 
     selector = selectors.POSITION_MENU if target_position else selectors.ALL_POSITION_MENU
-    clicked = await page.click(selector)
+    click = await reliable_click(page, selector, label="51job职位筛选")
+    clicked = bool(click.get("ok"))
     return {
         "selected": clicked,
         "label": target_position or "全部岗位",
@@ -88,8 +94,13 @@ async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef 
             "name": await row.attr("name") or "",
             "position": await row.attr("position") or "",
         }
-        await row.click()
-        ready = await wait_chat_ready(page, timeout_ms=6500)
+        click = await reliable_click_element(
+            page,
+            row,
+            label="51job候选人会话",
+            verify=lambda: _verify_chat_ready(page),
+        )
+        ready = bool(click.get("ok")) or await wait_chat_ready(page, timeout_ms=6500)
         opened = await verify_opened_candidate(page, expected, chat_ready=ready)
         if opened.get("opened"):
             return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
@@ -191,18 +202,20 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     if not text:
         return SendResult(sent=False, blocked=True, message="51job 待发送内容为空")
     await dismiss_interruptions(page)
-    filled = await page.fill(selectors.CHAT_INPUT, text)
-    if not filled:
+    fill = await reliable_fill(page, selectors.CHAT_INPUT, text, label="51job聊天输入框")
+    if not fill.get("ok"):
         return SendResult(sent=False, blocked=True, message="51job 没有找到聊天输入框")
-    clicked = await page.click(selectors.SEND_BUTTON)
-    if hasattr(page, "append_sent_message"):
-        page.append_sent_message(text)  # type: ignore[attr-defined]
-    verified = bool((await _safe_eval_dict(page, "job51.verify_sent", text)).get("verified"))
-    sent = clicked or verified
+    click = await reliable_click(
+        page,
+        selectors.SEND_BUTTON,
+        label="51job发送按钮",
+        verify=lambda: _verify_recent_mine_message(page, text),
+    )
+    sent = bool(click.get("ok"))
     return SendResult(
         sent=sent,
-        verified=verified,
-        blocked=not verified,
+        verified=sent,
+        blocked=not sent,
         message="51job 已发送消息" if sent else "51job 发送按钮点击失败",
     )
 
@@ -212,7 +225,11 @@ async def dismiss_interruptions(page: BrowserPage) -> dict[str, object]:
 
     closed = 0
     for selector in (selectors.AI_GUIDE_CLOSE, selectors.WECHAT_NOTIFY_CLOSE):
-        if await page.click(selector):
+        element = await page.query(selector)
+        if element is None:
+            continue
+        click = await reliable_click_element(page, element, label="51job关闭遮挡层")
+        if click.get("ok"):
             closed += 1
     return {"closed": closed}
 
@@ -275,3 +292,21 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
+    return {"verified": await wait_chat_ready(page, timeout_ms=6500)}
+
+
+async def _verify_recent_mine_message(
+    page: BrowserPage,
+    expected_text: str,
+) -> dict[str, object]:
+    raw = await _safe_eval_dict(page, "job51.verify_sent", expected_text)
+    if raw.get("verified"):
+        return {"verified": True, "source": "script"}
+    messages = await page.query_all(selectors.MINE_MESSAGE)
+    for element in reversed(messages):
+        if expected_text in (await element.text()):
+            return {"verified": True, "source": "dom"}
+    return {"verified": False, "reason": "mine_message_not_found"}

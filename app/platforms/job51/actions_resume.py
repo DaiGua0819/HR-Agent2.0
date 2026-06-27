@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.browser.base import BrowserPage
+from app.browser.reliable_actions import reliable_click_element
 from app.platforms.job51 import selectors
 from app.platforms.types import ResumeRequestState
 
@@ -188,8 +189,13 @@ def resume_download_suitability_guard(
 async def _click_request_resume(page: BrowserPage) -> bool:
     for element in await page.query_all(selectors.REQUEST_RESUME_BUTTON):
         if selectors.REQUEST_RESUME_TEXT in (await element.text()):
-            await element.click()
-            return True
+            result = await reliable_click_element(
+                page,
+                element,
+                label="51job求简历",
+                verify=lambda: _confirm_button_visible(page),
+            )
+            return bool(result.get("ok"))
     return False
 
 
@@ -197,8 +203,8 @@ async def _click_request_resume_confirm(page: BrowserPage) -> bool:
     for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
         label = await element.text()
         if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
-            await element.click()
-            return True
+            result = await reliable_click_element(page, element, label="51job求简历确认")
+            return bool(result.get("ok"))
     return False
 
 
@@ -208,6 +214,14 @@ async def _request_resume_with_confirm(page: BrowserPage) -> tuple[bool, bool]:
         return False, False
     confirmed = await _click_request_resume_confirm(page)
     return True, confirmed
+
+
+async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
+    for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
+        label = await element.text()
+        if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
+            return {"verified": True}
+    return {"verified": False, "reason": "confirm_not_visible"}
 
 
 async def _safe_eval_dict(

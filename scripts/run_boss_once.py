@@ -12,18 +12,20 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import asdict
 from typing import Any
 from urllib.request import urlopen
 
 from app.agent.runner import ConversationRunner
 from app.browser.playwright_cdp import PlaywrightCDPConnection, connect_cdp_browser
+from app.browser.reliable_actions import reliable_click_element
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
+from app.platforms.boss import actions as boss_actions
 from app.platforms.boss import selectors
 from app.platforms.boss.adapter import BossAdapter
 from app.settings import load_settings
 
+from boss_once_support import print_summary, reliable_actions_since
 from boss_targeting import process_boss_targets, select_all_filter
 
 
@@ -85,10 +87,12 @@ async def main_async() -> None:
             unread = await adapter.select_unread_filter()
             if not unread.get("selected"):
                 _fail(f"BOSS 未读筛选不可用: {unread}")
-            if not await page.query_all(selectors.SESSION_ITEM):
-                _print_step("4/4 BOSS 未读列表为空")
-                _print_summary([], live=live)
+            unread_rows = await boss_actions.read_unread_row_states(page)
+            if not unread_rows:
+                _print_step("4/4 BOSS 没有带数字徽标的真实未读会话")
+                print_summary([], live=live)
                 return
+            print(f"真实未读会话数: {len(unread_rows)}")
         missing, warnings = await _selector_health(page)
         if missing:
             print("选择器可能漂移，先修复再处理。缺失清单:")
@@ -106,7 +110,7 @@ async def main_async() -> None:
             if args.conversation_id
             else await _process_boss(adapter, args.limit)
         )
-        _print_summary(summaries, live=live)
+        print_summary(summaries, live=live)
     finally:
         await _close_connection(connection)
         await _close_runtime_resources()
@@ -166,32 +170,9 @@ async def _selector_health(page: Any) -> tuple[list[str], list[str]]:
             missing.append(f"{name}: {selector}")
     if missing:
         return missing, warnings
-
-    first = await _first_candidate_row(page)
-    if first is None:
-        return ["没有找到可点击候选人会话"], warnings
-    await first.click()
-    await asyncio.sleep(1)
-
-    required_after = {
-        "消息抽取": selectors.MESSAGE_ITEM,
-        "输入框": selectors.CHAT_INPUT,
-        "发送按钮": selectors.SEND_BUTTON,
-    }
-    optional_after = {
-        "己方消息 mine 校验": selectors.MINE_MESSAGE,
-        "求简历按钮": selectors.REQUEST_RESUME_BUTTON,
-    }
-    for name, selector in required_after.items():
-        count = await _count_with_wait(page, selector)
-        print(f"点进会话后检查 {name}: count={count} selector={selector}")
-        if count == 0:
-            missing.append(f"{name}: {selector}")
-    for name, selector in optional_after.items():
-        count = len(await page.query_all(selector))
-        print(f"条件选择器检查 {name}: count={count} selector={selector}")
-        if count == 0:
-            warnings.append(f"{name}: {selector}")
+    warnings.append(
+        "聊天区选择器将在点开真实未读会话后逐条校验，启动前不消费未读状态"
+    )
     return missing, warnings
 
 
@@ -201,30 +182,22 @@ async def _dismiss_overlays(page: Any) -> None:
     await page.eval_js(
         """
         () => {
-          const clickFirst = (selectors) => {
-            for (const selector of selectors) {
-              const el = document.querySelector(selector);
-              if (el) {
-                el.click();
-                return true;
-              }
-            }
-            return false;
-          };
           document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-          clickFirst([
-            ".dialog-wrap.active .close-btn",
-            ".dialog-wrap.active .boss-dialog-close",
-            ".dialog-wrap.active [class*='close']",
-            ".boss-dialog__wrapper [class*='close']",
-            "[data-type='boss-dialog'] [class*='close']"
-          ]);
-          document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          document.body.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-          document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         }
         """
     )
+    for selector in (
+        ".dialog-wrap.active .close-btn",
+        ".dialog-wrap.active .boss-dialog-close",
+        ".dialog-wrap.active [class*='close']",
+        ".boss-dialog__wrapper [class*='close']",
+        "[data-type='boss-dialog'] [class*='close']",
+    ):
+        element = await page.query(selector)
+        if element is None:
+            continue
+        await reliable_click_element(page, element, label="BOSS关闭遮挡层")
+        break
     await asyncio.sleep(1)
 
 
@@ -242,18 +215,48 @@ async def _count_with_wait(page: Any, selector: str, *, timeout_seconds: float =
         await asyncio.sleep(0.4)
 
 
+async def _verify_boss_chat_ready(page: Any) -> dict[str, object]:
+    """确认点开候选人后 BOSS 聊天区已经可读。"""
+
+    ready = await page.wait_for(selectors.CHAT_INPUT, timeout_ms=6500)
+    return {"verified": bool(ready), "reason": "" if ready else "chat_input_not_ready"}
+
+
 async def _process_boss(adapter: BossAdapter, limit: int) -> list[dict[str, Any]]:
     await adapter.select_positions(None)
-    rows = await adapter.page.query_all(selectors.SESSION_ITEM)
+    states = await boss_actions.read_unread_row_states(adapter.page)
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in rows:
+    for unread_state in states:
         if len(summaries) >= limit:
             break
+        label = str(unread_state.get("label") or "").strip()
+        if _skip_row_label(label):
+            continue
+        row = await _find_boss_row(adapter.page, unread_state)
+        if row is None:
+            continue
         label = (await row.text()).strip()
         if _skip_row_label(label):
             continue
-        await row.click()
+        before_actions = len(getattr(adapter.page, "reliable_actions", []))
+        click = await reliable_click_element(
+            adapter.page,
+            row,
+            label="BOSS处理候选人会话",
+            verify=lambda: _verify_boss_chat_ready(adapter.page),
+        )
+        if not click.get("ok"):
+            summaries.append(
+                {
+                    "conversationId": label,
+                    "action": "skip",
+                    "stage": "open_thread_failed",
+                    "decision": {"reason": click.get("reason") or "click_not_verified"},
+                    "reliableActions": reliable_actions_since(adapter.page, before_actions),
+                }
+            )
+            continue
         context = await _wait_for_context(adapter)
         state = await ConversationRunner(adapter).run_current()
         conversation_id = str(state.get("conversation_id") or label)
@@ -274,9 +277,31 @@ async def _process_boss(adapter: BossAdapter, limit: int) -> list[dict[str, Any]
                 "ruleSource": state.get("rule_source") or "",
                 "sentMessages": state.get("sent_messages") or [],
                 "decision": state.get("decision") or {},
+                "reliableActions": reliable_actions_since(adapter.page, before_actions),
             }
         )
     return summaries
+
+
+async def _find_boss_row(page: Any, state: dict[str, Any]) -> Any | None:
+    row_id = str(state.get("id") or "")
+    row_id_norm = row_id.lstrip("_")
+    label = str(state.get("label") or "").strip()
+    rows = await page.query_all(selectors.SESSION_ITEM)
+
+    if row_id_norm:
+        for row in rows:
+            current_id = str(await row.attr("id") or "")
+            if current_id.lstrip("_") == row_id_norm:
+                return row
+    if label:
+        for row in rows:
+            if (await row.text()).strip() == label:
+                return row
+    index = _safe_int(state.get("index"))
+    if 0 <= index < len(rows):
+        return rows[index]
+    return None
 
 
 async def _wait_for_context(adapter: BossAdapter, *, timeout_seconds: float = 6):
@@ -301,47 +326,17 @@ def _last_message_from_context(context: Any) -> dict[str, str]:
     }
 
 
-def _print_summary(items: list[dict[str, Any]], *, live: bool) -> None:
-    mode_name = "LIVE" if live else "dry-run"
-    print(f"\n===== BOSS {mode_name} 小结 =====")
-    print(f"处理会话数: {len(items)}")
-    if not items:
-        print("没有处理到候选人会话。可能没有未读，或会话列表选择器未返回候选人行。")
-        return
-    for index, item in enumerate(items, start=1):
-        candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
-        decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
-        print(f"\n[{index}] 会话: {item.get('conversationId')}")
-        print(f"候选人: {candidate.get('name') or ''}")
-        print(f"识别岗位: {item.get('job') or candidate.get('applied_position') or '未识别'}")
-        print(f"规则来源: {item.get('ruleSource') or '未命中'}")
-        last_message = json.dumps(
-            _jsonable(item.get("lastMessage") or {}),
-            ensure_ascii=False,
-        )
-        print(f"最后消息: {last_message}")
-        print(f"打算动作: {item.get('action') or '无'}")
-        print(f"原因/阶段: {item.get('stage') or ''}")
-        sent_messages = (
-            item.get("sentMessages")
-            if isinstance(item.get("sentMessages"), list)
-            else []
-        )
-        if sent_messages:
-            print(f"拟发送/已发送文本: {json.dumps(_jsonable(sent_messages), ensure_ascii=False)}")
-        screening = decision.get("screening") if isinstance(decision.get("screening"), dict) else {}
-        if screening:
-            print(
-                "筛选状态: "
-                f"{screening.get('status') or ''} / {screening.get('reason') or ''}"
-            )
-        print(f"决策详情: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
-
-
 def _skip_row_label(label: str) -> bool:
     compact = "".join(label.split())
     skip_terms = ("平台推荐", "系统消息", "BOSS直聘", "职位助手")
     return not compact or any(term in compact for term in skip_terms)
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _first_candidate_row(page: Any):
@@ -350,16 +345,6 @@ async def _first_candidate_row(page: Any):
         if not _skip_row_label(label):
             return row
     return None
-
-
-def _jsonable(value: Any) -> Any:
-    try:
-        json.dumps(value, ensure_ascii=False)
-        return value
-    except TypeError:
-        if hasattr(value, "__dataclass_fields__"):
-            return asdict(value)
-        return str(value)
 
 
 async def _close_connection(connection: PlaywrightCDPConnection) -> None:

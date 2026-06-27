@@ -38,15 +38,25 @@ MINE_MESSAGE = (
 )
 
 REQUEST_RESUME_BUTTON = (
-    ".resume-btn-online, .resume-btn-file, .toolbar-box-right .operate-btn, "
+    ".resume-btn-online, .resume-btn-file, .toolbar-box-right .operate-icon-item, "
+    ".toolbar-box-right .operate-btn, .conversation-operate .operate-icon-item, "
     ".conversation-operate .operate-btn, button, [role='button'], "
     ".toolbar button, .chat-op button, .btn-request-resume"
 )
 REQUEST_RESUME_TEXT = "求简历"
 REQUEST_RESUME_CONFIRM_BUTTON = (
+    ".exchange-tooltip .boss-btn-primary, .exchange-tooltip .boss-btn, "
+    ".boss-btn-primary.boss-btn, .boss-btn, "
     ".boss-dialog__wrapper button, .boss-dialog button, "
-    ".dialog-wrap.active button, [role='dialog'] button, "
-    ".modal button, .dialog-footer button"
+    ".boss-dialog__wrapper [role='button'], .boss-dialog__wrapper .btn, "
+    ".dialog-wrap.active button, .dialog-wrap.active [role='button'], "
+    ".dialog-wrap.active .btn, .dialog-wrap.active .operate-btn, "
+    "[role='dialog'] button, [role='dialog'] [role='button'], [role='dialog'] .btn, "
+    ".modal button, .modal [role='button'], .modal .btn, "
+    ".dialog-footer button, .dialog-footer [role='button'], .dialog-footer .btn, "
+    "[class*='dialog'] button, [class*='dialog'] [role='button'], [class*='dialog'] .btn, "
+    "[class*='modal'] button, [class*='modal'] [role='button'], [class*='modal'] .btn, "
+    ".btn-primary, .confirm-btn, .sure-btn"
 )
 REQUEST_RESUME_CONFIRM_TEXTS = ("确认", "确定", "发送请求", "发起请求", "继续")
 RESUME_CONSENT_TEXT = "同意"

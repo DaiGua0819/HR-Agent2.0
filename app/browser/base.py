@@ -12,10 +12,10 @@ from typing import Any, Protocol
 class BrowserElement(Protocol):
     """页面元素的最小可操作接口。"""
 
-    async def click(self) -> None:
+    async def click(self, timeout_ms: int | None = None) -> None:
         """点击当前元素。"""
 
-    async def fill(self, value: str) -> None:
+    async def fill(self, value: str, timeout_ms: int | None = None) -> None:
         """向输入元素填入文本。"""
 
     async def text(self) -> str:
@@ -37,10 +37,10 @@ class BrowserPage(Protocol):
     async def query_all(self, selector: str) -> list[BrowserElement]:
         """查找所有匹配元素。"""
 
-    async def click(self, selector: str) -> bool:
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
         """点击第一个匹配元素，返回是否点击成功。"""
 
-    async def fill(self, selector: str, value: str) -> bool:
+    async def fill(self, selector: str, value: str, timeout_ms: int | None = None) -> bool:
         """填入第一个匹配输入元素，返回是否成功。"""
 
     async def text(self, selector: str | None = None) -> str:

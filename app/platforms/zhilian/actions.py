@@ -7,6 +7,12 @@
 from __future__ import annotations
 
 from app.browser.base import BrowserElement, BrowserPage
+from app.browser.reliable_actions import (
+    reliable_click,
+    reliable_click_element,
+    reliable_confirm,
+    reliable_fill,
+)
 from app.core.constants import Platform
 from app.platforms.types import (
     Candidate,
@@ -35,8 +41,8 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     for element in elements:
         label = await element.text()
         if label == "未读" or ("未读" in label and len(label) <= 8):
-            await element.click()
-            return {"selected": True, "label": label}
+            click = await reliable_click_element(page, element, label="智联未读筛选")
+            return {"selected": bool(click.get("ok")), "label": label, "click": click}
     return {"selected": False, "reason": "unread_filter_not_found"}
 
 
@@ -46,7 +52,8 @@ async def select_positions(
     """选择全部职位或指定职位。"""
 
     label = target_position or selectors.ALL_POSITION_OPTION_TEXT
-    clicked = await page.click(selectors.POSITION_FILTER)
+    click = await reliable_click(page, selectors.POSITION_FILTER, label="智联职位筛选")
+    clicked = bool(click.get("ok"))
     if label == selectors.ALL_POSITION_OPTION_TEXT:
         return {"selected": clicked, "label": label, "mode": "all"}
     return {"selected": clicked, "label": label, "mode": "target"}
@@ -72,8 +79,13 @@ async def find_next_unread_thread(
         position = (await row.attr("position") or "").strip()
         if allowed and not any(_position_matches(position, item) for item in allowed):
             continue
-        await row.click()
-        if not await page.wait_for(selectors.CHAT_READY, timeout_ms=6500):
+        click = await reliable_click_element(
+            page,
+            row,
+            label="智联候选人会话",
+            verify=lambda: _verify_chat_ready(page),
+        )
+        if not click.get("ok"):
             continue
         conversation_id = await row.attr("id") or label
         return ConversationRef(Platform.ZHILIAN, owner, conversation_id)
@@ -112,18 +124,15 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     text = message.strip()
     if not text:
         return SendResult(sent=False, blocked=True, message="智联待发送内容为空")
-    filled = await page.fill(selectors.CHAT_INPUT, text)
-    if not filled:
+    fill = await reliable_fill(page, selectors.CHAT_INPUT, text, label="智联聊天输入框")
+    if not fill.get("ok"):
         return SendResult(sent=False, blocked=True, message="智联没有找到聊天输入框")
-    clicked = await _click_send(page)
-    if hasattr(page, "append_sent_message"):
-        page.append_sent_message(text)  # type: ignore[attr-defined]
-    verified = bool((await _safe_eval_dict(page, "zhilian.verify_sent", text)).get("verified"))
-    sent = clicked or verified
+    click = await _click_send(page, text)
+    sent = bool(click.get("ok"))
     return SendResult(
         sent=sent,
-        verified=verified,
-        blocked=not verified,
+        verified=sent,
+        blocked=not sent,
         message="智联已发送消息" if sent else "智联发送按钮点击失败",
     )
 
@@ -159,7 +168,20 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
     )
     if button is None:
         return {"requested": False, "blocked": True, "reason": "request_resume_button_not_found"}
-    await button.click()
+    click = await reliable_click_element(
+        page,
+        button,
+        label="智联要附件简历",
+        verify=lambda: _confirm_button_visible(page),
+    )
+    if not click.get("ok"):
+        return {
+            "requested": False,
+            "blocked": True,
+            "reason": "request_resume_click_not_verified",
+            "state": state,
+            "click": click,
+        }
     confirmed = await _click_request_resume_confirm(page)
     return {"requested": True, "confirmed": confirmed, "state": state}
 
@@ -191,16 +213,25 @@ async def proactive_greet(
     )
     if button is None:
         return {"greeted": 0, "reason": "greet_button_missing", "targetPosition": target_position}
-    await button.click()
-    return {"greeted": 1, "targetPosition": target_position}
+    click = await reliable_click_element(page, button, label="智联推荐打招呼")
+    return {
+        "greeted": 1 if click.get("ok") else 0,
+        "targetPosition": target_position,
+        "click": click,
+    }
 
 
-async def _click_send(page: BrowserPage) -> bool:
+async def _click_send(page: BrowserPage, message: str) -> dict[str, object]:
     send_selectors = (
         ".im-sender button, .im-sender [role='button'], "
         "button[class*='send'], [class*='send'], [class*='submit']"
     )
-    return await page.click(send_selectors)
+    return await reliable_click(
+        page,
+        send_selectors,
+        label="智联发送按钮",
+        verify=lambda: _verify_recent_mine_message(page, message),
+    )
 
 
 async def _find_button_by_text(
@@ -215,12 +246,39 @@ async def _find_button_by_text(
 
 
 async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    result = await reliable_confirm(
+        page,
+        selectors.REQUEST_RESUME_CONFIRM_BUTTON,
+        selectors.REQUEST_RESUME_CONFIRM_TEXTS,
+        label="智联要附件简历确认",
+    )
+    return bool(result.get("ok"))
+
+
+async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
+    return {"verified": await page.wait_for(selectors.CHAT_READY, timeout_ms=6500)}
+
+
+async def _verify_recent_mine_message(
+    page: BrowserPage,
+    expected_text: str,
+) -> dict[str, object]:
+    raw = await _safe_eval_dict(page, "zhilian.verify_sent", expected_text)
+    if raw.get("verified"):
+        return {"verified": True, "source": "script"}
+    messages = await page.query_all(selectors.MINE_MESSAGE)
+    for element in reversed(messages):
+        if expected_text in (await element.text()):
+            return {"verified": True, "source": "dom"}
+    return {"verified": False, "reason": "mine_message_not_found"}
+
+
+async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
     for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
         label = await element.text()
         if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
-            await element.click()
-            return True
-    return False
+            return {"verified": True}
+    return {"verified": False, "reason": "confirm_not_visible"}
 
 
 async def _safe_eval_dict(

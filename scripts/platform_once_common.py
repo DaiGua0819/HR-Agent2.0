@@ -17,6 +17,7 @@ from urllib.request import urlopen
 
 from app.agent.runner import ConversationRunner
 from app.browser.playwright_cdp import PlaywrightCDPConnection, connect_cdp_browser
+from app.browser.reliable_actions import reliable_click_element
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
 from app.platforms.job51 import actions_chat as job51_chat
@@ -180,14 +181,23 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
         label = (await row.text()).strip()
         if _skip_label(platform, label):
             continue
-        await row.click()
-        await _wait_chat_ready(adapter, platform)
+        before_actions = len(getattr(adapter.page, "reliable_actions", []))
+        click = await reliable_click_element(
+            adapter.page,
+            row,
+            label=f"{platform.value}候选人会话",
+            verify=lambda: _verify_chat_ready(adapter, platform),
+        )
+        if not click.get("ok"):
+            continue
         state = await ConversationRunner(adapter).run_current()
         conversation_id = str(state.get("conversation_id") or label)
         if conversation_id in seen:
             continue
         seen.add(conversation_id)
-        summaries.append(_summary_from_state(state))
+        summary = _summary_from_state(state)
+        summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[before_actions:]
+        summaries.append(summary)
     return summaries
 
 
@@ -207,6 +217,15 @@ async def _wait_chat_ready(adapter: Any, platform: Platform) -> None:
         else zhilian_selectors.CHAT_READY
     )
     await adapter.page.wait_for(selector, timeout_ms=6500)
+
+
+async def _verify_chat_ready(adapter: Any, platform: Platform) -> dict[str, object]:
+    selector = (
+        job51_selectors.CHAT_INPUT
+        if platform == Platform.JOB51
+        else zhilian_selectors.CHAT_READY
+    )
+    return {"verified": await adapter.page.wait_for(selector, timeout_ms=6500)}
 
 
 def _skip_label(platform: Platform, label: str) -> bool:
@@ -249,6 +268,11 @@ def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: boo
         print(f"reason/stage: {item.get('stage')}")
         if item.get("sentMessages"):
             print(f"messages: {json.dumps(_jsonable(item['sentMessages']), ensure_ascii=False)}")
+        if item.get("reliableActions"):
+            print(
+                "reliable actions: "
+                f"{json.dumps(_jsonable(item['reliableActions']), ensure_ascii=False)}"
+            )
         print(f"decision: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
 
 

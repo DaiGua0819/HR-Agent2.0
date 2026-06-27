@@ -93,6 +93,23 @@ def test_boss_operation_direct_resume_sends_prephrase_before_request() -> None:
     assert zhilian_page.resume_requests == 1
 
 
+def test_boss_direct_resume_position_question_still_requests_resume() -> None:
+    """BOSS 直求简历岗位：带问句也不升级未知问题，直接求简历。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "投资交易策略研究员（量化与市场情绪方向）",
+            [{"sender": "other", "text": "可否进一步沟通呢？"}],
+        ),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages == ["你好，方便发一份简历过来吗"]
+    assert page.resume_requests == 1
+
+
 def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
     """BOSS AI 应用开发岗位：先走公司基本情况常用语，接受后求简历。"""
 
@@ -118,6 +135,41 @@ def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
     assert page.resume_requests == 1
 
 
+def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
+    """BOSS AI 应用开发：未发基础条件前，候选人提问也先发基础条件。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [{"sender": "other", "text": "方便看看我的简历吗"}],
+        ),
+    )
+
+    assert state["next_action"] == "ask_basic_conditions"
+    assert state["stage"] == "basic_phrase_sent"
+    assert page.sent_messages == ["基础条件确认话术"]
+
+
+def test_boss_ai_intern_attachment_after_basic_phrase_waits() -> None:
+    """BOSS AI 应用开发：基础条件已发后收到附件简历，直接等待不再判不明确。"""
+
+    convo = conversation(
+        "AI应用开发实习生",
+        [
+            {"sender": "me", "text": "基础条件确认话术"},
+            {"sender": "other", "text": "简历_AI应用开发.pdf"},
+        ],
+    )
+    convo["has_resume_attachment"] = True
+
+    state, page = run_case(Platform.BOSS, convo)
+
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "resume_attachment_received"
+    assert page.resume_requests == 0
+
+
 def test_boss_resume_state_ignores_sidebar_resume_buttons() -> None:
     """BOSS：右侧“在线简历/附件简历”按钮不等于候选人已发简历。"""
 
@@ -133,6 +185,41 @@ def test_boss_resume_state_detects_chat_file_attachment() -> None:
     page = TextOnlyPage("聊天消息 09:30 张三简历.pdf 预览 下载")
     state = asyncio.run(boss_actions.inspect_resume_request_state(page))  # type: ignore[arg-type]
     assert state.has_resume_attachment
+
+
+def test_boss_resume_state_detects_request_sent_system_message() -> None:
+    """BOSS：系统消息“简历请求已发送”表示求简历已经成功。"""
+
+    page = TextOnlyPage("聊天消息 09:31 送达 可以发一份简历过来吗 简历请求已发送")
+    state = asyncio.run(boss_actions.inspect_resume_request_state(page))  # type: ignore[arg-type]
+    assert state.already_requested
+
+
+def test_boss_unread_list_requires_numeric_badge() -> None:
+    """BOSS：只有带数字未读徽标的行才进入未读处理队列。"""
+
+    page = FakePage(
+        conversations=[
+            {
+                "id": "already-read",
+                "name": "已处理",
+                "position": "AI应用开发实习生",
+                "label": "已处理 AI应用开发实习生",
+                "unread_count": 0,
+            },
+            {
+                "id": "new-unread",
+                "name": "新未读",
+                "position": "投资交易策略研究员",
+                "label": "新未读 投资交易策略研究员",
+                "unread_count": 2,
+            },
+        ]
+    )
+
+    refs = asyncio.run(boss_actions.read_unread_conversations(page, owner="宋峰峰"))
+
+    assert [item.conversation_id for item in refs] == ["new-unread"]
 
 
 def test_boss_screening_ask_accept_and_reject() -> None:
@@ -265,6 +352,12 @@ def sample_rules() -> dict[str, object]:
                 "category": "finance_ai_direct_resume",
                 "directResume": True,
                 "resumeJobType": "外部财务产品顾问",
+                "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+            },
+            "投资交易策略研究员（量化与市场情绪方向）": {
+                "category": "investment_direct_resume",
+                "directResume": True,
+                "resumeJobType": "投资交易策略研究员",
                 "resumeRequestPrompt": "你好，方便发一份简历过来吗",
             },
         },

@@ -1,7 +1,7 @@
 """BOSS 真实页面只读 DOM 脚本。
 
-这些脚本集中放置，避免 actions.py 被页面 JS 细节撑大。脚本只读取页面或点击筛选
-导航，不执行发送消息、求简历、下载、打招呼等真实业务副作用。
+这些脚本集中放置，避免 actions.py 被页面 JS 细节撑大。脚本只读取页面，
+不执行发送消息、求简历、下载、打招呼等真实业务副作用。
 """
 
 from __future__ import annotations
@@ -16,14 +16,85 @@ CLICK_UNREAD_FILTER_JS = r"""
       rect.width > 0 && rect.height > 0;
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
-  const roots = Array.from(document.querySelectorAll(".chat-message-filter-left"));
-  const candidates = roots.flatMap((root) => [root, ...Array.from(root.querySelectorAll("*"))])
-    .filter((el) => visible(el) && text(el).includes("未读"))
-    .sort((a, b) => text(a).length - text(b).length);
+  const activeFilter = () => {
+    const active = Array.from(document.querySelectorAll(".chat-message-filter-left span.active"))
+      .find((el) => visible(el));
+    return text(active);
+  };
+  const clickAt = (x, y) => {
+    const target = document.elementFromPoint(x, y);
+    if (!target) return null;
+    for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const EventClass = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
+      target.dispatchEvent(new EventClass(eventName, {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }));
+    }
+    return target;
+  };
+  if (activeFilter() === "未读") {
+    return { selected: true, label: "未读", source: "already_active" };
+  }
+  const candidates = Array.from(document.querySelectorAll(".chat-message-filter-left span"))
+    .filter((el) => visible(el) && text(el) === "未读");
   const target = candidates[0];
   if (!target) return { selected: false, reason: "unread_filter_not_found" };
-  target.click();
-  return { selected: true, label: text(target), source: "dom_text" };
+  const rect = target.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const clicked = clickAt(x, y);
+  return {
+    selected: Boolean(clicked),
+    label: "未读",
+    source: "chat_message_filter_left_span",
+    x: Math.round(x),
+    y: Math.round(y),
+    activeBefore: activeFilter(),
+  };
+}
+"""
+
+READ_UNREAD_ROWS_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const visibleText = (node) => (node && node.innerText ? node.innerText.trim() : "");
+  const attr = (node, name) => (node && node.getAttribute ? node.getAttribute(name) : "");
+  const rows = Array.from(document.querySelectorAll(
+    ".user-list .geek-item, .chat-user-list .user-list-item, " +
+    ".chat-list .user-item, .user-list-item"
+  )).filter(visible);
+  const parseBadgeCount = (row) => {
+    const badges = Array.from(row.querySelectorAll(
+      ".badge-count, .badge, [class*='badge-count'], [class*='unread'], [class*='badge']"
+    )).filter(visible);
+    const counts = badges.map((badge) => {
+      const text = visibleText(badge);
+      const match = text.match(/\d+/);
+      return match ? Number.parseInt(match[0], 10) : 0;
+    });
+    return counts.length ? Math.max(...counts) : 0;
+  };
+  return {
+    rows: rows.map((row, index) => ({
+      index,
+      id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
+      label: visibleText(row),
+      unreadCount: parseBadgeCount(row),
+    })),
+  };
 }
 """
 

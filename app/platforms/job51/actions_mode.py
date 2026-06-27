@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.browser.base import BrowserPage
+from app.browser.reliable_actions import reliable_click
 from app.platforms.job51 import selectors
 
 
@@ -20,10 +21,10 @@ async def recommend_mode_state(page: BrowserPage) -> dict[str, object]:
 async def click_recommend_mode_switch(page: BrowserPage) -> dict[str, object]:
     """点击外层 `.ai-mode-switch`，不点内部 SVG。"""
 
-    clicked = await page.click(selectors.RECOMMEND_MODE_SWITCH)
-    if clicked:
+    click = await reliable_click(page, selectors.RECOMMEND_MODE_SWITCH, label="51job传统模式切换")
+    if click.get("ok"):
         await page.eval_js("job51.set_recommend_traditional_mode", True)
-    return {"clicked": clicked}
+    return {"clicked": bool(click.get("ok")), "click": click}
 
 
 async def ensure_recommend_traditional_mode(page: BrowserPage) -> dict[str, object]:

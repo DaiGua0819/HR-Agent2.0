@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.browser.base import BrowserPage
+from app.browser.reliable_actions import reliable_click
 from app.core.constants import Platform
 from app.platforms.boss import selectors as boss
 from app.platforms.job51 import selectors as job51
@@ -145,9 +146,9 @@ async def _prepare_section(
         await page.goto(zhilian.RECOMMEND_URL if section == "recommend" else zhilian.CHAT_URL)
     elif follow_safe_navigation and platform == Platform.JOB51:
         if section == "chat":
-            await page.click(job51.CHAT_ENTRY)
+            await reliable_click(page, job51.CHAT_ENTRY, label="51job选择器验证进入聊天")
         elif section == "recommend":
-            await page.click(job51.RECOMMEND_ENTRY)
+            await reliable_click(page, job51.RECOMMEND_ENTRY, label="51job选择器验证进入推荐")
 
 
 def _specs_for(platform: Platform) -> list[SelectorSpec]:

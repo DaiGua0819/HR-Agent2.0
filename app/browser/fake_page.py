@@ -19,11 +19,13 @@ class FakeElement:
     text_value: str = ""
     attrs: dict[str, str] = field(default_factory=dict)
 
-    async def click(self) -> None:
+    async def click(self, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
         self.page.clicks.append(self.selector)
         await self.page.handle_element_click(self)
 
-    async def fill(self, value: str) -> None:
+    async def fill(self, value: str, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
         self.page.fills.append((self.selector, value))
         self.page.input_text = value
 
@@ -54,6 +56,8 @@ class FakePage:
     proactive_greets: list[str] = field(default_factory=list)
     unread_selected: bool = False
     all_positions_selected: bool = False
+    is_fake: bool = True
+    reliable_actions: list[dict[str, Any]] = field(default_factory=list)
 
     async def goto(self, url: str) -> None:
         self.url = url
@@ -138,14 +142,16 @@ class FakePage:
             return [FakeElement(self, selector, self.body_text)]
         return []
 
-    async def click(self, selector: str) -> bool:
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
+        _ = timeout_ms
         element = await self.query(selector)
         if element is None:
             return False
         await element.click()
         return True
 
-    async def fill(self, selector: str, value: str) -> bool:
+    async def fill(self, selector: str, value: str, timeout_ms: int | None = None) -> bool:
+        _ = timeout_ms
         element = await self.query(selector)
         if element is None:
             return False
@@ -161,6 +167,21 @@ class FakePage:
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
         if script == "zhilian.read_chat_context":
             return self.current_conversation()
+        if script == "boss.read_unread_rows":
+            return {
+                "rows": [
+                    {
+                        "index": index,
+                        "id": str(item.get("id") or index),
+                        "label": str(
+                            item.get("label")
+                            or f"{item.get('name', '')} {item.get('position', '')}"
+                        ),
+                        "unreadCount": int(item.get("unread_count") or 0),
+                    }
+                    for index, item in enumerate(self.conversations)
+                ]
+            }
         if script == "boss.read_chat_context":
             return self.current_conversation()
         if script == "job51.read_chat_context":
@@ -326,6 +347,12 @@ class FakePage:
             self.all_positions_selected = True
         elif "AI淘金" in element.text_value:
             self.recommend_traditional_mode = True
+        elif (
+            "btn-send" in element.selector
+            or "new-send-button" in element.selector
+            or "class*='send'" in element.selector
+        ) and self.input_text:
+            self.append_sent_message(self.input_text)
         elif (
             "要附件简历" in element.text_value
             or "求简历" in element.text_value

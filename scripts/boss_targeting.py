@@ -10,32 +10,23 @@ import asyncio
 from typing import Any
 
 from app.agent.runner import ConversationRunner
+from app.browser.reliable_actions import reliable_click_element
+from app.platforms.boss import selectors
 from app.platforms.boss.adapter import BossAdapter
 
 
 async def select_all_filter(page: Any) -> dict[str, object]:
     """切到 BOSS 全部会话，供指定 id 补处理使用。"""
 
-    result = await page.eval_js(
-        """
-        () => {
-          const visible = (el) => {
-            const rect = el && el.getBoundingClientRect();
-            return rect && rect.width > 0 && rect.height > 0;
-          };
-          const root = document.querySelector(".chat-message-filter-left");
-          const items = root ? [root, ...root.querySelectorAll("*")] : [];
-          const target = Array.from(items)
-            .filter((el) => visible(el) && (el.innerText || "").trim() === "全部")
-            .sort((a, b) => a.innerText.length - b.innerText.length)[0];
-          if (!target) return { selected: false, reason: "all_filter_not_found" };
-          target.click();
-          return { selected: true, label: target.innerText.trim() };
-        }
-        """
-    )
+    result: dict[str, object] = {"selected": False, "reason": "all_filter_not_found"}
+    for element in await page.query_all(selectors.UNREAD_FILTER):
+        label = (await element.text()).strip()
+        if label == "全部" or (label.startswith("全部") and len(label) <= 12):
+            click = await reliable_click_element(page, element, label="BOSS全部会话筛选")
+            result = {"selected": bool(click.get("ok")), "label": label, "click": click}
+            break
     await asyncio.sleep(1)
-    return result if isinstance(result, dict) else {"selected": False, "reason": "bad_result"}
+    return result
 
 
 async def process_boss_targets(
@@ -71,26 +62,29 @@ async def process_boss_targets(
 
 async def _click_conversation_by_id(page: Any, conversation_id: str) -> bool:
     raw = conversation_id.strip()
-    clicked = await page.eval_js(
-        """
-        (raw) => {
-          const ids = [raw, raw.startsWith("_") ? raw.slice(1) : `_${raw}`];
-          for (const id of [...new Set(ids)]) {
-            const row = document.getElementById(id);
-            if (row) {
-              row.scrollIntoView({ block: "center" });
-              row.click();
-              return true;
-            }
-          }
-          return false;
-        }
-        """,
-        raw,
-    )
-    if clicked:
+    raw_norm = raw.lstrip("_")
+    for row in await page.query_all(selectors.SESSION_ITEM):
+        row_id = str(await row.attr("id") or "")
+        label = (await row.text()).strip()
+        if row_id.lstrip("_") != raw_norm and label != raw:
+            continue
+        click = await reliable_click_element(
+            page,
+            row,
+            label=f"BOSS指定会话 {raw}",
+            verify=lambda: _verify_chat_ready(page),
+        )
+        clicked = bool(click.get("ok"))
+        if not clicked:
+            return False
         await asyncio.sleep(1)
-    return bool(clicked)
+        return True
+    return False
+
+
+async def _verify_chat_ready(page: Any) -> dict[str, object]:
+    ready = await page.wait_for(selectors.CHAT_INPUT, timeout_ms=6500)
+    return {"verified": bool(ready), "reason": "" if ready else "chat_input_not_ready"}
 
 
 async def _wait_for_context(adapter: BossAdapter, *, timeout_seconds: float = 6) -> Any:
