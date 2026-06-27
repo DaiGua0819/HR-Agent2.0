@@ -7,7 +7,7 @@ workers:
   - owner: 宋峰峰
     port: 8802
     profile_dir: profiles/songfengfeng
-    cdp_port: 9223
+    cdp_port: 9333
     accounts: [boss, job51, zhilian]
 
 open_order:

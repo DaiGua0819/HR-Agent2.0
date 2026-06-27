@@ -1,8 +1,7 @@
 """worker 独占浏览器管理器。
 
 默认 fake 后端服务单元测试；真实后端只允许连接已运行的 CloakBrowser CDP。目标
-拓扑是 `cloak`：一人一个 CDP 浏览器、三平台各一个标签页；`cloak-per-platform`
-兼容验证环境里每平台单独 CDP 端口的方式。
+拓扑是 `cloak`：一人一个 CDP 浏览器、三平台各一个标签页。
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ class BrowserManager:
     backend: str = "fake"
     pages: dict[Platform, BrowserPage] = field(default_factory=dict)
     connection: Any | None = None
-    connections: list[Any] = field(default_factory=list)
     started: bool = False
 
     async def start(self) -> None:
@@ -44,13 +42,19 @@ class BrowserManager:
                 Platform.JOB51: _fake_page(self.owner, Platform.JOB51),
                 Platform.ZHILIAN: _fake_page(self.owner, Platform.ZHILIAN),
             }
-        elif self.backend == "cloak-per-platform":
-            self.pages, self.connections = await _connect_per_platform_pages(self.cdp_port)
         elif self.backend == "cloak":
             self.pages, self.connection = await _connect_cdp_pages(self.cdp_port)
         else:
-            raise ValueError(f"浏览器后端只允许 fake/cloak/cloak-per-platform: {self.backend}")
+            raise ValueError(f"浏览器后端只允许 fake/cloak: {self.backend}")
         self.started = True
+
+    async def close(self) -> None:
+        """关闭本进程持有的 Playwright 控制连接，不关闭 CloakBrowser。"""
+
+        if self.connection is not None:
+            await self.connection.close()
+        self.connection = None
+        self.started = False
 
     async def health(self) -> BrowserHealth:
         """检查浏览器和页面是否可用。"""
@@ -85,32 +89,12 @@ async def _connect_cdp_pages(cdp_port: int) -> tuple[dict[Platform, BrowserPage]
     return pages, connection
 
 
-async def _connect_per_platform_pages(
-    cdp_port: int,
-) -> tuple[dict[Platform, BrowserPage], list[Any]]:
-    """兼容旧验证形态：每个平台可通过 env 指向不同 CDP。"""
-
-    from app.browser.playwright_cdp import connect_cdp_browser
-
-    pages: dict[Platform, BrowserPage] = {}
-    connections: list[Any] = []
-    for platform in (Platform.BOSS, Platform.JOB51, Platform.ZHILIAN):
-        connection = await connect_cdp_browser(cdp_url_for(cdp_port, platform=platform))
-        pages[platform] = await connection.ensure_page(
-            name=platform.value,
-            url=_chat_url_for(platform),
-            url_hint=_url_hint_for(platform),
-        )
-        connections.append(connection)
-    return pages, connections
-
-
 def _chat_url_for(platform: Platform) -> str:
     if platform == Platform.BOSS:
         return boss_selectors.CHAT_URL
     if platform == Platform.ZHILIAN:
         return zhilian_selectors.CHAT_URL
-    return os.getenv("JOB51_CHAT_URL", "").strip()
+    return os.getenv("JOB51_CHAT_URL", "https://ehire.51job.com/").strip()
 
 
 def _url_hint_for(platform: Platform) -> str:

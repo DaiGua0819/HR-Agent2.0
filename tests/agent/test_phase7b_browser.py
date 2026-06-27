@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 from app.browser.fake_page import FakePage
 from app.browser.manager import BrowserManager
 from app.browser.read_once import dry_run_read_once
@@ -61,6 +62,14 @@ def test_cloak_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
     assert urls == ["http://127.0.0.1:9222"]
     assert set(manager.pages) == {Platform.BOSS, Platform.JOB51, Platform.ZHILIAN}
     assert manager.pages[Platform.BOSS] is not manager.pages[Platform.ZHILIAN]
+
+
+def test_per_platform_cloak_backend_is_rejected() -> None:
+    """真实浏览器不再允许每平台一个 CDP 的旧拓扑。"""
+
+    manager = BrowserManager(owner="和新红", cdp_port=9222, backend="cloak-per-platform")
+    with pytest.raises(ValueError, match="fake/cloak"):
+        asyncio.run(manager.start())
 
 
 def test_dry_run_read_once_records_intent_without_side_effect(monkeypatch) -> None:

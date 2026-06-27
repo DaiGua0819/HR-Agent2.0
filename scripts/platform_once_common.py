@@ -16,7 +16,8 @@ from typing import Any
 from urllib.request import urlopen
 
 from app.agent.runner import ConversationRunner
-from app.browser.playwright_cdp import PlaywrightCDPConnection, connect_cdp_browser
+from app.browser.cloak import cdp_url_for
+from app.browser.manager import BrowserManager
 from app.browser.reliable_actions import reliable_click_element
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
@@ -27,21 +28,6 @@ from app.platforms.zhilian import actions as zhilian_actions
 from app.platforms.zhilian import selectors as zhilian_selectors
 from app.platforms.zhilian.adapter import ZhilianAdapter
 from app.settings import load_settings
-
-DEFAULT_CDP = {
-    Platform.JOB51: "http://127.0.0.1:9224",
-    Platform.ZHILIAN: "http://127.0.0.1:9226",
-}
-
-ENTRY_URL = {
-    Platform.JOB51: "https://ehire.51job.com/",
-    Platform.ZHILIAN: zhilian_selectors.CHAT_URL,
-}
-
-URL_HINT = {
-    Platform.JOB51: "51job.com",
-    Platform.ZHILIAN: "zhaopin.com",
-}
 
 
 def run(platform: Platform) -> None:
@@ -54,18 +40,18 @@ async def _main_async(platform: Platform) -> None:
     args = _parse_args(platform)
     live = _resolve_mode(args)
     owner = _resolve_owner(args.owner, platform)
-    _configure_cdp_env(platform, args.cdp)
+    settings = load_settings()
+    worker = settings.worker_for_owner(owner)
+    cdp_url = cdp_url_for(worker.cdp_port)
+    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak"
     _print_step(f"1/4 mode guard passed: {'LIVE' if live else 'dry-run'}")
-    version = _probe_cdp(args.cdp)
-    _print_step(f"2/4 CDP connected: {version.get('Browser', '')}")
+    version = _probe_cdp(cdp_url)
+    _print_step(f"2/4 CloakBrowser CDP connected: {version.get('Browser', '')}")
 
-    connection = await connect_cdp_browser(args.cdp)
+    manager = BrowserManager(owner=owner, cdp_port=worker.cdp_port, backend="cloak")
     try:
-        page = await connection.ensure_page(
-            name=platform.value,
-            url=ENTRY_URL[platform],
-            url_hint=URL_HINT[platform],
-        )
+        await manager.start()
+        page = manager.page_for(owner, platform)
         await asyncio.sleep(max(args.wait, 0))
         login = await detect_login_page(page, platform)
         if login.logged_out:
@@ -84,7 +70,7 @@ async def _main_async(platform: Platform) -> None:
         summaries = await _process(adapter, platform, args.limit)
         _print_summary(platform, summaries, live=live)
     finally:
-        await _close_connection(connection)
+        await _close_manager(manager)
         await _close_runtime_resources()
 
 
@@ -93,7 +79,6 @@ def _parse_args(platform: Platform) -> argparse.Namespace:
         description=f"Process {platform.value} unread conversations once; dry-run by default."
     )
     parser.add_argument("--owner", default="", help="Owner name from config/accounts.yaml")
-    parser.add_argument("--cdp", default=DEFAULT_CDP[platform], help="CDP endpoint")
     parser.add_argument("--limit", type=int, default=3, help="Maximum conversations")
     parser.add_argument("--wait", type=float, default=3.0, help="Seconds to wait after attach")
     parser.add_argument("--live", action="store_true", help="Actually send/request after checks")
@@ -123,11 +108,6 @@ def _resolve_owner(owner: str, platform: Platform) -> str:
             return worker.owner
     _fail(f"No worker configured for platform={platform.value}")
     return ""
-
-
-def _configure_cdp_env(platform: Platform, cdp: str) -> None:
-    os.environ[f"AGENT_CDP_{platform.value.upper()}"] = cdp
-    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak-per-platform"
 
 
 def _probe_cdp(cdp: str) -> dict[str, Any]:
@@ -248,15 +228,6 @@ async def _candidate_rows(adapter: Any, platform: Platform) -> list[Any]:
     return await adapter.page.query_all(selector)
 
 
-async def _wait_chat_ready(adapter: Any, platform: Platform) -> None:
-    selector = (
-        job51_selectors.CHAT_INPUT
-        if platform == Platform.JOB51
-        else zhilian_selectors.CHAT_READY
-    )
-    await adapter.page.wait_for(selector, timeout_ms=6500)
-
-
 async def _verify_chat_ready(adapter: Any, platform: Platform) -> dict[str, object]:
     selector = (
         job51_selectors.CHAT_INPUT
@@ -331,9 +302,9 @@ def _jsonable(value: Any) -> Any:
         return str(value)
 
 
-async def _close_connection(connection: PlaywrightCDPConnection) -> None:
+async def _close_manager(manager: BrowserManager) -> None:
     try:
-        await connection.close()
+        await manager.close()
     except Exception:
         pass
 

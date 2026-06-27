@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.browser.cloak import cdp_url_for, ensure_cdp_ready
-from app.core.constants import Platform
 
 
 @dataclass(frozen=True)
@@ -28,20 +27,8 @@ async def start_browser(owner: str, cdp_port: int, *, backend: str = "fake") -> 
 
     if backend == "fake":
         return {"owner": owner, "cdpPort": cdp_port, "backend": backend, "started": True}
-    if backend == "cloak-per-platform":
-        urls = [cdp_url_for(cdp_port, platform=platform) for platform in Platform]
-        ready = [await ensure_cdp_ready(url, timeout_seconds=2) for url in urls]
-        if not all(ready):
-            raise RuntimeError(f"分平台 CDP 未全部就绪: {urls}")
-        return {
-            "owner": owner,
-            "cdpPort": cdp_port,
-            "cdpUrls": urls,
-            "backend": backend,
-            "started": True,
-        }
     if backend != "cloak":
-        raise ValueError(f"浏览器后端只允许 fake/cloak/cloak-per-platform: {backend}")
+        raise ValueError(f"浏览器后端只允许 fake/cloak: {backend}")
     cdp_url = cdp_url_for(cdp_port)
     ready = await ensure_cdp_ready(cdp_url, timeout_seconds=2)
     if not ready:
@@ -61,13 +48,8 @@ async def check_browser_health(manager: Any) -> BrowserHealth:
     backend = str(getattr(manager, "backend", "unknown"))
     pages = getattr(manager, "pages", {}) or {}
     started = bool(getattr(manager, "started", False))
-    connections = list(getattr(manager, "connections", []) or [])
     connection = getattr(manager, "connection", None)
-    if connection is not None:
-        connections.append(connection)
-    cdp_ready = started if backend == "fake" else any(
-        bool(connection and connection.is_connected()) for connection in connections
-    )
+    cdp_ready = started if backend == "fake" else bool(connection and connection.is_connected())
     return BrowserHealth(
         browser_ready=started and bool(pages),
         cdp_ready=cdp_ready,

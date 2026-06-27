@@ -375,9 +375,9 @@
   - `docs/change-snapshots-0.md`
 - 修改结果：
   - 删除自动启动 CDP 浏览器的环境开关、脚本参数构造函数和启动函数。
-  - 真实后端只允许 `cloak` 和 `cloak-per-platform`；`fake` 仅保留给单元测试。
+  - 真实后端完成第一轮 CloakBrowser 收口；`fake` 仅保留给单元测试。
   - `BrowserManager` / `lifecycle` 遇到旧后端名会直接拒绝，不再默认当作真实浏览器处理。
-  - BOSS / 51job / 智联单次脚本统一设置 `HR_AGENT_BROWSER_BACKEND=cloak-per-platform`。
+  - BOSS / 51job / 智联单次脚本统一设置 CloakBrowser 真实后端。
   - 选择器验证与 dry-run 读取脚本的 `--backend` 参数只接受 CloakBrowser 后端。
 - 验证结果：
   - `.venv312\Scripts\python.exe -m pytest tests`：60 passed，1 个 StarletteDeprecationWarning。
@@ -385,3 +385,39 @@
   - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
 - 风险 / 待确认：
   - `playwright.chromium.connect_over_cdp()` 仍会保留，因为 CloakBrowser 暴露 Chromium CDP 协议，Playwright 的附着 API 命名如此；它不是浏览器启动。
+
+---
+
+### 快照 0013：删除每平台独立 CDP 旧拓扑
+
+- 修改时间：2026-06-27 13:34:52 +08:00
+- 修改原因：
+  - 启动某个招聘号时必须只附着该 owner 的一个 CloakBrowser，并在同一浏览器里打开 BOSS / 51job / 智联三个标签页。
+  - 旧的“每平台一个 CDP / 一个浏览器”兼容路径会让账号登录态、页面路由和 worker 隔离模型变得混乱。
+  - 处理消息脚本不能再通过平台级 CDP 参数绕过 `accounts.yaml` 的 owner 配置。
+- 修改文件：
+  - `app/browser/cloak.py`
+  - `app/browser/lifecycle.py`
+  - `app/browser/manager.py`
+  - `.env.example`
+  - `scripts/run_boss_once.py`
+  - `scripts/platform_once_common.py`
+  - `scripts/validate_selectors.py`
+  - `scripts/dry_run_read_once.py`
+  - `config/accounts.yaml`
+  - `tests/agent/test_phase7b_browser.py`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - `BrowserManager` 真实后端只剩 `cloak`，一次 CDP 连接装配三个平台页面。
+  - 51job 没有显式 `JOB51_CHAT_URL` 时默认打开 `https://ehire.51job.com/`，避免三页面装配时生成空白页。
+  - 删除每平台独立 CDP 连接函数、多连接列表和平台级 CDP 环境变量解析。
+  - BOSS / 51job / 智联单次处理脚本改为通过 owner 找 worker 的 `cdp_port`，再从同一个 BrowserManager 取平台页面。
+  - 选择器验证与 dry-run 读取脚本的真实后端选项只剩 `cloak`。
+  - 宋峰峰的 `cdp_port` 对齐到当前已登录 CloakBrowser 的 `9333`。
+  - 新增测试确认旧的 per-platform 后端会被拒绝。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests`：61 passed，1 个 StarletteDeprecationWarning。
+  - `.venv312\Scripts\python.exe -m ruff check .`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
+- 风险 / 待确认：
+  - `check_cdp_connection.py` 与 DOM 采样脚本仍保留 `--cdp`，它们是低层诊断工具，不是账号启动或消息处理入口。

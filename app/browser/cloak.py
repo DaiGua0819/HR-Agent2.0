@@ -8,19 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from urllib.request import urlopen
 
-from app.core.constants import Platform
 
+def cdp_url_for(cdp_port: int) -> str:
+    """按 owner 的 CDP 端口解析 CloakBrowser URL。"""
 
-def cdp_url_for(cdp_port: int, *, platform: Platform | None = None) -> str:
-    """按端口和平台解析 CDP URL。"""
-
-    platform_key = f"_{platform.value.upper()}" if platform else ""
     candidates = [
-        f"AGENT_CDP{platform_key}",
-        f"CLOAK_CDP{platform_key}",
         f"AGENT_CDP_{cdp_port}",
         f"CLOAK_CDP_{cdp_port}",
         "AGENT_CDP",
@@ -31,16 +25,6 @@ def cdp_url_for(cdp_port: int, *, platform: Platform | None = None) -> str:
         if value:
             return value.rstrip("/")
     return f"http://127.0.0.1:{cdp_port}"
-
-
-def profile_dir_for(cdp_port: int, fallback: Path | None = None) -> Path | None:
-    """解析端口专属 profile 目录，仅作为启动脚本参数使用。"""
-
-    for name in (f"CDP_PROFILE_DIR_{cdp_port}", f"CLOAK_PROFILE_DIR_{cdp_port}"):
-        value = os.getenv(name, "").strip()
-        if value:
-            return Path(value)
-    return fallback
 
 
 async def ensure_cdp_ready(cdp_url: str, *, timeout_seconds: float = 5) -> bool:

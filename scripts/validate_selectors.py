@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default=os.getenv("HR_AGENT_BROWSER_BACKEND", "cloak"),
-        choices=["cloak", "cloak-per-platform"],
+        choices=["cloak"],
         help="CloakBrowser 后端；默认按一人一浏览器三标签页连接",
     )
     parser.add_argument("--format", choices=["text", "json"], default="text")

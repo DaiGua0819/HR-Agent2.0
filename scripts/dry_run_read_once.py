@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default=os.getenv("HR_AGENT_BROWSER_BACKEND", "cloak"),
-        choices=["cloak", "cloak-per-platform"],
+        choices=["cloak"],
         help="CloakBrowser 后端；不支持非 CloakBrowser",
     )
     return parser.parse_args()

@@ -16,7 +16,8 @@ from typing import Any
 from urllib.request import urlopen
 
 from app.agent.runner import ConversationRunner
-from app.browser.playwright_cdp import PlaywrightCDPConnection, connect_cdp_browser
+from app.browser.cloak import cdp_url_for
+from app.browser.manager import BrowserManager
 from app.browser.reliable_actions import reliable_click_element
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
@@ -34,7 +35,6 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="BOSS 真实浏览器处理一次，默认 dry-run")
     parser.add_argument("--owner", default="宋峰峰", help="负责人，需与 accounts.yaml 一致")
-    parser.add_argument("--cdp", default="http://127.0.0.1:9333", help="BOSS CDP 地址")
     parser.add_argument("--platform", default="boss", choices=["boss"])
     parser.add_argument("--limit", type=int, default=3, help="最多处理几个会话")
     parser.add_argument("--live", action="store_true", help="真实执行发送/求简历动作")
@@ -53,21 +53,19 @@ async def main_async() -> None:
 
     args = parse_args()
     live = _resolve_mode(args)
-    _guard_owner(args.owner)
-    _configure_boss_cdp(args.cdp)
+    worker = _worker_for_owner(args.owner)
+    cdp_url = cdp_url_for(worker.cdp_port)
+    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak"
     mode_name = "LIVE" if live else "dry-run"
     _print_step(f"1/4 {mode_name} 守卫通过")
 
-    version = _probe_cdp(args.cdp)
-    _print_step(f"2/4 CDP 连通: {version.get('Browser', '')}")
+    version = _probe_cdp(cdp_url)
+    _print_step(f"2/4 CloakBrowser CDP 连通: {version.get('Browser', '')}")
 
-    connection = await connect_cdp_browser(args.cdp)
+    manager = BrowserManager(owner=args.owner, cdp_port=worker.cdp_port, backend="cloak")
     try:
-        page = await connection.ensure_page(
-            name="boss",
-            url=selectors.CHAT_URL,
-            url_hint="zhipin.com",
-        )
+        await manager.start()
+        page = manager.page_for(args.owner, Platform.BOSS)
         if "zhipin.com/web/chat" not in page.url:
             await page.goto(selectors.CHAT_URL)
         await asyncio.sleep(3)
@@ -112,7 +110,7 @@ async def main_async() -> None:
         )
         print_summary(summaries, live=live)
     finally:
-        await _close_connection(connection)
+        await _close_manager(manager)
         await _close_runtime_resources()
 
 
@@ -134,17 +132,12 @@ def _resolve_mode(args: argparse.Namespace) -> bool:
     return False
 
 
-def _guard_owner(owner: str) -> None:
+def _worker_for_owner(owner: str):
     settings = load_settings()
     try:
-        settings.worker_for_owner(owner)
+        return settings.worker_for_owner(owner)
     except ValueError as error:
         _fail(f"owner 不在 accounts.yaml 中: {owner}. {error}")
-
-
-def _configure_boss_cdp(cdp: str) -> None:
-    os.environ["AGENT_CDP_BOSS"] = cdp
-    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak-per-platform"
 
 
 def _probe_cdp(cdp: str) -> dict[str, Any]:
@@ -199,20 +192,6 @@ async def _dismiss_overlays(page: Any) -> None:
         await reliable_click_element(page, element, label="BOSS关闭遮挡层")
         break
     await asyncio.sleep(1)
-
-
-async def _count_with_wait(page: Any, selector: str, *, timeout_seconds: float = 6) -> int:
-    """等待异步详情区渲染完成后再统计。"""
-
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    last_count = 0
-    while True:
-        last_count = len(await page.query_all(selector))
-        if last_count:
-            return last_count
-        if asyncio.get_running_loop().time() >= deadline:
-            return last_count
-        await asyncio.sleep(0.4)
 
 
 async def _verify_boss_chat_ready(page: Any) -> dict[str, object]:
@@ -339,17 +318,9 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-async def _first_candidate_row(page: Any):
-    for row in await page.query_all(selectors.SESSION_ITEM):
-        label = (await row.text()).strip()
-        if not _skip_row_label(label):
-            return row
-    return None
-
-
-async def _close_connection(connection: PlaywrightCDPConnection) -> None:
+async def _close_manager(manager: BrowserManager) -> None:
     try:
-        await connection.close()
+        await manager.close()
     except Exception:
         pass
 
