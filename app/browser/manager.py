@@ -1,8 +1,8 @@
 """worker 独占浏览器管理器。
 
-默认 fake 后端服务单元测试；real/cdp 后端连接已运行 CloakBrowser。目标拓扑是
-一人一个 CDP 浏览器、三平台各一个标签页；`real-per-platform` 兼容旧环境里每平台
-单独 CDP 端口的验证方式。
+默认 fake 后端服务单元测试；真实后端只允许连接已运行的 CloakBrowser CDP。目标
+拓扑是 `cloak`：一人一个 CDP 浏览器、三平台各一个标签页；`cloak-per-platform`
+兼容验证环境里每平台单独 CDP 端口的方式。
 """
 
 from __future__ import annotations
@@ -44,10 +44,12 @@ class BrowserManager:
                 Platform.JOB51: _fake_page(self.owner, Platform.JOB51),
                 Platform.ZHILIAN: _fake_page(self.owner, Platform.ZHILIAN),
             }
-        elif self.backend in {"real-per-platform", "cdp-per-platform"}:
+        elif self.backend == "cloak-per-platform":
             self.pages, self.connections = await _connect_per_platform_pages(self.cdp_port)
-        else:
+        elif self.backend == "cloak":
             self.pages, self.connection = await _connect_cdp_pages(self.cdp_port)
+        else:
+            raise ValueError(f"浏览器后端只允许 fake/cloak/cloak-per-platform: {self.backend}")
         self.started = True
 
     async def health(self) -> BrowserHealth:

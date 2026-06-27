@@ -1,4 +1,4 @@
-"""验证真实浏览器 CDP 连接与 BrowserPage 封装。
+"""验证 CloakBrowser CDP 连接与 BrowserPage 封装。
 
 脚本只访问 CDP `/json/version` 和公开页面 `https://example.com`，不打开任何招聘平台。
 """
@@ -19,7 +19,7 @@ from app.browser.playwright_cdp import PlaywrightCDPPage  # noqa: E402
 def parse_args() -> argparse.Namespace:
     """解析 CDP 检查参数。"""
 
-    parser = argparse.ArgumentParser(description="检查 CDP 连接和真实 BrowserPage query")
+    parser = argparse.ArgumentParser(description="检查 CloakBrowser CDP 和 BrowserPage query")
     parser.add_argument(
         "--cdp",
         default="http://127.0.0.1:9222",

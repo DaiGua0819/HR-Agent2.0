@@ -127,7 +127,7 @@ def _resolve_owner(owner: str, platform: Platform) -> str:
 
 def _configure_cdp_env(platform: Platform, cdp: str) -> None:
     os.environ[f"AGENT_CDP_{platform.value.upper()}"] = cdp
-    os.environ["HR_AGENT_BROWSER_BACKEND"] = "real-per-platform"
+    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak-per-platform"
 
 
 def _probe_cdp(cdp: str) -> dict[str, Any]:

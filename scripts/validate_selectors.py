@@ -31,9 +31,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--platform", required=True, choices=[item.value for item in Platform])
     parser.add_argument(
         "--backend",
-        default=os.getenv("HR_AGENT_BROWSER_BACKEND", "real"),
-        choices=["real", "cdp", "real-per-platform", "cdp-per-platform"],
-        help="真实浏览器后端；默认按一人一浏览器三标签页连接",
+        default=os.getenv("HR_AGENT_BROWSER_BACKEND", "cloak"),
+        choices=["cloak", "cloak-per-platform"],
+        help="CloakBrowser 后端；默认按一人一浏览器三标签页连接",
     )
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument(

@@ -144,7 +144,7 @@ def _guard_owner(owner: str) -> None:
 
 def _configure_boss_cdp(cdp: str) -> None:
     os.environ["AGENT_CDP_BOSS"] = cdp
-    os.environ["HR_AGENT_BROWSER_BACKEND"] = "real-per-platform"
+    os.environ["HR_AGENT_BROWSER_BACKEND"] = "cloak-per-platform"
 
 
 def _probe_cdp(cdp: str) -> dict[str, Any]:

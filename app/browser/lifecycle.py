@@ -1,6 +1,7 @@
-"""浏览器生命周期与健康检查。
+"""CloakBrowser 生命周期与健康检查。
 
-真实 CloakBrowser 本阶段默认要求人工先启动；这里仅做 CDP 探测和可选重连。
+真实浏览器必须由外部先启动为 CloakBrowser 并暴露 CDP；项目代码只做 CDP 探测和
+附着，不启动非 CloakBrowser。
 """
 
 from __future__ import annotations
@@ -8,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.browser.cloak import cdp_url_for, ensure_cdp_ready, maybe_start_cdp_browser
+from app.browser.cloak import cdp_url_for, ensure_cdp_ready
 from app.core.constants import Platform
 
 
@@ -23,15 +24,11 @@ class BrowserHealth:
 
 
 async def start_browser(owner: str, cdp_port: int, *, backend: str = "fake") -> dict[str, object]:
-    """启动或连接浏览器。
-
-    fake 后端直接返回就绪；real/cdp 后端只探测已运行的 CDP。自动启动浏览器需要
-    显式设置 `HR_AGENT_CDP_AUTO_START=true`。
-    """
+    """检查 fake 或 CloakBrowser CDP 后端是否可用。"""
 
     if backend == "fake":
         return {"owner": owner, "cdpPort": cdp_port, "backend": backend, "started": True}
-    if backend in {"real-per-platform", "cdp-per-platform"}:
+    if backend == "cloak-per-platform":
         urls = [cdp_url_for(cdp_port, platform=platform) for platform in Platform]
         ready = [await ensure_cdp_ready(url, timeout_seconds=2) for url in urls]
         if not all(ready):
@@ -43,13 +40,12 @@ async def start_browser(owner: str, cdp_port: int, *, backend: str = "fake") -> 
             "backend": backend,
             "started": True,
         }
+    if backend != "cloak":
+        raise ValueError(f"浏览器后端只允许 fake/cloak/cloak-per-platform: {backend}")
     cdp_url = cdp_url_for(cdp_port)
     ready = await ensure_cdp_ready(cdp_url, timeout_seconds=2)
     if not ready:
-        await maybe_start_cdp_browser(cdp_port=cdp_port)
-        ready = await ensure_cdp_ready(cdp_url, timeout_seconds=8)
-    if not ready:
-        raise RuntimeError(f"CDP 未就绪: {cdp_url}")
+        raise RuntimeError(f"CloakBrowser CDP 未就绪: {cdp_url}")
     return {
         "owner": owner,
         "cdpPort": cdp_port,

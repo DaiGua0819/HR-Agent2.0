@@ -351,3 +351,37 @@
   - `.venv312\Scripts\python.exe -m pytest tests\agent\test_job51_phase3.py tests\agent\test_zhilian_phase1.py`：15 passed。
 - 风险 / 待确认：
   - 51job / 智联真实页面尚未登录验证；后续需要登录后跑 DOM 采样和一次性 dry-run，根据真实 DOM 调整平台选择器。
+
+---
+
+### 快照 0012：真实浏览器后端收口为 CloakBrowser
+
+- 修改时间：2026-06-27 13:11:00 +08:00
+- 修改原因：
+  - 后续真实招聘平台操作只能使用 CloakBrowser，不能在项目代码里保留非 CloakBrowser 或泛浏览器启动路径。
+  - 旧的泛真实浏览器后端名容易被误解为普通浏览器或任意 CDP。
+  - 浏览器进程应由外部 CloakBrowser 环境启动，项目只负责检查 CDP 与附着页面。
+- 修改文件：
+  - `app/browser/cloak.py`
+  - `app/browser/lifecycle.py`
+  - `app/browser/manager.py`
+  - `scripts/run_boss_once.py`
+  - `scripts/platform_once_common.py`
+  - `scripts/validate_selectors.py`
+  - `scripts/dry_run_read_once.py`
+  - `scripts/check_cdp_connection.py`
+  - `tests/agent/test_phase7b_browser.py`
+  - `.env.example`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - 删除自动启动 CDP 浏览器的环境开关、脚本参数构造函数和启动函数。
+  - 真实后端只允许 `cloak` 和 `cloak-per-platform`；`fake` 仅保留给单元测试。
+  - `BrowserManager` / `lifecycle` 遇到旧后端名会直接拒绝，不再默认当作真实浏览器处理。
+  - BOSS / 51job / 智联单次脚本统一设置 `HR_AGENT_BROWSER_BACKEND=cloak-per-platform`。
+  - 选择器验证与 dry-run 读取脚本的 `--backend` 参数只接受 CloakBrowser 后端。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests`：60 passed，1 个 StarletteDeprecationWarning。
+  - `.venv312\Scripts\python.exe -m ruff check .`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
+- 风险 / 待确认：
+  - `playwright.chromium.connect_over_cdp()` 仍会保留，因为 CloakBrowser 暴露 Chromium CDP 协议，Playwright 的附着 API 命名如此；它不是浏览器启动。

@@ -39,8 +39,8 @@ def test_login_detection_identifies_login_page_before_selector_validation() -> N
     assert detection.reason == "url_login_marker"
 
 
-def test_real_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
-    """real 后端通过 CDP 连接工厂装配三平台页面，单测不连真实浏览器。"""
+def test_cloak_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
+    """cloak 后端通过 CDP 连接工厂装配三平台页面，单测不连真实浏览器。"""
 
     urls: list[str] = []
 
@@ -55,7 +55,7 @@ def test_real_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
     monkeypatch.setattr("app.browser.lifecycle.ensure_cdp_ready", ready)
     monkeypatch.setattr("app.browser.playwright_cdp.connect_cdp_browser", connect)
 
-    manager = BrowserManager(owner="和新红", cdp_port=9222, backend="real")
+    manager = BrowserManager(owner="和新红", cdp_port=9222, backend="cloak")
     asyncio.run(manager.start())
 
     assert urls == ["http://127.0.0.1:9222"]
