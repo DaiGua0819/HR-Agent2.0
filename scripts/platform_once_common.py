@@ -18,7 +18,7 @@ from urllib.request import urlopen
 from app.agent.runner import ConversationRunner
 from app.browser.cloak import cdp_url_for
 from app.browser.manager import BrowserManager
-from app.browser.reliable_actions import reliable_click_element
+from app.browser.reliable_actions import reliable_click_element, reliable_scroll
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
 from app.platforms.job51 import actions_chat as job51_chat
@@ -52,6 +52,8 @@ async def _main_async(platform: Platform) -> None:
     try:
         await manager.start()
         page = manager.page_for(owner, platform)
+        if platform == Platform.JOB51:
+            await job51_chat.open_chat_page(page)
         await asyncio.sleep(max(args.wait, 0))
         login = await detect_login_page(page, platform)
         if login.logged_out:
@@ -155,38 +157,52 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
 
 
 async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[str, Any]]:
-    row_states = await _candidate_row_states(adapter, platform)
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row_state in row_states:
-        if len(summaries) >= max(1, limit):
+    max_items = max(1, limit)
+    scrolls = 0
+    idle_scans = 0
+    while len(summaries) < max_items and idle_scans < 3:
+        progressed = False
+        for row_state in await _candidate_row_states(adapter, platform):
+            if len(summaries) >= max_items:
+                break
+            label = str(row_state.get("label") or "").strip()
+            row_key = str(row_state.get("id") or label or row_state.get("index") or "")
+            if row_key in seen or _skip_label(platform, label):
+                continue
+            row = await _find_candidate_row(adapter, platform, row_state)
+            if row is None:
+                continue
+            label = (await row.text()).strip()
+            if label in seen or _skip_label(platform, label):
+                continue
+            before_actions = len(getattr(adapter.page, "reliable_actions", []))
+            click = await reliable_click_element(
+                adapter.page,
+                row,
+                label=f"{platform.value}候选人会话",
+                verify=lambda: _verify_chat_ready(adapter, platform),
+            )
+            if not click.get("ok"):
+                continue
+            state = await ConversationRunner(adapter).run_current()
+            conversation_id = str(state.get("conversation_id") or label)
+            seen.update({row_key, label, conversation_id})
+            summary = _summary_from_state(state)
+            summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[
+                before_actions:
+            ]
+            summaries.append(summary)
+            progressed = True
+        if len(summaries) >= max_items:
             break
-        label = str(row_state.get("label") or "").strip()
-        if _skip_label(platform, label):
+        if progressed:
+            idle_scans = 0
             continue
-        row = await _find_candidate_row(adapter, platform, row_state)
-        if row is None:
-            continue
-        label = (await row.text()).strip()
-        if _skip_label(platform, label):
-            continue
-        before_actions = len(getattr(adapter.page, "reliable_actions", []))
-        click = await reliable_click_element(
-            adapter.page,
-            row,
-            label=f"{platform.value}候选人会话",
-            verify=lambda: _verify_chat_ready(adapter, platform),
-        )
-        if not click.get("ok"):
-            continue
-        state = await ConversationRunner(adapter).run_current()
-        conversation_id = str(state.get("conversation_id") or label)
-        if conversation_id in seen:
-            continue
-        seen.add(conversation_id)
-        summary = _summary_from_state(state)
-        summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[before_actions:]
-        summaries.append(summary)
+        scrolled = await _scroll_thread_list(adapter, platform, scrolls)
+        scrolls += 1
+        idle_scans = 0 if scrolled else idle_scans + 1
     return summaries
 
 
@@ -226,6 +242,20 @@ async def _candidate_rows(adapter: Any, platform: Platform) -> list[Any]:
         else zhilian_selectors.SESSION_ITEM
     )
     return await adapter.page.query_all(selector)
+
+
+async def _scroll_thread_list(adapter: Any, platform: Platform, scrolls: int) -> bool:
+    if scrolls >= 8:
+        return False
+    if platform == Platform.JOB51:
+        result = await reliable_scroll(
+            adapter.page,
+            amount=720,
+            container_selector="#conversation-list",
+        )
+        return bool(result.get("scrolled"))
+    result = await reliable_scroll(adapter.page, amount=720)
+    return bool(result.get("scrolled"))
 
 
 async def _verify_chat_ready(adapter: Any, platform: Platform) -> dict[str, object]:

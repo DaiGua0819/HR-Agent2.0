@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 
@@ -18,10 +17,12 @@ from app.browser.reliable_actions import (
 )
 from app.core.constants import Platform
 from app.platforms.job51 import selectors
+from app.platforms.job51.actions_navigation import open_chat_page as navigate_chat_page
+from app.platforms.job51.actions_unread import select_unread_filter as refresh_unread_filter
 from app.platforms.job51.dom_scripts import (
-    CLICK_UNREAD_FILTER_JS,
+    READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
-    UNREAD_FILTER_STATE_JS,
+    VERIFY_SENT_JS,
 )
 from app.platforms.types import (
     Candidate,
@@ -39,37 +40,13 @@ REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 async def open_chat_page(page: BrowserPage) -> None:
     """进入 51job 人才沟通页。"""
 
-    click = await reliable_click(page, selectors.CHAT_ENTRY, label="51job人才沟通入口")
-    if not click.get("ok"):
-        await page.goto("about:blank#job51-chat-entry-missing")
+    await navigate_chat_page(page)
 
 
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
-    """切换 51job 未读筛选。"""
+    """刷新并切换 51job 未读筛选。"""
 
-    clicked = await _safe_eval_dict(page, CLICK_UNREAD_FILTER_JS)
-    if clicked.get("selected"):
-        await asyncio.sleep(1)
-        state = await _unread_filter_state(page)
-        return {
-            "selected": bool(state.get("active")),
-            "selector": selectors.UNREAD_FILTER,
-            "state": state,
-            "click": clicked,
-        }
-    click = await reliable_click(
-        page,
-        selectors.UNREAD_FILTER,
-        label="51job未读筛选",
-        verify=lambda: _verify_unread_active(page),
-    )
-    state = await _unread_filter_state(page)
-    return {
-        "selected": bool(click.get("ok")) and bool(state.get("active")),
-        "selector": selectors.UNREAD_FILTER,
-        "state": state,
-        "click": click,
-    }
+    return await refresh_unread_filter(page)
 
 
 async def select_positions(
@@ -228,6 +205,8 @@ async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
     """读取当前 51job 会话上下文。"""
 
     raw = await _safe_eval_dict(page, "job51.read_chat_context")
+    if not raw:
+        raw = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
     candidate = Candidate(
         name=str(raw.get("name") or raw.get("candidate_name") or ""),
         applied_position=str(raw.get("position") or raw.get("appliedPosition") or ""),
@@ -375,24 +354,6 @@ async def _find_thread_for_state(
     return None
 
 
-async def _verify_unread_active(page: BrowserPage) -> dict[str, object]:
-    state = await _unread_filter_state(page)
-    return {
-        "verified": bool(state.get("active")),
-        "reason": "" if state.get("active") else "unread_filter_not_active",
-        "state": state,
-    }
-
-
-async def _unread_filter_state(page: BrowserPage) -> dict[str, object]:
-    if bool(getattr(page, "unread_selected", False)):
-        return {"active": True, "label": "未读", "source": "fake_page"}
-    raw = await _safe_eval_dict(page, "job51.unread_filter_state")
-    if not raw:
-        raw = await _safe_eval_dict(page, UNREAD_FILTER_STATE_JS)
-    return raw if raw else {"active": False, "reason": "unread_state_unknown"}
-
-
 async def _verify_recent_mine_message(
     page: BrowserPage,
     expected_text: str,
@@ -400,6 +361,9 @@ async def _verify_recent_mine_message(
     raw = await _safe_eval_dict(page, "job51.verify_sent", expected_text)
     if raw.get("verified"):
         return {"verified": True, "source": "script"}
+    raw = await _safe_eval_dict(page, VERIFY_SENT_JS, expected_text)
+    if raw.get("verified"):
+        return {"verified": True, "source": "dom_script"}
     messages = await page.query_all(selectors.MINE_MESSAGE)
     for element in reversed(messages):
         if expected_text in (await element.text()):

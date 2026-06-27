@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import gettempdir
 from typing import Any
 from urllib.parse import urlparse
 
@@ -80,6 +82,82 @@ class PlaywrightCDPPage:
             if arg is not None
             else await self.page.evaluate(script)
         )
+
+    async def click_and_download(
+        self,
+        script: str,
+        arg: Any | None = None,
+        timeout_ms: int = 15000,
+    ) -> dict[str, Any]:
+        """执行点击脚本并捕获真实浏览器下载文件。"""
+
+        clicked: Any = {}
+        try:
+            if "#sensor_imresume_download" in script or "sensor_imresume_download" in script:
+                return await self._click_job51_online_resume_download(timeout_ms=timeout_ms)
+            async with self.page.expect_download(timeout=timeout_ms) as download_info:
+                clicked = await self.eval_js(script, arg)
+            download = await download_info.value
+            path = await download.path()
+            filename = str(download.suggested_filename or "")
+            if path is None:
+                target = Path(gettempdir()) / (filename or "job51_resume_download")
+                await download.save_as(str(target))
+                path = str(target)
+            return {
+                "ok": True,
+                "clicked": clicked,
+                "filename": filename,
+                "bytes": Path(path).read_bytes(),
+                "path": str(path),
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "reason": "download_not_captured",
+                "error": str(error),
+            }
+
+    async def _click_job51_online_resume_download(self, timeout_ms: int) -> dict[str, Any]:
+        """51job 在线简历保存必须使用可信点击并确认弹窗。"""
+
+        clicked: dict[str, Any] = {}
+        try:
+            async with self.page.expect_download(timeout=timeout_ms) as download_info:
+                save = self.page.locator("#sensor_imresume_download").first
+                await save.click(timeout=5000)
+                clicked = {"clicked": True, "source": "job51_trusted_save_click"}
+                await self.page.wait_for_timeout(1000)
+                dialog = self.page.locator(".el-dialog").filter(has_text="保存到本地").last
+                pdf = dialog.locator("button").filter(has_text="Pdf").first
+                if await pdf.count():
+                    await pdf.click(timeout=3000)
+                    clicked["pdfSelected"] = True
+                confirm = dialog.locator("button.el-button--primary").filter(has_text="确定").last
+                await confirm.click(timeout=5000)
+                clicked["confirmed"] = True
+            download = await download_info.value
+            path = await download.path()
+            filename = str(download.suggested_filename or "")
+            if path is None:
+                target = Path(gettempdir()) / (filename or "job51_resume_download")
+                await download.save_as(str(target))
+                path = str(target)
+            return {
+                "ok": True,
+                "clicked": clicked,
+                "filename": filename,
+                "bytes": Path(path).read_bytes(),
+                "path": str(path),
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "reason": "download_not_captured",
+                "error": str(error),
+            }
 
     async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
         try:

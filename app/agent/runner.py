@@ -194,17 +194,6 @@ class ConversationRunner:
                 "resume_already_requested",
                 result={"skipped": True, "reason": "already_requested"},
             )
-        if request_state.pending_resume_consent:
-            result = await self.adapter.request_resume()
-            state["resume_requested"] = bool(
-                result.get("requested") or result.get("resumeReceived")
-            )
-            return self._finish(
-                state,
-                "request_resume",
-                "resume_consent_requested",
-                result=result,
-            )
         judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
         if judgement.status == "accept":
             result = await self.adapter.request_resume()

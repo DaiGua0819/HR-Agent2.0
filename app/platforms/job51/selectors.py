@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+CHAT_HOME_URL = "https://ehire.51job.com/"
 CHAT_ENTRY = "#sensor_talentcommunicate"
 POSITION_MENU = ".position-menu .menu-item"
 POSITION_MENU_SHORT = ".menu-item_content_short"
@@ -35,6 +36,10 @@ REQUEST_RESUME_CONFIRM_TEXTS = ("确定", "确认", "发送")
 RESUME_CARD = "div.item.resume-card"
 ONLINE_RESUME_ENTRY = "div.item.resume-card, div.im-message-item .resume-card"
 ATTACHMENT_ENTRY = "a[href], div.im-message-item a[href]"
+ATTACHMENT_RESUME_BUTTON = ".resume-element .info-content-item.file-item"
+ONLINE_RESUME_BUTTON_TEXT = "在线简历"
+ANNEX_DOWNLOAD_LINK = ".annex-resume #sensor_Bchatinfo_xiazai a, .annex-resume .item-download a"
+ANNEX_CLOSE = ".annex-resume .container-close"
 
 RECOMMEND_ENTRY = "#sensor_recommand_menu"
 RECOMMEND_CARD = "div.item.resume-card, .resume-card"

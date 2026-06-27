@@ -53,6 +53,7 @@ class FakePage:
     fills: list[tuple[str, str]] = field(default_factory=list)
     sent_messages: list[str] = field(default_factory=list)
     resume_requests: int = 0
+    resume_preview_closes: int = 0
     proactive_greets: list[str] = field(default_factory=list)
     unread_selected: bool = False
     all_positions_selected: bool = False
@@ -186,6 +187,13 @@ class FakePage:
                 "label": "未读" if self.unread_selected else "",
                 "source": "fake_page",
             }
+        if "unread_filter_not_found" in script and "未读" in script:
+            self.unread_selected = not self.unread_selected
+            return {
+                "selected": True,
+                "label": "未读",
+                "source": "fake_dom_text",
+            }
         if script == "job51.read_unread_rows":
             return {"rows": self._fake_unread_rows()}
         if script == "boss.read_unread_rows":
@@ -234,12 +242,16 @@ class FakePage:
         if script == "job51.inspect_resume_request_state":
             convo = self.current_conversation()
             return {
-                "hasResumeAttachment": bool(
-                    convo.get("has_resume_attachment")
+                "hasResumeAttachment": bool(convo.get("has_resume_attachment")),
+                "alreadyRequested": bool(convo.get("resume_requested")),
+                "pendingResumeConsent": bool(
+                    convo.get("has_attachment_card")
                     or convo.get("resume_bytes")
+                    or convo.get("resume_href")
+                    or convo.get("online_resume_bytes")
+                    or convo.get("online_resume_href")
                     or convo.get("preview_only")
                 ),
-                "alreadyRequested": bool(convo.get("resume_requested")),
                 "summary": convo.get("resume_summary", ""),
                 "source": "fake_page",
             }
@@ -257,13 +269,50 @@ class FakePage:
             return {
                 "bytes": convo.get("resume_bytes"),
                 "href": convo.get("resume_href"),
+                "hasAttachmentCard": bool(convo.get("has_attachment_card")),
+                "hasOnlineResumeButton": bool(
+                    convo.get("online_resume_bytes") or convo.get("online_resume_href")
+                ),
                 "previewOnly": bool(convo.get("preview_only")),
+            }
+        if script == "job51.click_online_resume":
+            convo = self.current_conversation()
+            found = bool(
+                convo.get("online_resume_bytes")
+                or convo.get("online_resume_href")
+                or convo.get("online_resume_download_bytes")
+            )
+            if found:
+                convo["online_resume_opened"] = True
+            return {
+                "clicked": found,
+                "label": "在线简历" if found else "",
+                "reason": "" if found else "online_resume_button_not_found",
+            }
+        if script == "job51.online_resume_payload":
+            convo = self.current_conversation()
+            if not convo.get("online_resume_opened"):
+                return {"found": False}
+            return {
+                "bytes": convo.get("online_resume_bytes"),
+                "href": convo.get("online_resume_href"),
+                "filename": convo.get("online_resume_filename", ""),
+                "source": "fake_online_resume",
             }
         if script == "job51.fetch_attachment_href":
             convo = self.current_conversation()
             if arg and str(arg) == str(convo.get("resume_href") or ""):
                 return {"ok": True, "bytes": convo.get("resume_href_bytes")}
+            if arg and str(arg) == str(convo.get("online_resume_href") or ""):
+                return {"ok": True, "bytes": convo.get("online_resume_href_bytes")}
             return {"ok": False, "reason": "href_not_found"}
+        if "online_resume_close_not_found" in script:
+            convo = self.current_conversation()
+            if convo.get("online_resume_opened"):
+                convo["online_resume_opened"] = False
+                self.resume_preview_closes += 1
+                return {"closed": True, "source": "fake_online_resume_close"}
+            return {"closed": False, "reason": "not_online_resume_view"}
         if script == "boss.recommend_summary":
             return {"selectedPosition": self.selected_recommend_position}
         if script == "boss.select_recommend_position":
@@ -324,6 +373,32 @@ class FakePage:
         if script == "job51.scroll_recommend_cards":
             return {"scrolled": True}
         return None
+
+    async def click_and_download(
+        self,
+        script: str,
+        arg: Any | None = None,
+        timeout_ms: int = 15000,
+    ) -> dict[str, Any]:
+        """执行假点击并返回预设下载字节。"""
+
+        _ = timeout_ms
+        clicked = await self.eval_js(script, arg)
+        convo = self.current_conversation()
+        content = (
+            convo.get("online_resume_download_bytes")
+            or convo.get("online_resume_bytes")
+            or convo.get("resume_bytes")
+        )
+        if not content:
+            return {"ok": False, "clicked": clicked, "reason": "fake_download_missing"}
+        return {
+            "ok": True,
+            "clicked": clicked,
+            "filename": convo.get("online_resume_filename", "fake_resume.pdf"),
+            "bytes": content,
+            "path": "",
+        }
 
     async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
         _ = timeout_ms

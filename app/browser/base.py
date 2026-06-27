@@ -49,5 +49,13 @@ class BrowserPage(Protocol):
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
         """执行页面脚本；假页面可按脚本名返回预设状态。"""
 
+    async def click_and_download(
+        self,
+        script: str,
+        arg: Any | None = None,
+        timeout_ms: int = 15000,
+    ) -> dict[str, Any]:
+        """执行点击脚本并捕获浏览器下载。"""
+
     async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
         """等待选择器出现。"""

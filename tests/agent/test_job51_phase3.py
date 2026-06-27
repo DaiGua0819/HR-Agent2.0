@@ -83,6 +83,23 @@ def test_job51_unread_filter_active_state_is_verified() -> None:
     result = asyncio.run(select_unread_filter(page))
     assert result["selected"] is True
     assert page.unread_selected is True
+    assert result["refreshed"] is False
+
+
+def test_job51_unread_filter_refreshes_when_already_checked() -> None:
+    """51job 未读已勾选时，先取消再勾选，刷新未读列表。"""
+
+    page = FakePage(
+        conversations=[conversation("销售管培生", [{"sender": "other", "text": "你好"}])],
+        unread_selected=True,
+    )
+    result = asyncio.run(select_unread_filter(page))
+    assert result["selected"] is True
+    assert result["refreshed"] is True
+    assert [item["step"] for item in result["actions"]] == [
+        "uncheck_for_refresh",
+        "check_unread",
+    ]
 
 
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:
@@ -170,6 +187,66 @@ def test_job51_request_resume_rejects_preview_only() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_does_not_download_resume_before_candidate_qualifies() -> None:
+    """51job 看见附件不等于立刻下载，必须先走到业务上的求简历步骤。"""
+
+    state, page = run_case(
+        conversation(
+            "销售管培生",
+            [{"sender": "other", "text": "你好"}],
+            has_attachment_card=True,
+            resume_bytes=b"%PDF-1.7\nbody\n%%EOF",
+        )
+    )
+    assert state["next_action"] == "ask_screening"
+    assert "result" not in state["decision"]
+    assert page.resume_requests == 0
+
+
+def test_job51_downloads_top_right_online_resume_after_screening_accept() -> None:
+    """筛选通过后，51job 无附件时优先点右上角在线简历下载。"""
+
+    state, page = run_case(
+        conversation(
+            "销售管培生",
+            [
+                {"sender": "me", "text": "你是否接受出差？"},
+                {"sender": "other", "text": "可以接受"},
+            ],
+            online_resume_bytes=b"%PDF-1.7\nbody\n%%EOF",
+            online_resume_filename="候选人_销售管培生.pdf",
+        )
+    )
+    result = state["decision"]["result"]
+    assert state["next_action"] == "request_resume"
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert page.resume_requests == 0
+    assert page.resume_preview_closes == 1
+
+
+def test_job51_downloads_online_resume_by_save_icon_after_screening_accept() -> None:
+    """在线简历无 href 时，点击右上角存储卡图标捕获下载。"""
+
+    state, page = run_case(
+        conversation(
+            "销售管培生",
+            [
+                {"sender": "me", "text": "你是否接受出差？"},
+                {"sender": "other", "text": "可以接受"},
+            ],
+            online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+            online_resume_filename="候选人_销售管培生.pdf",
+        )
+    )
+    result = state["decision"]["result"]
+    assert state["next_action"] == "request_resume"
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert page.resume_requests == 0
+    assert page.resume_preview_closes == 1
+
+
 def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:
     """51job 人才望远镜切回传统模式，跳过已看卡片，复用门槛后 Hi 聊。"""
 
@@ -219,6 +296,15 @@ def conversation(
     messages: list[dict[str, str]],
     *,
     label: str = "",
+    has_attachment_card: bool = False,
+    resume_bytes: bytes | None = None,
+    resume_href: str = "",
+    resume_href_bytes: bytes | None = None,
+    online_resume_bytes: bytes | None = None,
+    online_resume_download_bytes: bytes | None = None,
+    online_resume_href: str = "",
+    online_resume_href_bytes: bytes | None = None,
+    online_resume_filename: str = "",
     preview_only: bool = False,
 ) -> dict[str, object]:
     """构造 FakePage 51job 会话。"""
@@ -231,6 +317,15 @@ def conversation(
         "latest_message": messages[-1]["text"],
         "unread_count": 1,
         "messages": messages,
+        "has_attachment_card": has_attachment_card,
+        "resume_bytes": resume_bytes,
+        "resume_href": resume_href,
+        "resume_href_bytes": resume_href_bytes,
+        "online_resume_bytes": online_resume_bytes,
+        "online_resume_download_bytes": online_resume_download_bytes,
+        "online_resume_href": online_resume_href,
+        "online_resume_href_bytes": online_resume_href_bytes,
+        "online_resume_filename": online_resume_filename,
         "preview_only": preview_only,
     }
 

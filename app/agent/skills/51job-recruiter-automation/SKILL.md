@@ -15,8 +15,8 @@ description: Use when operating 51job recruiter automation for unread message ha
 
 ## 平台边界
 
-- 51job 使用独立 CloakBrowser CDP：`http://127.0.0.1:9224`，不要复用 BOSS 的浏览器会话。
-- 51job 当前处理这些已配置岗位：`膨润土销售人员`、`国际业务管培生`、`电气工程师`、`应用技术经理（工业涂料领域）`、`外贸销售经理（流变助剂）`、`销售工程师（石油钻井泥浆膨润土）`、`销售管培生`、`AI应用开发实习生`、`HRBP`、`人力资源`、`人力资源管培生`、`外部财务产品顾问`、`AI智能体解决方案负责人`。
+- 真实浏览器只使用 owner 对应的 CloakBrowser：一个招聘号一个 CB 浏览器，BOSS / 51job / 智联在同一个浏览器的三个标签页中运行；不要恢复每平台独立 CDP。
+- 51job 当前处理这些已配置岗位：`膨润土销售人员`、`国际业务管培生`、`电气工程师`、`应用技术经理（工业涂料领域）`、`外贸销售经理（流变助剂）`、`销售工程师（石油钻井泥浆膨润土）`、`销售管培生`、`AI应用开发实习生`、`AI应用开发工程师`、`HRBP`、`人力资源`、`人力资源管培生`、`外部财务产品顾问`、`AI智能体解决方案负责人`、`投资交易策略研究员（量化与市场情绪方向）`、`企业内容运营负责人（B2B/短视频方向）`、`B端社交媒体运营`。
 - `机电工程师（嵌入式开发方向）` 当前没有业务规则；即使聊天列表可见也按未配置岗位跳过，不发送消息。
 - 业务判断复用 `boss_chat_rules.json`：岗位知识库、筛选问题、候选人问题答疑、基础条件判断和决策日志风格都沿用现有 BOSS 规则。
 - DOM/按钮定位只放在 `job51_` 前缀适配层里，不把 51job selector 混进 BOSS function call。
@@ -39,6 +39,10 @@ description: Use when operating 51job recruiter automation for unread message ha
 - 人才望远镜打招呼按钮：`button.el-button.tm_button.el-button--primary`，文本通常是 `立即Hi聊`
 - 通用广告/引导关闭：优先点击 `不感兴趣`、`跳过`、`稍后再说`、`知道了/我知道了`、关闭 X；包括推荐 AI 回复、微信通知、driver guide 等遮挡层。
 - 底部操作按钮：`div.operate-item`
+- 聊天简历卡片里的附件简历按钮：`.resume-element .info-content-item.file-item`
+- 附件 PDF 预览层：`.annex-resume`
+- 附件 PDF 预览层下载链接：`.annex-resume #sensor_Bchatinfo_xiazai a`、`.annex-resume .item-download a`
+- 附件 PDF 预览层关闭按钮：`.annex-resume .container-close`
 - 批量面板：`section.batch-chat-panel`、`.wrap-item`、`.batch-chat-item`
 
 ## 处理流程
@@ -51,13 +55,27 @@ description: Use when operating 51job recruiter automation for unread message ha
 6. 销售、国际业务、应用技术、电气、HRBP/人力资源类岗位走岗位专属筛选问题：未问则发送配置里的问题；明确通过后求简历；明确不满足则跳过；有问题先用知识库答疑。
 7. 运营 A/B（企业内容运营负责人（B2B/短视频方向）、B端社交媒体运营）在 51job 不发送 `resumeRequestPrompt`，不发送筛选问题；直接执行 51job 求简历/下载简历函数。
 8. 财务 AI 团队新增直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer）不发送筛选问题；先用 51job 专用发送函数发送岗位配置的 `resumeRequestPrompt`，再执行 51job 求简历/下载简历函数。
-9. 候选人提问时只使用岗位知识库回答；知识库没有答案时不回复，只记录为待补充问题。
-10. 发送前先关闭 51job AI 辅助引导和微信提醒等遮挡层；发送按钮用 51job 专用点击路径触发，发送后必须用 `div.message-item.mine` 最近消息校验，不使用 BOSS 通用消息解析器。
-11. 会话列表中出现 `[送达]`、`[已读]` 的行视为已经回复过，本轮未读扫描跳过，避免重复处理刚发送过的候选人。
-12. 未读扫描只处理真实会话行，跳过 `[平台推荐]` 和“以下是为你推荐的人才”等推荐区块。
-13. 只有最后一条消息来自候选人时才做模型辅助判断/会话复盘；最后一条是我方消息时直接进入等待状态，避免无意义慢调用。
-14. 所有点击和发送串行执行，并保留拟人化停顿，避免过快操作。
-15. 每个候选人的处理结果写入批量报告和决策日志，`type` 使用 `job51_process_unread_all_positions`。
+9. 51job 只有在岗位逻辑已经走到“需要简历”时才执行 `job51_request_resume`；不能因为页面看见“附件简历/在线简历”就提前下载。
+10. 候选人提问时只使用岗位知识库回答；知识库没有答案时不回复，只记录为待补充问题。
+11. 发送前先关闭 51job AI 辅助引导和微信提醒等遮挡层；发送按钮用 51job 专用点击路径触发，发送后必须用 `div.message-item.mine` 最近消息校验，不使用 BOSS 通用消息解析器。
+12. 会话列表中出现 `[送达]`、`[已读]` 的行视为已经回复过，本轮未读扫描跳过，避免重复处理刚发送过的候选人。
+13. 未读扫描只处理真实会话行，跳过 `[平台推荐]` 和“以下是为你推荐的人才”等推荐区块。
+14. 只有最后一条消息来自候选人时才做模型辅助判断/会话复盘；最后一条是我方消息时直接进入等待状态，避免无意义慢调用。
+15. 所有点击和发送串行执行，并保留稳定等待和动作校验，避免过快操作。
+16. 每个候选人的处理结果写入批量报告和决策日志，`type` 使用 `job51_process_unread_all_positions`。
+
+## 51job 简历下载 / 求简历流程
+
+- `job51_request_resume` 只能由“直求简历 / AI 基础条件接受 / 岗位筛选通过”等需要简历的业务分支调用；不要在读取会话阶段提前调用。
+- 如果当前聊天消息里有简历卡片，并且卡片里有“附件简历”，优先点击 `.resume-element .info-content-item.file-item`。
+- 点击“附件简历”后，51job 会打开 `.annex-resume` PDF 预览层；这一步不是最终下载成功。
+- PDF 预览层底部的“下载”按钮是 `.annex-resume #sensor_Bchatinfo_xiazai a` / `.annex-resume .item-download a`，其 `href` 通常是 `blob:https://ehire.51job.com/...#toolbar=0`，`download` 属性带真实文件名。
+- 下载动作必须抓取该 blob 的真实字节，并通过文件头校验：PDF 必须以 `%PDF-` 开头，docx 必须是 `PK`，doc 必须是 OLE 头。
+- 如果聊天里没有“附件简历”，但右上角候选人信息区有“在线简历”，在候选人已符合条件后点击该入口并下载真实导出文件。
+- 下载成功后保存到项目相对目录 `data/downloads/job51/`，并返回 `downloaded=True`、`resumeReceived=True`、`fileHash`、`filePath`。
+- 下载完成或失败后都要关闭 `.annex-resume .container-close`，避免 PDF canvas 遮挡后续会话点击。
+- 只有“在线简历/附件简历”的可见文字、没有真实附件卡片或 blob 下载链接时，不允许伪造 PDF、不允许入库；应回退为正常 in-chat 求简历。
+- 如果当前会话没有可下载附件，也没有可下载在线简历，才寻找“求简历”按钮并处理确认弹层。
 
 ## 主动联系推荐候选人
 
@@ -113,9 +131,10 @@ description: Use when operating 51job recruiter automation for unread message ha
 
 ## 2026-06-24 Job51 Real Resume Download Note
 
-- For `job51_b` / Hexinhong message handling, use the same online-resume PDF save flow as `job51_a` / Songfengfeng. Only click real online-resume entries inside the current chat message list, then verify the opened page is a real resume detail page before downloading.
-- Only real files can be counted as downloaded resumes: platform attachment hrefs must keep a valid resume suffix and pass file-signature checks (`%PDF-`, docx `PK`, or doc OLE header).
-- Visible online-resume preview text in the chat is not a real resume. Do not convert it to PDF, do not add it to the resume library, and do not mark the candidate as `accepted_resume_downloaded`.
-- If only preview text is visible, fall back to the normal in-chat resume request and record the result as requested, not downloaded. Only finance AI direct-resume roles may use the configured direct-resume prompt on 51job; operation A/B must not send prompt text on 51job.
-- The final online-resume PDF save confirmation must use DOM lookup plus a CDP `Input.dispatchMouseEvent` click on the confirmed dialog button. If no download event is triggered, retry the same confirmation up to 3 times with a 2 second interval, and keep the per-attempt result in `confirmAttempts` for later diagnosis.
-- 51job downloaded resume files must be written with UUID-style filenames such as `20260624_<uuid>.pdf`; candidate name, position, account, conversation key, and recent messages are stored in `job51_resume_downloads*.json` for import/bridge metadata. Do not rely on candidate-name filenames for dedupe.
+- For all 51job accounts, use the same real attachment flow; do not keep account-specific names such as hexinhong in the function logic.
+- Real chat attachments may appear as a resume card with two actions: `在线简历` and `附件简历`. Do not download them merely because they are visible; download only after the shared business flow decides the candidate is qualified and needs a resume.
+- When resume is needed, prefer `附件简历 -> .annex-resume preview -> bottom 下载 link`. If no chat attachment is available, use the top-right `在线简历` entry before falling back to in-chat 求简历.
+- The bottom download link is usually a blob URL. Fetch the blob bytes in page context, verify the file signature, save it under `data/downloads/job51/`, and return the saved file path.
+- Only real files can be counted as downloaded resumes: PDF `%PDF-`, docx `PK`, or doc OLE header.
+- Visible online-resume preview text in the chat is not a real resume. Do not convert it to PDF, do not add it to the resume library, and do not mark the candidate as downloaded.
+- If no real attachment card, no top-right online resume export, no blob link, and no valid bytes are available, fall back to the normal in-chat resume request and record the result as requested, not downloaded.

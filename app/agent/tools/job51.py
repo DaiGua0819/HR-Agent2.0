@@ -15,7 +15,10 @@ JOB51_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "job51_process_unread_all_positions",
         "description": (
             "Recruiter-side 51job workflow: open 51job chat, click 未读 and 全部岗位, "
-            "then handle unread contacts through shared boss_chat_rules."
+            "then handle unread contacts through shared boss_chat_rules. A visible "
+            "附件简历/在线简历 entry must not be downloaded until the shared business "
+            "rules reach a resume-needed branch such as direct resume, accepted AI "
+            "basic conditions, or accepted screening."
         ),
         "parameters": {
             "type": "object",
@@ -38,8 +41,15 @@ JOB51_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "job51_request_resume",
         "description": (
-            "51job resume action: accept only real attachments or real online-resume PDF "
-            "downloads; visible preview text must not be converted to PDF."
+            "51job resume action for the current candidate, called only after the "
+            "business flow has decided a resume is needed. Prefer chat 附件简历: click "
+            "it, wait for the .annex-resume PDF preview layer, fetch the bottom 下载 "
+            "link/blob as real bytes, verify PDF/doc/docx signatures, save under "
+            "data/downloads/job51/, and close the preview. If no chat attachment exists, "
+            "click the top-right 在线简历 and download its real exported file. Only when "
+            "neither source is available should it fall back to in-chat 求简历 plus "
+            "confirmation. Visible 在线简历/附件简历 text alone must never be converted "
+            "into a fake PDF."
         ),
         "parameters": {"type": "object", "properties": {}},
     },

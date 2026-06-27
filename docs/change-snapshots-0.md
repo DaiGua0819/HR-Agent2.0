@@ -421,3 +421,142 @@
   - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
 - 风险 / 待确认：
   - `check_cdp_connection.py` 与 DOM 采样脚本仍保留 `--cdp`，它们是低层诊断工具，不是账号启动或消息处理入口。
+
+---
+
+### 快照 0014：补齐 51job 真实会话 DOM 抽取
+
+- 修改时间：2026-06-27 13:58:08 +08:00
+- 修改原因：
+  - 51job FakePage 测试路径可用，但真实页面没有实现 `job51.read_chat_context` 的 DOM fallback。
+  - live 处理时只能点击会话，无法读到候选人、岗位和消息，导致规则层全部判定为 `unconfigured_position`。
+  - 51job 从工作台进入处理消息前需要先点击“人才沟通”，否则选择器检查会停在首页。
+- 修改文件：
+  - `app/platforms/job51/dom_scripts.py`
+  - `app/platforms/job51/actions_chat.py`
+  - `app/platforms/job51/actions_resume.py`
+  - `scripts/platform_once_common.py`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - 新增 51job 真实页面 `READ_CHAT_CONTEXT_JS`，从选中会话行读取候选人、岗位、未读数，并从 `div.im-message-item` 抽取消息方向与正文。
+  - 新增 51job 真实页面发送校验脚本，发消息后从己方消息 DOM 校验文本是否出现。
+  - 新增 51job 简历 payload fallback，用真实附件 href 优先、在线/附件简历预览作为已收到简历状态。
+  - 51job 单次处理脚本 attach 后会先点击 `#sensor_talentcommunicate` 进入人才沟通页，再做登录态、未读和选择器检查。
+  - 已在宋峰峰 51job live 路径处理 3 条：雷炳珍发送销售管培生筛选问题，杨武浩判定已收到简历等待，胡信贵发送 AI 应用开发基础条件。
+- 验证结果：
+  - 真实 CB `http://127.0.0.1:9333` 会话读取烟测：可读出 `胡信贵 / AI应用开发实习生 / 候选人消息`。
+  - `scripts/run_job51_once.py --owner 宋峰峰 --limit 3 --live --confirm-live`：完成 3 条 live 处理并输出动作小结。
+- 风险 / 待确认：
+  - 51job “已投/附件简历/在线简历”在真实页面里代表候选人已投递简历，当前按已收到简历处理；如后续发现仍需点求简历，需要再细化 51job 简历状态判断。
+
+---
+
+### 快照 0015：51job 附件简历 PDF 下载流程落地
+
+- 修改时间：2026-06-27 14:11:05 +08:00
+- 修改原因：
+  - 51job 会话里出现“附件简历”时，不能只把它当作已收到简历后跳过，需要打开附件预览并保存真实 PDF。
+  - 杨武浩会话验证发现，“附件简历”不会直接下载，而是先打开 `.annex-resume` PDF 预览层，底部“下载”按钮提供 blob PDF。
+- 修改文件：
+  - `.gitignore`
+  - `app/platforms/job51/selectors.py`
+  - `app/platforms/job51/dom_scripts.py`
+  - `app/platforms/job51/actions_resume.py`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - 新增 51job 附件简历按钮、附件预览下载链接、预览关闭按钮选择器。
+  - `RESUME_PAYLOAD_JS` 可识别附件卡片和已打开预览层的 blob 下载链接。
+  - 新增 blob PDF 抓取脚本，把预览层下载链接转换为真实 PDF 字节。
+  - `inspect_resume_request_state()` 看到附件卡片时返回 `pending_resume_consent=True`，让 runner 进入 `request_resume()` 下载流程，而不是直接等待。
+  - `request_or_download_resume()` 会点击“附件简历”打开预览层，抓取底部下载链接，保存真实 PDF 到 `data/downloads/job51/`，最后关闭预览层。
+  - `.gitignore` 增加 `data/downloads/`，避免真实候选人简历被误提交。
+  - 已下载杨武浩附件简历：`data/downloads/job51/51job_杨武浩_B端社交媒体运营(172567194).pdf`。
+- 验证结果：
+  - 真实 CB 上点击杨武浩“附件简历”后出现 `.annex-resume`，底部链接为 `#sensor_Bchatinfo_xiazai a`，download 文件名为 `51job_杨武浩_B端社交媒体运营(172567194).pdf`。
+  - 新逻辑调用 `adapter.request_resume()` 返回 `downloaded=True`，并生成真实 PDF 文件。
+  - 文件校验：大小 121,681 字节，`detect_resume_file_type()` 返回 `pdf`。
+  - `.venv312\Scripts\python.exe -m ruff check app\platforms\job51\actions_resume.py app\platforms\job51\dom_scripts.py app\platforms\job51\selectors.py`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app\platforms\job51`：通过。
+- 风险 / 待确认：
+  - 当前保存到项目相对目录 `data/downloads/job51/`，后续接真实简历库时需要把文件路径写入 DB 的简历 payload / 附件字段。
+
+---
+
+### 快照 0016：同步 51job 附件下载规则到 skill 与 function call
+
+- 修改时间：2026-06-27 14:15:40 +08:00
+- 修改原因：
+  - 51job 真实附件流程已确认并落地到平台动作层，skill 与 function call schema 必须同步，避免后续模型仍按旧规则把“附件简历”当成等待或伪预览处理。
+  - 旧 51job skill 中仍存在“独立 CDP 9224”和旧在线简历保存说明，需要与当前“一人一个 CB 浏览器三标签页”拓扑一致。
+- 修改文件：
+  - `app/agent/skills/51job-recruiter-automation/SKILL.md`
+  - `app/agent/tools/job51.py`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - skill 平台边界更新为 owner 对应 CloakBrowser 单浏览器三平台标签页，不再描述每平台独立 CDP。
+  - skill 增加 51job 附件简历按钮、`.annex-resume` 预览层、底部下载链接、关闭按钮等真实选择器说明。
+  - skill 新增“51job 简历下载 / 求简历流程”小节：附件卡片优先下载真实 PDF，失败或无真实附件时才回退求简历。
+  - 旧的在线简历 UUID/确认弹层说明改为真实 `附件简历 -> .annex-resume -> 下载 blob -> 文件头校验 -> data/downloads/job51/` 流程。
+  - `job51_request_resume` function call schema 明确返回 `downloaded=True/filePath/fileHash`，并禁止把可见预览文字转换成假 PDF。
+  - `job51_process_unread_all_positions` schema 增加附件简历卡片处理说明，保证全量未读流程也继承该下载规则。
+- 验证结果：
+  - `rg` 检查未发现旧 `9224`、UUID 文件名、`confirmAttempts` 等过期 51job 简历下载描述。
+  - `.venv312\Scripts\python.exe -m ruff check app\agent\tools\job51.py app\platforms\job51\actions_resume.py app\platforms\job51\dom_scripts.py app\platforms\job51\selectors.py`：All checks passed。
+- 风险 / 待确认：
+  - 当前 function call schema 只更新工具说明，不改变参数结构；真实入库字段映射仍留到后续 DB/简历库联动阶段。
+
+---
+
+### 快照 0017：51job 附件简历下载前置到共享 runner
+
+- 修改时间：2026-06-27 14:20:58 +08:00
+- 修改原因：
+  - 继续处理 51job 未读时发现，AI 应用开发和筛选岗位如果候选人已经主动发来“附件简历”，runner 仍会先走基础条件或筛选拒绝，导致附件 PDF 没有立即下载。
+  - 最新业务要求是：51job 对方有附件简历时，先点击“附件简历”并下载真实 PDF，再继续岗位业务判断。
+- 修改文件：
+  - `app/agent/runner.py`
+  - `docs/change-snapshots-0.md`
+- 修改结果：
+  - `ConversationRunner` 在 51job 会话中检测到 `pending_resume_consent` / 附件简历卡片后，先调用平台 adapter 的 `request_resume()` 下载真实附件。
+  - 附件下载结果写入 `resume_download_result`，最终决策日志会带上 `resumeDownload`，不会丢失“已下载简历”的事实。
+  - 直求简历岗位如果已经下载附件，直接进入 `resume_attachment_downloaded`，不重复点击求简历。
+  - 筛选岗位如果通过且附件已下载，进入 `screening_accept_resume_downloaded`，不重复求简历。
+  - AI 基础条件和筛选拒绝仍按原岗位规则继续执行，但附件 PDF 会先落盘。
+  - 已补下载郑欣宇、王雨萌两份 51job 附件简历。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m ruff check app\agent\runner.py app\agent\tools\job51.py app\platforms\job51\actions_resume.py app\platforms\job51\dom_scripts.py app\platforms\job51\selectors.py`：All checks passed。
+  - 郑欣宇附件：`data/downloads/job51/51job_郑欣宇_AI应用开发实习生(170695629).pdf`，268,400 字节，文件头识别为 `pdf`。
+  - 王雨萌附件：`data/downloads/job51/51job_王雨萌_外贸销售经理（流变助剂）(170696207).pdf`，397,880 字节，文件头识别为 `pdf`。
+- 风险 / 待确认：
+  - 当前下载文件仍只落在本地 `data/downloads/job51/`，未写入简历库 DB；后续需要把文件路径和 hash 纳入真实简历入库流程。
+
+---
+
+### 快照 0018：修正 51job 简历下载触发边界
+
+- 修改时间：2026-06-27 14:35:17 +08:00
+- 修改原因：
+  - 用户确认 51job 不能因为看见“附件简历/在线简历”就下载；必须先由岗位规则判断候选人符合条件，并走到“需要简历”步骤。
+  - 51job 与 BOSS 不同：需要简历时若页面已有附件或在线简历，应优先真实下载；没有可下载文件时才点击“求简历”并确认。
+- 修改文件：
+  - `app/agent/runner.py`
+  - `app/browser/fake_page.py`
+  - `app/platforms/job51/actions_resume.py`
+  - `app/platforms/job51/dom_scripts.py`
+  - `app/platforms/job51/resume_files.py`
+  - `app/platforms/job51/selectors.py`
+  - `app/agent/skills/51job-recruiter-automation/SKILL.md`
+  - `app/agent/tools/job51.py`
+  - `tests/agent/test_job51_phase3.py`
+- 修改结果：
+  - 移除 runner 中“读到 51job 附件就提前下载”的逻辑；下载只会发生在直求简历、AI 基础条件接受、岗位筛选通过等求简历分支。
+  - 51job `request_resume()` 调整为：附件简历下载优先；没有附件时点右上角“在线简历”下载；两者都不可用才点击“求简历”并确认。
+  - 新增 `resume_files.py` 拆出文件校验、哈希去重、落盘，避免 `actions_resume.py` 继续膨胀。
+  - FakePage 与测试补齐：未符合条件时不下载；筛选通过后可下载右上角在线简历。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_job51_phase3.py`：10 passed。
+  - `.venv312\Scripts\python.exe -m pytest tests`：63 passed，1 个 FastAPI/TestClient deprecation warning。
+  - `.venv312\Scripts\python.exe -m ruff check app\agent\runner.py app\browser\fake_page.py app\platforms\job51 app\agent\tools\job51.py tests\agent\test_job51_phase3.py tests\agent\test_phase4_runtime.py`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
+- 风险 / 待确认：
+  - 右上角“在线简历”的真实 DOM 仍需在已登录 51job 页面上复验；当前实现优先按可见文本和非聊天消息区域定位。
