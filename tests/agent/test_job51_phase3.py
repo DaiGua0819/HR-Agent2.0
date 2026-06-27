@@ -15,6 +15,7 @@ from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.job51.actions_chat import (
     find_next_thread,
     read_unread_conversations,
+    select_unread_filter,
     should_skip_thread_label,
     verify_opened_candidate,
 )
@@ -71,6 +72,17 @@ def test_job51_skip_rules_do_not_repeat_replied_or_platform_rows() -> None:
     )
     refs = asyncio.run(read_unread_conversations(page, owner="和新红"))
     assert [item.conversation_id for item in refs] == ["conv-销售管培生"]
+
+
+def test_job51_unread_filter_active_state_is_verified() -> None:
+    """51job 未读筛选复用可靠动作层，并校验 active 状态。"""
+
+    page = FakePage(
+        conversations=[conversation("销售管培生", [{"sender": "other", "text": "你好"}])]
+    )
+    result = asyncio.run(select_unread_filter(page))
+    assert result["selected"] is True
+    assert page.unread_selected is True
 
 
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:

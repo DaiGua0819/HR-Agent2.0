@@ -320,3 +320,34 @@
   - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
 - 风险 / 待确认：
   - 对直求简历岗位，未知问题不会阻断求简历；若后续希望某些具体问题必须先人工确认，需要在知识库或策略里显式配置拦截。
+
+---
+
+### 快照 0011：复用 BOSS 可靠未读处理模式到 51job / 智联
+
+- 修改时间：2026-06-27 11:02:47 +08:00
+- 修改原因：
+  - BOSS 真机验证后，确认“处理前切未读、点击后等待并校验、只遍历未读行、发送/求简历后校验”的模式是三平台都应该复用的稳定流程。
+  - 51job / 智联此前已接入部分可靠点击，但未读筛选缺少 active 校验，一次性运行脚本仍容易遍历全部可见会话。
+  - 本阶段本地未登录 51job / 智联真实页面，所以只补接口和 FakePage 可测路径，不做真实页面选择器结论。
+- 修改文件：
+  - `app/platforms/job51/dom_scripts.py`
+  - `app/platforms/job51/actions_chat.py`
+  - `app/platforms/zhilian/dom_scripts.py`
+  - `app/platforms/zhilian/actions.py`
+  - `app/platforms/zhilian/adapter.py`
+  - `scripts/platform_once_common.py`
+  - `app/browser/fake_page.py`
+  - `tests/agent/test_job51_phase3.py`
+  - `tests/agent/test_zhilian_phase1.py`
+- 修改结果：
+  - 51job / 智联各自新增只读 DOM 脚本，用于未读筛选状态检测和未读行读取。
+  - 两个平台的 `select_unread_filter()` 都会校验 active 状态；切不到未读会清晰返回失败原因。
+  - `read_unread_conversations()` / 一次性运行脚本改为读取未读行状态，不再默认遍历全部可见会话。
+  - 智联 adapter 删除临时未读读取逻辑，统一走 `actions.read_unread_conversations()`。
+  - FakePage 支持 `job51/zhilian.read_unread_rows` 和未读 active 状态，离线测试可以覆盖新路径。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m ruff check app\platforms\job51\actions_chat.py app\platforms\job51\dom_scripts.py app\platforms\zhilian\actions.py app\platforms\zhilian\dom_scripts.py app\platforms\zhilian\adapter.py scripts\platform_once_common.py tests\agent\test_job51_phase3.py tests\agent\test_zhilian_phase1.py`：All checks passed。
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_job51_phase3.py tests\agent\test_zhilian_phase1.py`：15 passed。
+- 风险 / 待确认：
+  - 51job / 智联真实页面尚未登录验证；后续需要登录后跑 DOM 采样和一次性 dry-run，根据真实 DOM 调整平台选择器。

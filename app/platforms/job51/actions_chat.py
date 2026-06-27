@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -17,6 +18,11 @@ from app.browser.reliable_actions import (
 )
 from app.core.constants import Platform
 from app.platforms.job51 import selectors
+from app.platforms.job51.dom_scripts import (
+    CLICK_UNREAD_FILTER_JS,
+    READ_UNREAD_ROWS_JS,
+    UNREAD_FILTER_STATE_JS,
+)
 from app.platforms.types import (
     Candidate,
     ChatMessage,
@@ -41,8 +47,29 @@ async def open_chat_page(page: BrowserPage) -> None:
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """切换 51job 未读筛选。"""
 
-    click = await reliable_click(page, selectors.UNREAD_FILTER, label="51job未读筛选")
-    return {"selected": bool(click.get("ok")), "selector": selectors.UNREAD_FILTER, "click": click}
+    clicked = await _safe_eval_dict(page, CLICK_UNREAD_FILTER_JS)
+    if clicked.get("selected"):
+        await asyncio.sleep(1)
+        state = await _unread_filter_state(page)
+        return {
+            "selected": bool(state.get("active")),
+            "selector": selectors.UNREAD_FILTER,
+            "state": state,
+            "click": clicked,
+        }
+    click = await reliable_click(
+        page,
+        selectors.UNREAD_FILTER,
+        label="51job未读筛选",
+        verify=lambda: _verify_unread_active(page),
+    )
+    state = await _unread_filter_state(page)
+    return {
+        "selected": bool(click.get("ok")) and bool(state.get("active")),
+        "selector": selectors.UNREAD_FILTER,
+        "state": state,
+        "click": click,
+    }
 
 
 async def select_positions(
@@ -64,32 +91,60 @@ async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[Co
     """读取当前可处理的 51job 未读会话。"""
 
     refs: list[ConversationRef] = []
-    for row in await page.query_all(selectors.THREAD_ITEM):
-        label = await row.text()
+    for state in await read_unread_row_states(page):
+        label = str(state.get("label") or "")
         if should_skip_thread_label(label):
             continue
-        unread = _safe_int(await row.attr("unread"))
-        if unread <= 0:
+        if _safe_int(state.get("unread_count")) <= 0:
             continue
         refs.append(
             ConversationRef(
                 platform=Platform.JOB51,
                 owner=owner,
-                conversation_id=await row.attr("id") or label,
+                conversation_id=str(state.get("id") or label),
             )
         )
     return refs
 
 
+async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
+    """读取 51job 当前列表中可处理的未读会话行状态。"""
+
+    raw = await _safe_eval_dict(page, "job51.read_unread_rows")
+    if not raw:
+        raw = await _safe_eval_dict(page, READ_UNREAD_ROWS_JS)
+    states = _normalize_unread_rows(raw.get("rows"))
+    if states:
+        return states
+
+    fallback: list[dict[str, object]] = []
+    for index, row in enumerate(await page.query_all(selectors.THREAD_ITEM)):
+        unread_count = _safe_int(await row.attr("unread"))
+        if unread_count <= 0:
+            continue
+        fallback.append(
+            {
+                "index": index,
+                "id": await row.attr("id") or "",
+                "label": await row.text(),
+                "unread_count": unread_count,
+            }
+        )
+    return fallback
+
+
 async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef | None:
     """打开下一个未读且未回复过的 51job 会话。"""
 
-    for row in await page.query_all(selectors.THREAD_ITEM):
-        label = await row.text()
-        if should_skip_thread_label(label) or _safe_int(await row.attr("unread")) <= 0:
+    for state in await read_unread_row_states(page):
+        label = str(state.get("label") or "")
+        if should_skip_thread_label(label) or _safe_int(state.get("unread_count")) <= 0:
+            continue
+        row = await _find_thread_for_state(page, state)
+        if row is None:
             continue
         expected = {
-            "id": await row.attr("id") or label,
+            "id": str(state.get("id") or label),
             "label": label,
             "name": await row.attr("name") or "",
             "position": await row.attr("position") or "",
@@ -298,6 +353,46 @@ async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
     return {"verified": await wait_chat_ready(page, timeout_ms=6500)}
 
 
+async def _find_thread_for_state(
+    page: BrowserPage,
+    state: dict[str, object],
+) -> Any | None:
+    row_id = str(state.get("id") or "").lstrip("_")
+    label = str(state.get("label") or "").strip()
+    rows = await page.query_all(selectors.THREAD_ITEM)
+    if row_id:
+        for row in rows:
+            current_id = str(await row.attr("id") or "").lstrip("_")
+            if current_id == row_id:
+                return row
+    if label:
+        for row in rows:
+            if (await row.text()).strip() == label:
+                return row
+    index = _safe_int(state.get("index"))
+    if 0 <= index < len(rows):
+        return rows[index]
+    return None
+
+
+async def _verify_unread_active(page: BrowserPage) -> dict[str, object]:
+    state = await _unread_filter_state(page)
+    return {
+        "verified": bool(state.get("active")),
+        "reason": "" if state.get("active") else "unread_filter_not_active",
+        "state": state,
+    }
+
+
+async def _unread_filter_state(page: BrowserPage) -> dict[str, object]:
+    if bool(getattr(page, "unread_selected", False)):
+        return {"active": True, "label": "未读", "source": "fake_page"}
+    raw = await _safe_eval_dict(page, "job51.unread_filter_state")
+    if not raw:
+        raw = await _safe_eval_dict(page, UNREAD_FILTER_STATE_JS)
+    return raw if raw else {"active": False, "reason": "unread_state_unknown"}
+
+
 async def _verify_recent_mine_message(
     page: BrowserPage,
     expected_text: str,
@@ -310,3 +405,24 @@ async def _verify_recent_mine_message(
         if expected_text in (await element.text()):
             return {"verified": True, "source": "dom"}
     return {"verified": False, "reason": "mine_message_not_found"}
+
+
+def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        unread_count = _safe_int(item.get("unread_count") or item.get("unreadCount"))
+        if unread_count <= 0:
+            continue
+        rows.append(
+            {
+                "index": _safe_int(item.get("index")),
+                "id": str(item.get("id") or ""),
+                "label": str(item.get("label") or ""),
+                "unread_count": unread_count,
+            }
+        )
+    return rows

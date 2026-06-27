@@ -78,7 +78,12 @@ class FakePage:
             ]
         if "#sensor_talentcommunicate" in selector or "#sensor_recommand_menu" in selector:
             return [FakeElement(self, selector, "人才沟通")]
-        if "filter-item" in selector or "ui-tab-item" in selector:
+        if (
+            "filter-item" in selector
+            or "ui-tab-item" in selector
+            or "km-checkbox" in selector
+            or "role='checkbox'" in selector
+        ):
             return [FakeElement(self, selector, "未读")]
         if "unread-checkbox" in selector:
             return [FakeElement(self, selector, "未读")]
@@ -167,20 +172,25 @@ class FakePage:
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
         if script == "zhilian.read_chat_context":
             return self.current_conversation()
+        if script == "zhilian.unread_filter_state":
+            return {
+                "active": self.unread_selected,
+                "label": "未读" if self.unread_selected else "",
+                "source": "fake_page",
+            }
+        if script == "zhilian.read_unread_rows":
+            return {"rows": self._fake_unread_rows()}
+        if script == "job51.unread_filter_state":
+            return {
+                "active": self.unread_selected,
+                "label": "未读" if self.unread_selected else "",
+                "source": "fake_page",
+            }
+        if script == "job51.read_unread_rows":
+            return {"rows": self._fake_unread_rows()}
         if script == "boss.read_unread_rows":
             return {
-                "rows": [
-                    {
-                        "index": index,
-                        "id": str(item.get("id") or index),
-                        "label": str(
-                            item.get("label")
-                            or f"{item.get('name', '')} {item.get('position', '')}"
-                        ),
-                        "unreadCount": int(item.get("unread_count") or 0),
-                    }
-                    for index, item in enumerate(self.conversations)
-                ]
+                "rows": self._fake_unread_rows()
             }
         if script == "boss.read_chat_context":
             return self.current_conversation()
@@ -403,6 +413,20 @@ class FakePage:
             "viewed": bool(item.get("viewed")),
         }
         self.input_text = ""
+
+    def _fake_unread_rows(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "index": index,
+                "id": str(item.get("id") or index),
+                "label": str(
+                    item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"
+                ),
+                "position": str(item.get("position") or ""),
+                "unreadCount": int(item.get("unread_count") or 0),
+            }
+            for index, item in enumerate(self.conversations)
+        ]
 
     def _conversation_element(self, index: int, item: dict[str, Any]) -> FakeElement:
         label = item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"

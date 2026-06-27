@@ -23,6 +23,7 @@ from app.core.constants import Platform
 from app.platforms.job51 import actions_chat as job51_chat
 from app.platforms.job51 import selectors as job51_selectors
 from app.platforms.job51.adapter import Job51Adapter
+from app.platforms.zhilian import actions as zhilian_actions
 from app.platforms.zhilian import selectors as zhilian_selectors
 from app.platforms.zhilian.adapter import ZhilianAdapter
 from app.settings import load_settings
@@ -148,8 +149,11 @@ def _adapter_for(platform: Platform, page: Any, *, owner: str, dry_run: bool):
 
 async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     page = adapter.page
-    await adapter.select_unread_filter()
     await adapter.select_positions(None)
+    unread = await adapter.select_unread_filter()
+    missing: list[str] = []
+    if not unread.get("selected"):
+        missing.append(f"unread filter not active: {unread}")
     if platform == Platform.JOB51:
         required = {
             "thread list": job51_selectors.THREAD_ITEM,
@@ -162,7 +166,6 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
             "chat ready/input": zhilian_selectors.CHAT_READY,
             "message list": zhilian_selectors.MESSAGE_ITEM,
         }
-    missing: list[str] = []
     for name, selector in required.items():
         count = len(await page.query_all(selector))
         print(f"preflight {name}: count={count} selector={selector}")
@@ -172,12 +175,18 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
 
 
 async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[str, Any]]:
-    rows = await _candidate_rows(adapter, platform)
+    row_states = await _candidate_row_states(adapter, platform)
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for row in rows:
+    for row_state in row_states:
         if len(summaries) >= max(1, limit):
             break
+        label = str(row_state.get("label") or "").strip()
+        if _skip_label(platform, label):
+            continue
+        row = await _find_candidate_row(adapter, platform, row_state)
+        if row is None:
+            continue
         label = (await row.text()).strip()
         if _skip_label(platform, label):
             continue
@@ -199,6 +208,35 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
         summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[before_actions:]
         summaries.append(summary)
     return summaries
+
+
+async def _candidate_row_states(adapter: Any, platform: Platform) -> list[dict[str, object]]:
+    if platform == Platform.JOB51:
+        return await job51_chat.read_unread_row_states(adapter.page)
+    return await zhilian_actions.read_unread_row_states(adapter.page)
+
+
+async def _find_candidate_row(
+    adapter: Any,
+    platform: Platform,
+    state: dict[str, object],
+) -> Any | None:
+    rows = await _candidate_rows(adapter, platform)
+    row_id = str(state.get("id") or "").lstrip("_")
+    label = str(state.get("label") or "").strip()
+    if row_id:
+        for row in rows:
+            current_id = str(await row.attr("id") or "").lstrip("_")
+            if current_id == row_id:
+                return row
+    if label:
+        for row in rows:
+            if (await row.text()).strip() == label:
+                return row
+    index = _safe_int(state.get("index"))
+    if 0 <= index < len(rows):
+        return rows[index]
+    return None
 
 
 async def _candidate_rows(adapter: Any, platform: Platform) -> list[Any]:
@@ -235,6 +273,13 @@ def _skip_label(platform: Platform, label: str) -> bool:
     return not compact or any(
         term in compact for term in ("平台推荐", "系统提示", "广告", "职位助手")
     )
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _summary_from_state(state: dict[str, Any]) -> dict[str, Any]:

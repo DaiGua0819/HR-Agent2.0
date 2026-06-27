@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from app.browser.base import BrowserPage
-from app.core.constants import Platform
 from app.core.dry_run import is_dry_run, record_dry_run_intent
 from app.platforms.types import Conversation, ConversationRef, ResumeRequestState, SendResult
 from app.platforms.zhilian import actions
@@ -27,19 +26,7 @@ class ZhilianAdapter:
         return await actions.select_positions(self.page, target_position)
 
     async def read_unread_conversations(self) -> list[ConversationRef]:
-        rows = await self.page.query_all(".im-session-item__box")
-        refs: list[ConversationRef] = []
-        for row in rows:
-            unread = row.attr("unread")
-            if int(await unread or 0) > 0:
-                refs.append(
-                    ConversationRef(
-                        platform=Platform.ZHILIAN,
-                        owner=self.owner,
-                        conversation_id=await row.attr("id") or await row.text(),
-                    )
-                )
-        return refs
+        return await actions.read_unread_conversations(self.page, owner=self.owner)
 
     async def find_next_unread_thread(self) -> ConversationRef | None:
         return await actions.find_next_unread_thread(self.page, owner=self.owner)

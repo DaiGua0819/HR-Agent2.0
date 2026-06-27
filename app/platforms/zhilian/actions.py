@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from app.browser.base import BrowserElement, BrowserPage
 from app.browser.reliable_actions import (
     reliable_click,
@@ -24,6 +26,11 @@ from app.platforms.types import (
     SendResult,
 )
 from app.platforms.zhilian import selectors
+from app.platforms.zhilian.dom_scripts import (
+    CLICK_UNREAD_FILTER_JS,
+    READ_UNREAD_ROWS_JS,
+    UNREAD_FILTER_STATE_JS,
+)
 
 SYSTEM_SKIP_TERMS = ("平台推荐", "系统提示", "广告", "职位助手", "智联小助手")
 
@@ -37,12 +44,33 @@ async def open_chat_page(page: BrowserPage) -> None:
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """点击“未读”筛选。"""
 
+    clicked = await _safe_eval_dict(page, CLICK_UNREAD_FILTER_JS)
+    if clicked.get("selected"):
+        await asyncio.sleep(1)
+        state = await _unread_filter_state(page)
+        return {
+            "selected": bool(state.get("active")),
+            "label": str(clicked.get("label") or ""),
+            "state": state,
+            "click": clicked,
+        }
     elements = await page.query_all(selectors.UNREAD_FILTER)
     for element in elements:
         label = await element.text()
         if label == "未读" or ("未读" in label and len(label) <= 8):
-            click = await reliable_click_element(page, element, label="智联未读筛选")
-            return {"selected": bool(click.get("ok")), "label": label, "click": click}
+            click = await reliable_click_element(
+                page,
+                element,
+                label="智联未读筛选",
+                verify=lambda: _verify_unread_active(page),
+            )
+            state = await _unread_filter_state(page)
+            return {
+                "selected": bool(click.get("ok")) and bool(state.get("active")),
+                "label": label,
+                "state": state,
+                "click": click,
+            }
     return {"selected": False, "reason": "unread_filter_not_found"}
 
 
@@ -68,16 +96,18 @@ async def find_next_unread_thread(
     """从顶部寻找下一个真实候选人的未读会话。"""
 
     allowed = [item.strip() for item in allowed_positions or [] if item.strip()]
-    rows = await page.query_all(selectors.SESSION_ITEM)
-    for row in rows:
-        label = await row.text()
+    for state in await read_unread_row_states(page):
+        label = str(state.get("label") or "")
         if _should_skip_label(label):
             continue
-        unread_count = _safe_int(await row.attr("unread"))
+        unread_count = _safe_int(state.get("unread_count"))
         if unread_count <= 0:
             continue
-        position = (await row.attr("position") or "").strip()
+        position = str(state.get("position") or "").strip()
         if allowed and not any(_position_matches(position, item) for item in allowed):
+            continue
+        row = await _find_session_for_state(page, state)
+        if row is None:
             continue
         click = await reliable_click_element(
             page,
@@ -87,9 +117,54 @@ async def find_next_unread_thread(
         )
         if not click.get("ok"):
             continue
-        conversation_id = await row.attr("id") or label
+        conversation_id = str(state.get("id") or label)
         return ConversationRef(Platform.ZHILIAN, owner, conversation_id)
     return None
+
+
+async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[ConversationRef]:
+    """读取当前智联未读会话引用。"""
+
+    refs: list[ConversationRef] = []
+    for state in await read_unread_row_states(page):
+        label = str(state.get("label") or "")
+        if _should_skip_label(label) or _safe_int(state.get("unread_count")) <= 0:
+            continue
+        refs.append(
+            ConversationRef(
+                platform=Platform.ZHILIAN,
+                owner=owner,
+                conversation_id=str(state.get("id") or label),
+            )
+        )
+    return refs
+
+
+async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
+    """读取智联当前列表中可处理的未读会话行状态。"""
+
+    raw = await _safe_eval_dict(page, "zhilian.read_unread_rows")
+    if not raw:
+        raw = await _safe_eval_dict(page, READ_UNREAD_ROWS_JS)
+    states = _normalize_unread_rows(raw.get("rows"))
+    if states:
+        return states
+
+    fallback: list[dict[str, object]] = []
+    for index, row in enumerate(await page.query_all(selectors.SESSION_ITEM)):
+        unread_count = _safe_int(await row.attr("unread"))
+        if unread_count <= 0:
+            continue
+        fallback.append(
+            {
+                "index": index,
+                "id": await row.attr("id") or "",
+                "label": await row.text(),
+                "position": await row.attr("position") or "",
+                "unread_count": unread_count,
+            }
+        )
+    return fallback
 
 
 async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
@@ -259,6 +334,46 @@ async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
     return {"verified": await page.wait_for(selectors.CHAT_READY, timeout_ms=6500)}
 
 
+async def _find_session_for_state(
+    page: BrowserPage,
+    state: dict[str, object],
+) -> BrowserElement | None:
+    row_id = str(state.get("id") or "").lstrip("_")
+    label = str(state.get("label") or "").strip()
+    rows = await page.query_all(selectors.SESSION_ITEM)
+    if row_id:
+        for row in rows:
+            current_id = str(await row.attr("id") or "").lstrip("_")
+            if current_id == row_id:
+                return row
+    if label:
+        for row in rows:
+            if (await row.text()).strip() == label:
+                return row
+    index = _safe_int(state.get("index"))
+    if 0 <= index < len(rows):
+        return rows[index]
+    return None
+
+
+async def _verify_unread_active(page: BrowserPage) -> dict[str, object]:
+    state = await _unread_filter_state(page)
+    return {
+        "verified": bool(state.get("active")),
+        "reason": "" if state.get("active") else "unread_filter_not_active",
+        "state": state,
+    }
+
+
+async def _unread_filter_state(page: BrowserPage) -> dict[str, object]:
+    if bool(getattr(page, "unread_selected", False)):
+        return {"active": True, "label": "未读", "source": "fake_page"}
+    raw = await _safe_eval_dict(page, "zhilian.unread_filter_state")
+    if not raw:
+        raw = await _safe_eval_dict(page, UNREAD_FILTER_STATE_JS)
+    return raw if raw else {"active": False, "reason": "unread_state_unknown"}
+
+
 async def _verify_recent_mine_message(
     page: BrowserPage,
     expected_text: str,
@@ -327,3 +442,25 @@ def _safe_int(value: object) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        unread_count = _safe_int(item.get("unread_count") or item.get("unreadCount"))
+        if unread_count <= 0:
+            continue
+        rows.append(
+            {
+                "index": _safe_int(item.get("index")),
+                "id": str(item.get("id") or ""),
+                "label": str(item.get("label") or ""),
+                "position": str(item.get("position") or ""),
+                "unread_count": unread_count,
+            }
+        )
+    return rows

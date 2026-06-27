@@ -11,7 +11,12 @@ from app.agent.runner import ZhilianConversationRunner
 from app.browser.fake_page import FakePage
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
-from app.platforms.zhilian.actions import request_resume, send_message
+from app.platforms.zhilian.actions import (
+    read_unread_conversations,
+    request_resume,
+    select_unread_filter,
+    send_message,
+)
 from app.platforms.zhilian.adapter import ZhilianAdapter
 
 
@@ -104,6 +109,24 @@ def test_operation_direct_resume_has_no_prompt() -> None:
     assert state["next_action"] == "request_resume"
     assert page.sent_messages == ["你好，方便发一份简历过来吗"]
     assert page.resume_requests == 1
+
+
+def test_zhilian_unread_filter_and_refs_use_shared_pattern() -> None:
+    """智联未读筛选校验 active，未读引用只返回真实未读会话。"""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation("销售管培生", [{"sender": "other", "text": "你好"}]),
+                "unread_count": 0,
+            },
+            conversation("电气工程师", [{"sender": "other", "text": "你好"}]),
+        ]
+    )
+    result = asyncio.run(select_unread_filter(page))
+    refs = asyncio.run(read_unread_conversations(page, owner="宋峰峰"))
+    assert result["selected"] is True
+    assert [item.conversation_id for item in refs] == ["conv-电气工程师"]
 
 
 def test_zhilian_request_resume_state_and_confirm() -> None:
