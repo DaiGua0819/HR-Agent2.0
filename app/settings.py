@@ -75,6 +75,9 @@ class FeishuConfig(BaseModel):
     app_id_env: str = "FEISHU_APP_ID"
     app_secret_env: str = "FEISHU_APP_SECRET"
     redirect_uri_env: str = "FEISHU_REDIRECT_URI"
+    allowed_tenant_keys_env: str = "FEISHU_ALLOWED_TENANT_KEYS"
+    admin_open_ids_env: str = "FEISHU_ADMIN_OPEN_IDS"
+    bootstrap_admin_names_env: str = "FEISHU_BOOTSTRAP_ADMIN_NAMES"
     bitable_app_token_env: str = "FEISHU_BITABLE_APP_TOKEN"
     candidate_table_id_env: str = "FEISHU_CANDIDATE_TABLE_ID"
     interview_table_id_env: str = "FEISHU_INTERVIEW_TABLE_ID"
@@ -90,6 +93,19 @@ class FeishuConfig(BaseModel):
     @property
     def redirect_uri(self) -> str:
         return os.getenv(self.redirect_uri_env, "")
+
+    @property
+    def allowed_tenant_keys(self) -> list[str]:
+        return _split_env_values(self.allowed_tenant_keys_env)
+
+    @property
+    def admin_open_ids(self) -> list[str]:
+        return _split_env_values(self.admin_open_ids_env)
+
+    @property
+    def bootstrap_admin_names(self) -> list[str]:
+        raw = os.getenv(self.bootstrap_admin_names_env, "王鑫力,和新红")
+        return [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
 
     @property
     def bitable_app_token(self) -> str:
@@ -170,6 +186,11 @@ def _load_yaml_config(filename: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"配置文件必须是 YAML 对象: {path}")
     return data
+
+
+def _split_env_values(env_name: str) -> list[str]:
+    raw = os.getenv(env_name, "")
+    return [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)

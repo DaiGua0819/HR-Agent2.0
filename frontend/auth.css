@@ -2,7 +2,7 @@
 
 .login-screen {
   display: grid;
-  grid-template-columns: minmax(360px, 1.1fr) minmax(320px, 420px);
+  grid-template-columns: minmax(420px, 1.2fr) minmax(360px, 520px);
   min-height: 100vh;
   padding: 48px;
   gap: 28px;
@@ -20,11 +20,11 @@
   box-shadow: var(--shadow);
 }
 .login-visual {
-  min-height: 560px;
+  min-height: 660px;
   display: grid;
   align-content: end;
   gap: 18px;
-  padding: 34px;
+  padding: 64px 68px;
   color: #fff;
   background:
     linear-gradient(rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.82)),
@@ -73,10 +73,24 @@
 .login-card {
   display: grid;
   gap: 16px;
-  padding: 28px;
+  padding: 38px;
   background: #fff;
 }
+.login-env {
+  justify-self: start;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #047857;
+  background: #ecfdf5;
+  font-size: 13px;
+}
 .login-card h2 { font-size: 26px; }
+.login-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
 .login-card label {
   display: grid;
   gap: 8px;
@@ -91,11 +105,75 @@
   color: var(--ink);
 }
 .login-card button { width: 100%; padding: 11px 14px; }
+.feishu-login {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  min-height: 60px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #0f2a3a, #0f8b74);
+  box-shadow: 0 18px 35px rgba(15, 139, 116, 0.24);
+}
+.feishu-login span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #fff;
+  background: #55c7d8;
+}
+.login-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  height: 1px;
+  background: var(--line);
+}
+.access-preview {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #f8fafc;
+}
+.access-preview dl { margin: 12px 0 0; }
+.access-preview div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.access-preview dt { color: var(--muted); }
+.access-preview dd { margin: 0; font-weight: 700; }
 .login-error {
   min-height: 20px;
   margin: 0;
   color: var(--danger);
   font-size: 13px;
+}
+.dev-login {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.dev-login summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.dev-login form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
 }
 .login-hint {
   margin: 0;

@@ -1,0 +1,133 @@
+"""Feishu OAuth login contract tests."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.auth.feishu_oauth import FeishuProfile
+from app.control_plane.main import create_app
+from app.settings import load_settings
+from fastapi.testclient import TestClient
+
+
+@dataclass
+class FakeFeishuOAuth:
+    """Test double for Feishu OAuth network calls."""
+
+    profile: FeishuProfile
+
+    def authorization_url(self, *, state: str) -> dict[str, str]:
+        return {"url": f"https://feishu.example/oauth?state={state}", "state": state}
+
+    async def exchange_code(self, code: str) -> FeishuProfile:
+        assert code == "ok-code"
+        return self.profile
+
+
+def _app_with_feishu(profile: FeishuProfile):
+    app = create_app()
+    app.state.feishu_oauth_service = FakeFeishuOAuth(profile)
+    return app
+
+
+def test_feishu_start_redirects_to_authorization_url() -> None:
+    """The login button can start a Feishu OAuth authorization flow."""
+
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_admin", tenant_key="tenant-a", name="王鑫力"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/auth/feishu/start", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("https://feishu.example/oauth?state=")
+
+
+def test_feishu_callback_rejects_invalid_state() -> None:
+    """Callbacks without a state issued by this server are rejected."""
+
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_admin", tenant_key="tenant-a", name="王鑫力"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/auth/feishu/callback?code=ok-code&state=bad")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_oauth_state"
+
+
+def test_feishu_callback_rejects_unallowed_company(monkeypatch) -> None:
+    """Only the configured company tenant can create a session."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_user", tenant_key="tenant-b", name="候选成员"),
+    )
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        response = client.get(f"/api/auth/feishu/callback?code=ok-code&state={state}")
+
+    load_settings.cache_clear()
+    assert response.status_code == 403
+    assert response.json()["detail"] == "company_not_allowed"
+
+
+def test_feishu_callback_maps_bootstrap_admin_by_name(monkeypatch) -> None:
+    """Before open_id is known, configured bootstrap admin names can enter as admin."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    monkeypatch.delenv("FEISHU_ADMIN_OPEN_IDS", raising=False)
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_wang", tenant_key="tenant-a", name="王鑫力"),
+    )
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        response = client.get(
+            f"/api/auth/feishu/callback?code=ok-code&state={state}",
+            follow_redirects=False,
+        )
+        me = client.get("/api/auth/me")
+
+    load_settings.cache_clear()
+    assert response.status_code == 307
+    assert me.status_code == 200
+    payload = me.json()
+    assert payload["roles"] == ["super_admin"]
+    assert payload["authProvider"] == "feishu"
+    assert payload["feishu"]["openId"] == "ou_wang"
+    assert payload["feishu"]["adminMatchedBy"] == "bootstrap_name"
+
+
+def test_feishu_callback_maps_member_to_resume_library(monkeypatch) -> None:
+    """Company users who are not admins become resume-library-only members."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    monkeypatch.setenv("FEISHU_ADMIN_OPEN_IDS", "ou_admin")
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_member", tenant_key="tenant-a", name="普通同事"),
+    )
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        client.get(
+            f"/api/auth/feishu/callback?code=ok-code&state={state}",
+            follow_redirects=False,
+        )
+        me = client.get("/api/auth/me")
+
+    load_settings.cache_clear()
+    assert me.status_code == 200
+    payload = me.json()
+    assert payload["roles"] == ["member"]
+    assert payload["uiAccess"]["views"] == ["resumes"]
+    assert payload["resumeScope"]["owners"] == ["普通同事"]

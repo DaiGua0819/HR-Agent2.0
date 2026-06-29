@@ -11,30 +11,42 @@
   <body>
     <section id="loginScreen" class="login-screen">
       <div class="login-visual">
-        <div class="login-brand"><span>HR</span><strong>HR Agent</strong></div>
-        <h1>招聘控制台登录</h1>
-        <p>管理员进入完整控制台，普通成员只进入自己的简历库。真实飞书授权接入前，本地先用 mock 账号验证角色分流。</p>
+        <div class="login-brand"><span>HR</span><strong>HR-Agent Control Plane</strong></div>
+        <h1>用飞书身份进入招聘自动化控制台</h1>
+        <p>登录后按角色与负责人范围展示功能。管理员可以看全局，普通成员只看到被授权的简历库和候选人数据。</p>
         <div class="login-points">
           <span>简历库权限隔离</span>
-          <span>自动化操作受 dry-run / live 守卫保护</span>
-          <span>后续可替换为飞书 OAuth</span>
+          <span>三平台 Agent 统一权限入口</span>
+          <span>HttpOnly Session</span>
+          <span>OAuth 登录</span>
         </div>
       </div>
-      <form id="loginForm" class="login-card">
+      <div class="login-card">
+        <span class="login-env">Production · 仅公司飞书可访问</span>
         <p class="eyebrow">Secure Entry</p>
-        <h2>登录工作台</h2>
-        <label>
-          <span>账号</span>
-          <input id="loginUsername" name="username" autocomplete="username" placeholder="admin / member" required />
-        </label>
-        <label>
-          <span>密码</span>
-          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
-        </label>
-        <button class="primary" type="submit">进入系统</button>
+        <h2>欢迎回来</h2>
+        <p class="login-copy">继续前请使用飞书完成授权。系统会根据你的账号自动加载可见菜单和简历库范围。</p>
+        <button id="feishuLoginBtn" class="primary feishu-login" type="button"><span>飞</span>使用飞书授权登录</button>
+        <div class="login-divider"><span>权限预览</span></div>
+        <div class="access-preview">
+          <strong>示例：简历查看者</strong>
+          <dl>
+            <div><dt>可见负责人</dt><dd>按授权范围</dd></div>
+            <div><dt>可见平台</dt><dd>全平台</dd></div>
+            <div><dt>可用模块</dt><dd>简历库</dd></div>
+          </dl>
+        </div>
         <p id="loginError" class="login-error" aria-live="polite"></p>
-        <p class="login-hint">本地开发默认：admin/admin，member/member；部署时用环境变量覆盖。</p>
-      </form>
+        <details class="dev-login">
+          <summary>本地开发登录</summary>
+          <form id="loginForm">
+            <label><span>账号</span><input id="loginUsername" name="username" autocomplete="username" placeholder="admin / member" /></label>
+            <label><span>密码</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" /></label>
+            <button type="submit">使用本地账号进入</button>
+          </form>
+          <p class="login-hint">本地默认：admin/admin，member/member；生产请使用飞书授权。</p>
+        </details>
+      </div>
     </section>
     <div id="app" class="shell" hidden>
       <aside class="sidebar">

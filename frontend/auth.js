@@ -10,7 +10,8 @@ const hrAuth = (() => {
     login().hidden = false;
     app().hidden = true;
     error().textContent = message;
-    document.getElementById("loginPassword").value = "";
+    const password = document.getElementById("loginPassword");
+    if (password) password.value = "";
   }
   function showApp() {
     login().hidden = true;
@@ -35,6 +36,9 @@ const hrAuth = (() => {
     document.getElementById("userScope").textContent = `可见：${scope.owners.join("、")} / ${scope.platforms.join("、")}`;
   }
   function bindLogin(api, afterLogin) {
+    document.getElementById("feishuLoginBtn").onclick = () => {
+      window.location.href = "/api/auth/feishu/start";
+    };
     document.getElementById("loginForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       error().textContent = "";

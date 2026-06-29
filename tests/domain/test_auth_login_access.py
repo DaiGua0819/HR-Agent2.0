@@ -87,7 +87,9 @@ def test_frontend_has_login_screen_and_ui_access_hooks() -> None:
     )
 
     assert 'id="loginScreen"' in html
+    assert 'id="feishuLoginBtn"' in html
     assert 'id="loginForm"' in html
     assert "uiAccess" in script
+    assert "/api/auth/feishu/start" in script
     assert "loginForm" in script
     assert "setAllowedNavigation" in script

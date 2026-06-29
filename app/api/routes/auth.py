@@ -1,4 +1,4 @@
-"""Local authentication routes for the control-plane UI."""
+"""Authentication routes for local development and Feishu OAuth login."""
 
 from __future__ import annotations
 
@@ -8,14 +8,15 @@ import secrets
 from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from app.auth.access import feishu_payload, user_payload, validate_company
+from app.auth.feishu_oauth import FeishuOAuthService
 from app.domain.resume_review.models import LocalUser
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 SESSION_COOKIE = "hr_agent_session"
-ADMIN_VIEWS = ["dashboard", "resumes", "queue", "interviews", "automation", "rules"]
-MEMBER_VIEWS = ["resumes"]
 
 
 class LoginRequest(BaseModel):
@@ -55,34 +56,24 @@ MEMBER_USER = LocalUser(
     id="local-member",
     name="普通成员",
     roles=["member"],
-    permissions=[
-        "resumes:read",
-        "resumes:review",
-    ],
+    permissions=["resumes:read", "resumes:review"],
     owners=["宋峰峰"],
     platforms=["boss", "job51", "zhilian"],
 )
 AUTH_PROFILES = {
-    "admin": LocalAuthProfile(
-        username="admin",
-        user=LOCAL_USER,
-        password_env="HR_AGENT_LOCAL_ADMIN_PASSWORD",
-        development_password="admin",
-    ),
-    "member": LocalAuthProfile(
-        username="member",
-        user=MEMBER_USER,
-        password_env="HR_AGENT_LOCAL_MEMBER_PASSWORD",
-        development_password="member",
-    ),
+    "admin": LocalAuthProfile("admin", LOCAL_USER, "HR_AGENT_LOCAL_ADMIN_PASSWORD", "admin"),
+    "member": LocalAuthProfile("member", MEMBER_USER, "HR_AGENT_LOCAL_MEMBER_PASSWORD", "member"),
 }
 
 
 @router.get("/me")
 async def me(request: Request) -> dict[str, object]:
-    """Return the current session user."""
+    """Return the current session payload."""
 
-    return _user_payload(_current_user(request))
+    payload = _session_payload(request)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    return payload
 
 
 @router.post("/login")
@@ -91,19 +82,49 @@ async def login(
     request: Request,
     response: Response,
 ) -> dict[str, object]:
-    """Create a local UI session."""
+    """Create a local development UI session."""
 
     profile = _authenticate(payload.username, payload.password)
-    token = secrets.token_urlsafe(32)
-    _session_store(request)[token] = profile.user.id
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        max_age=60 * 60 * 12,
-    )
-    return _user_payload(profile.user)
+    session_payload = user_payload(profile.user)
+    _set_session(request, response, session_payload)
+    return session_payload
+
+
+@router.get("/feishu/start")
+async def feishu_start(request: Request) -> RedirectResponse:
+    """Redirect the user to Feishu OAuth authorization."""
+
+    state = secrets.token_urlsafe(24)
+    _oauth_state_store(request)[state] = True
+    service = _feishu_service(request)
+    try:
+        target = service.authorization_url(state=state)["url"]
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return RedirectResponse(target)
+
+
+@router.get("/feishu/callback")
+async def feishu_callback(
+    code: str,
+    state: str,
+    request: Request,
+) -> RedirectResponse:
+    """Handle Feishu OAuth callback and create a role-scoped session."""
+
+    if not _oauth_state_store(request).pop(state, None):
+        raise HTTPException(status_code=400, detail="invalid_oauth_state")
+    try:
+        profile = await _feishu_service(request).exchange_code(code)
+        validate_company(profile)
+        session_payload = feishu_payload(profile)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    redirect = RedirectResponse("/index.html")
+    _set_session(request, redirect, session_payload)
+    return redirect
 
 
 @router.post("/logout")
@@ -127,22 +148,23 @@ def _authenticate(username: str, password: str) -> LocalAuthProfile:
     return profile
 
 
-def _current_user(request: Request) -> LocalUser:
-    token = request.cookies.get(SESSION_COOKIE, "")
-    user_id = _session_store(request).get(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="not_authenticated")
-    return _user_by_id(user_id)
+def _set_session(request: Request, response: Response, payload: dict[str, object]) -> None:
+    token = secrets.token_urlsafe(32)
+    _session_store(request)[token] = payload
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 12,
+    )
 
 
-def _user_by_id(user_id: str) -> LocalUser:
-    for profile in AUTH_PROFILES.values():
-        if profile.user.id == user_id:
-            return profile.user
-    raise HTTPException(status_code=401, detail="not_authenticated")
+def _session_payload(request: Request) -> dict[str, object] | None:
+    return _session_store(request).get(request.cookies.get(SESSION_COOKIE, ""))
 
 
-def _session_store(request: Request) -> dict[str, str]:
+def _session_store(request: Request) -> dict[str, dict[str, object]]:
     sessions = getattr(request.app.state, "auth_sessions", None)
     if sessions is None:
         sessions = {}
@@ -150,31 +172,17 @@ def _session_store(request: Request) -> dict[str, str]:
     return sessions
 
 
-def _user_payload(user: LocalUser) -> dict[str, object]:
-    return {
-        "user": {
-            "id": user.id,
-            "name": user.name,
-            "avatarUrl": "",
-        },
-        "roles": user.roles,
-        "permissions": user.permissions,
-        "resumeScope": {
-            "owners": user.owners,
-            "platforms": user.platforms,
-            "includeUnlinked": "super_admin" in user.roles,
-        },
-        "uiAccess": _ui_access(user),
-    }
+def _oauth_state_store(request: Request) -> dict[str, bool]:
+    states = getattr(request.app.state, "oauth_states", None)
+    if states is None:
+        states = {}
+        request.app.state.oauth_states = states
+    return states
 
 
-def _ui_access(user: LocalUser) -> dict[str, object]:
-    is_admin = bool({"super_admin", "admin"} & set(user.roles))
-    actions = ["resume:view", "resume:review"]
-    if is_admin:
-        actions.extend(["interview:invite", "automation:run"])
-    return {
-        "defaultView": "dashboard" if is_admin else "resumes",
-        "views": ADMIN_VIEWS if is_admin else MEMBER_VIEWS,
-        "actions": actions,
-    }
+def _feishu_service(request: Request) -> FeishuOAuthService:
+    service = getattr(request.app.state, "feishu_oauth_service", None)
+    if service is None:
+        service = FeishuOAuthService()
+        request.app.state.feishu_oauth_service = service
+    return service
