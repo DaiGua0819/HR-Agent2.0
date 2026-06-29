@@ -86,6 +86,35 @@ def test_identity_includes_position_and_recent_message_fallback(tmp_path: Path) 
     assert reused.confidence == "recent_messages"
 
 
+def test_status_label_platform_id_does_not_merge_candidates(tmp_path: Path) -> None:
+    """Status labels like [read] are not stable platform conversation ids."""
+
+    repository = ConversationRepository(tmp_path / "status-label-id.sqlite")
+    first = Conversation(
+        id="[已读]",
+        platform=Platform.ZHILIAN,
+        owner="owner",
+        candidate=Candidate(name="Alice", applied_position="AI应用开发实习生"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="hello from alice")],
+        should_reply=True,
+    )
+    second = Conversation(
+        id="[已读]",
+        platform=Platform.ZHILIAN,
+        owner="owner",
+        candidate=Candidate(name="Bob", applied_position="AI应用开发实习生"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="hello from bob")],
+        should_reply=True,
+    )
+
+    first_session = resolve_or_create_session(repository, first).session
+    second_session = resolve_or_create_session(repository, second).session
+
+    assert first_session.id != second_session.id
+    assert first_session.platform_conversation_id == ""
+    assert second_session.platform_conversation_id == ""
+
+
 def test_artifact_parse_backfills_resume_name_and_hard_link(tmp_path: Path) -> None:
     """下载时先硬关联会话；解析后再补 parsed_name 和 resumes.linked_*。"""
 

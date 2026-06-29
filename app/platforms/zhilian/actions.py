@@ -102,13 +102,18 @@ async def find_next_unread_thread(
     *,
     owner: str,
     allowed_positions: list[str] | None = None,
+    exclude_ids: set[str] | None = None,
 ) -> ConversationRef | None:
     """从顶部寻找下一个真实候选人的未读会话。"""
 
     allowed = [item.strip() for item in allowed_positions or [] if item.strip()]
+    excluded = {str(item) for item in exclude_ids or set() if str(item)}
     for state in await read_unread_row_states(page):
         label = str(state.get("label") or "")
         if _should_skip_label(label):
+            continue
+        row_conversation_id = str(state.get("id") or label)
+        if row_conversation_id in excluded:
             continue
         unread_count = _safe_int(state.get("unread_count"))
         if unread_count <= 0:
@@ -119,7 +124,12 @@ async def find_next_unread_thread(
         click = await _open_session_from_state(page, state)
         if not click.get("ok"):
             continue
-        conversation_id = str(state.get("id") or label)
+        conversation = await read_chat_context(page, owner=owner)
+        if not conversation.should_reply:
+            continue
+        conversation_id = str(conversation.id or state.get("id") or label)
+        if conversation_id in excluded:
+            continue
         return ConversationRef(Platform.ZHILIAN, owner, conversation_id)
     return None
 
@@ -623,7 +633,7 @@ def _message_from_raw(item: dict[str, object]) -> ChatMessage:
 
 def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
     for message in reversed(messages):
-        if message.sender != MessageSender.SYSTEM and message.text.strip():
+        if message.text.strip():
             return message
     return None
 
@@ -736,6 +746,8 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
         if not isinstance(item, dict):
             continue
         unread_count = _safe_int(item.get("unread_count") or item.get("unreadCount"))
+        if unread_count <= 0 and item.get("hasUnreadBadge"):
+            unread_count = 1
         label = str(item.get("label") or "")
         if unread_count <= 0:
             continue

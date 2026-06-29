@@ -90,8 +90,9 @@ READ_UNREAD_ROWS_JS = r"""
       const match = text(badge).match(/\d+/);
       return match ? Number.parseInt(match[0], 10) : 0;
     });
-    if (!badges.length) return 0;
-    return counts.length ? Math.max(...counts) : 1;
+    if (!badges.length) return { count: 0, hasUnreadBadge: false };
+    const maxCount = counts.length ? Math.max(...counts) : 0;
+    return { count: maxCount > 0 ? maxCount : 1, hasUnreadBadge: true };
   };
   return {
     unreadActive,
@@ -101,13 +102,14 @@ READ_UNREAD_ROWS_JS = r"""
       const offset = /^\d+$/.test(lines[0] || "") ? 1 : 0;
       const parsedPosition = lines[offset + 1] || "";
       const positionNode = row.querySelector(".im-session-item-subtitle__suffix");
-      const count = parseBadge(row);
+      const badge = parseBadge(row);
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
         label,
         position: text(positionNode) || parsedPosition,
-        unreadCount: count,
+        unreadCount: badge.count,
+        hasUnreadBadge: badge.hasUnreadBadge,
       };
     }),
   };
@@ -194,6 +196,13 @@ READ_CHAT_CONTEXT_JS = r"""
   };
   const detail = document.querySelector("#im-session-detail, .im-session-detail") || document;
   const detailText = text(detail);
+  const urlSessionId = (() => {
+    try {
+      return new URL(location.href).searchParams.get("sessionId") || "";
+    } catch (_error) {
+      return "";
+    }
+  })();
   const detailLines = detailText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
   const nameFromDetail = detailLines.find((line) =>
     !line.includes("沟通职位") &&
@@ -206,11 +215,11 @@ READ_CHAT_CONTEXT_JS = r"""
   const detailPositionMatch = detailText.match(/沟通职位：\s*([^\n]+)/) ||
     detailText.match(/当前沟通(.+?)职位/);
   const selected = Array.from(document.querySelectorAll(
-    ".im-session-item__box, .im-session-item, [class*='session-item']"
+    ".im-session-item__box, .im-session-item.km-list__item"
   )).filter(visible).find((row) => {
-    const cls = String(row.className || "");
-    return cls.includes("active") || cls.includes("selected") ||
-      cls.includes("current") || row.getAttribute("aria-selected") === "true";
+    const classes = String(row.className || "").split(/\s+/).filter(Boolean);
+    return classes.includes("active") || classes.includes("selected") ||
+      classes.includes("current") || row.getAttribute("aria-selected") === "true";
   });
   const header = document.querySelector(
     ".im-chat-header, .im-chat__header, [class*='chat-header'], [class*='dialog-header']"
@@ -265,7 +274,7 @@ READ_CHAT_CONTEXT_JS = r"""
   }).filter((item) => item.text);
   const last = messages.length ? messages[messages.length - 1] : null;
   return {
-    id: selected ? (selected.getAttribute("id") || selectedLabel || candidateName) : candidateName,
+    id: urlSessionId || (selected ? selected.getAttribute("id") || "" : ""),
     name: candidateName,
     position,
     label: selectedLabel,
@@ -309,6 +318,9 @@ ZHILIAN_RESUME_STATE_JS = r"""
   const scopedText = [messageText, nodeText].join("\n");
   const hasFileName = /\.(pdf|docx?|wps|rtf)(\s|$|[?）)\]])/i.test(scopedText);
   const viewAttachmentNode = messageNodes.find((node) => text(node).includes("查看附件简历"));
+  const visibleAttachmentAction = Array.from(
+    detail.querySelectorAll("button, a, [role='button'], span, div")
+  ).filter(visible).find((node) => text(node).includes("查看附件简历"));
   const attachmentCard = messageNodes.find((node) => {
     const value = text(node);
     const cls = String(node.className || "");
@@ -316,13 +328,16 @@ ZHILIAN_RESUME_STATE_JS = r"""
     return value.includes("查看附件简历") ||
       (value.includes("附件简历") && /resume|attach|file/i.test(cls));
   });
-  const hasResumeAttachment = Boolean(hasFileName || viewAttachmentNode || attachmentCard);
+  const hasResumeAttachment = Boolean(
+    hasFileName || viewAttachmentNode || visibleAttachmentAction || attachmentCard
+  );
   const alreadyRequested = /已要附件简历|已向对方要附件简历|已请求附件简历/.test(scopedText);
   const canRequestResume = !hasResumeAttachment && !alreadyRequested &&
     (senderText.includes("要附件简历") || scopedText.includes("要附件简历"));
   let evidence = "";
   if (hasFileName) evidence = "file_name";
   else if (viewAttachmentNode) evidence = "view_attachment_resume";
+  else if (visibleAttachmentAction) evidence = "view_attachment_action";
   else if (attachmentCard) evidence = "attachment_card";
   else if (alreadyRequested) evidence = "already_requested";
   else if (canRequestResume) evidence = "request_button";

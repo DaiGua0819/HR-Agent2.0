@@ -371,7 +371,7 @@ def _message_from_raw(item: dict[str, object]) -> ChatMessage:
 
 def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
     for message in reversed(messages):
-        if message.sender != MessageSender.SYSTEM and message.text.strip():
+        if message.text.strip():
             return message
     return None
 

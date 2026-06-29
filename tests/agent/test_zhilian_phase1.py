@@ -14,6 +14,7 @@ from app.domain.conversation.repository import ConversationRepository
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.actions import (
+    _normalize_unread_rows,
     _state_matches_context,
     find_next_unread_thread,
     inspect_resume_request_state,
@@ -183,6 +184,111 @@ def test_zhilian_unread_rows_exclude_read_and_system_labels() -> None:
     assert [row["id"] for row in rows] == ["real-unread"]
     assert ref is not None
     assert ref.conversation_id == "real-unread"
+
+
+def test_zhilian_unread_rows_keep_action_button_text_but_skip_read_status() -> None:
+    """The trailing unsuitable action text is not a read/system marker."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "index": 0,
+                "label": "张伟\nAI智能体解决方案负责人\n请问还招吗\n06-29\n不合适",
+                "position": "AI智能体解决方案负责人",
+                "unreadCount": 1,
+            },
+            {
+                "index": 1,
+                "label": "陈源\n外部财务产品顾问\n[已读] 好的好的\n06-29\n不合适",
+                "position": "外部财务产品顾问",
+                "unreadCount": 1,
+            },
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["position"] == "AI智能体解决方案负责人"
+
+
+def test_zhilian_unread_badge_without_visible_count_counts_as_one() -> None:
+    """A visible unread badge may have a hidden zero text node on the live page."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "index": 0,
+                "label": "陈坤\nAI应用开发实习生\n请问还在找人吗\n06-29\n不合适",
+                "position": "AI应用开发实习生",
+                "unreadCount": 0,
+                "hasUnreadBadge": True,
+            }
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["unread_count"] == 1
+
+
+def test_zhilian_find_next_unread_skips_rows_without_candidate_reply() -> None:
+    """Rows left in the unread tab after our reply should not block later candidates."""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation(
+                    "AI智能体解决方案负责人",
+                    [{"sender": "me", "text": "你好，方便发一份简历过来吗"}],
+                ),
+                "id": "already-replied",
+                "unread_count": 1,
+            },
+            {
+                **conversation(
+                    "AI应用开发实习生",
+                    [{"sender": "other", "text": "请问还在招吗"}],
+                ),
+                "id": "needs-reply",
+                "unread_count": 1,
+            },
+        ]
+    )
+
+    ref = asyncio.run(find_next_unread_thread(page, owner="owner"))
+
+    assert ref is not None
+    assert ref.conversation_id == "needs-reply"
+
+
+def test_zhilian_find_next_unread_accepts_excluded_conversation_ids() -> None:
+    """A waiting row already handled in this scan should not block later rows."""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation(
+                    "AI应用开发实习生",
+                    [{"sender": "other", "text": "嗯"}],
+                ),
+                "id": "waiting-row",
+                "unread_count": 1,
+            },
+            {
+                **conversation(
+                    "AI应用开发实习生",
+                    [{"sender": "other", "text": "都可以接受"}],
+                ),
+                "id": "next-row",
+                "unread_count": 1,
+            },
+        ]
+    )
+
+    ref = asyncio.run(
+        find_next_unread_thread(page, owner="owner", exclude_ids={"waiting-row"})
+    )
+
+    assert ref is not None
+    assert ref.conversation_id == "next-row"
 
 
 def test_zhilian_identity_requires_name_when_available() -> None:
@@ -389,6 +495,35 @@ def test_send_failure_does_not_persist_asked_question(tmp_path: Path) -> None:
     assert state["next_action"] == "send_failed"
     assert state["stage"] == "screening_question_send_failed"
     assert status.asked_questions == []
+
+
+def test_system_latest_message_does_not_trigger_business_reply(tmp_path: Path) -> None:
+    """A system-only unread update must not reuse the previous candidate message."""
+
+    repository = ConversationRepository(tmp_path / "system-latest.sqlite")
+    page = FakePage(
+        conversations=[
+            conversation(
+                "AI应用开发实习生",
+                [
+                    {"sender": "other", "text": "I am interested"},
+                    {"sender": "system", "text": "colleague communicated with this candidate"},
+                ],
+            )
+        ]
+    )
+    adapter = ZhilianAdapter(page, owner="owner", dry_run=False)
+    runner = ZhilianConversationRunner(
+        adapter,
+        rules=sample_rules(),
+        conversation_repository=repository,
+    )
+
+    state = asyncio.run(runner.run_current())
+
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "last_message_not_candidate"
+    assert page.sent_messages == []
 
 
 def run_case(convo: dict[str, object], llm: FakeLLM | None = None):

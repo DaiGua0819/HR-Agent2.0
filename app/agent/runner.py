@@ -74,6 +74,9 @@ class ConversationRunner:
         return await self._process(state, conversation)
 
     async def _process(self, state: GraphState, conversation: Conversation) -> GraphState:
+        if conversation.messages and not conversation.should_reply:
+            return self._finish(state, "wait", "last_message_not_candidate")
+
         rule = select_position_rule(conversation.candidate.applied_position, self.rules)
         state["rules"] = self.rules
         if not rule:

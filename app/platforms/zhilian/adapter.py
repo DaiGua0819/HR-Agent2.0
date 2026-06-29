@@ -28,8 +28,16 @@ class ZhilianAdapter:
     async def read_unread_conversations(self) -> list[ConversationRef]:
         return await actions.read_unread_conversations(self.page, owner=self.owner)
 
-    async def find_next_unread_thread(self) -> ConversationRef | None:
-        return await actions.find_next_unread_thread(self.page, owner=self.owner)
+    async def find_next_unread_thread(
+        self,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> ConversationRef | None:
+        return await actions.find_next_unread_thread(
+            self.page,
+            owner=self.owner,
+            exclude_ids=exclude_ids,
+        )
 
     async def read_chat_context(self) -> Conversation:
         return await actions.read_chat_context(self.page, owner=self.owner)

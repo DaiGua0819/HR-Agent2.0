@@ -331,7 +331,7 @@ async def _process_zhilian(
     idle_scans = 0
     while len(summaries) < max_items and idle_scans < 3:
         before_actions = len(getattr(adapter.page, "reliable_actions", []))
-        ref = await adapter.find_next_unread_thread()
+        ref = await adapter.find_next_unread_thread(exclude_ids=seen)
         if ref is None:
             scrolled = await _scroll_thread_list(adapter, Platform.ZHILIAN, scrolls)
             scrolls += 1

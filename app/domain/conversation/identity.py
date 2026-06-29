@@ -21,7 +21,7 @@ def resolve_or_create_session(
 
     platform = conversation.platform.value
     owner = conversation.owner
-    platform_conversation_id = str(conversation.id or "").strip()
+    platform_conversation_id = _stable_platform_conversation_id(conversation.id)
     candidate_name = conversation.candidate.name.strip()
     position = conversation.candidate.applied_position.strip()
     fingerprint = recent_messages_fingerprint(conversation.messages)
@@ -120,8 +120,10 @@ def _updated_session(
             conversation.candidate.applied_position.strip()
             or session.applied_position
         ),
-        platform_conversation_id=str(conversation.id or "").strip()
-        or session.platform_conversation_id,
+        platform_conversation_id=(
+            _stable_platform_conversation_id(conversation.id)
+            or session.platform_conversation_id
+        ),
         label=conversation.candidate.label or session.label,
         current_stage=session.current_stage,
         next_action=session.next_action,
@@ -148,3 +150,13 @@ def _session_id(
         "|".join([platform, owner, identity, position]).encode("utf-8")
     ).hexdigest()
     return f"conv_{digest[:24]}"
+
+
+def _stable_platform_conversation_id(value: object) -> str:
+    raw = str(value or "").strip()
+    compact = "".join(raw.split())
+    if compact in {"[已读]", "[未读]", "已读", "未读", "不合适"}:
+        return ""
+    if compact.startswith("[") and compact.endswith("]") and len(compact) <= 8:
+        return ""
+    return raw
