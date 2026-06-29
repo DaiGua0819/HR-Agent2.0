@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes.auth import router as auth_router
 from app.api.routes.automation import router as automation_router
 from app.api.routes.batch import router as batch_router
+from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.email_import import router as email_import_router
 from app.api.routes.health import router as health_router
 from app.api.routes.interview import router as interview_router
@@ -53,6 +54,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(health_router)
+    app.include_router(dashboard_router)
     app.include_router(automation_router)
     app.include_router(resumes_router)
     app.include_router(resume_review_router)

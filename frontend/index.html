@@ -3,9 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HR Agent 简历审阅工作台</title>
+    <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-review" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260629-manager-dashboard" />
   </head>
   <body>
     <div id="app" class="shell">
@@ -14,49 +14,104 @@
           <div class="brand-mark">HR</div>
           <div>
             <strong>HR Agent</strong>
-            <span>招聘控制面</span>
+            <span>招聘管理控制台</span>
           </div>
         </div>
-        <nav class="nav">
-          <button class="active" data-view="resumes">简历库</button>
+        <nav class="nav" aria-label="主导航">
+          <button class="active" data-view="dashboard">经理驾驶舱</button>
+          <button data-view="resumes">简历库</button>
           <button data-view="queue">待我处理</button>
-          <button data-view="suitable">合适待复核</button>
-          <button data-view="archive">不合适归档</button>
+          <button data-view="interviews">面试中心</button>
           <button data-view="automation">自动化控制</button>
-          <button data-view="monitoring">监控日志</button>
+          <button data-view="rules">规则与知识库</button>
         </nav>
+        <div class="sidebar-status" id="sidebarSafety">读取安全状态</div>
       </aside>
 
       <main class="main">
         <header class="topbar">
           <div>
-            <p class="eyebrow">本地预览</p>
-            <h1>简历审阅工作台</h1>
+            <p class="eyebrow" id="pageEyebrow">Manager Console</p>
+            <h1 id="pageTitle">经理驾驶舱</h1>
           </div>
-          <div class="user-card">
-            <span id="userName">加载中</span>
-            <small id="userScope">读取权限范围</small>
+          <div class="topbar-actions">
+            <input id="globalSearch" placeholder="搜索候选人 / 手机 / 岗位" />
+            <div class="user-card">
+              <span id="userName">加载中</span>
+              <small id="userScope">读取权限范围</small>
+            </div>
           </div>
         </header>
 
-        <section class="content">
+        <section class="page active" data-page="dashboard">
+          <div class="dashboard-head">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h2>今日招聘自动化概览</h2>
+            </div>
+            <div class="safety-pill" id="dashboardSafety">读取中</div>
+          </div>
+          <div class="kpi-grid" id="kpiGrid"></div>
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <h3>服务状态</h3>
+                <button id="refreshDashboardBtn">刷新</button>
+              </div>
+              <div class="service-grid" id="serviceGrid"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head">
+                <h3>快捷入口</h3>
+              </div>
+              <div class="quick-grid" id="quickFilters"></div>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>最近处理明细</h3>
+              <span class="muted">来自决策日志和 worker 状态</span>
+            </div>
+            <div class="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>平台</th>
+                    <th>负责人</th>
+                    <th>候选人</th>
+                    <th>岗位</th>
+                    <th>动作</th>
+                    <th>结果</th>
+                  </tr>
+                </thead>
+                <tbody id="dailyRows"></tbody>
+              </table>
+              <div class="empty" id="dailyEmpty">暂无处理明细</div>
+            </div>
+          </section>
+        </section>
+
+        <section class="page" data-page="resumes">
           <div class="library-panel">
             <div class="tabs" id="statusTabs"></div>
             <form class="filters" id="filters">
-              <input name="q" placeholder="搜索姓名 / 手机 / 学校 / 技能" />
-              <input name="owner" placeholder="负责人" />
-              <select name="platform">
-                <option value="">全部平台</option>
-                <option value="boss">BOSS</option>
-                <option value="job51">51job</option>
-                <option value="zhilian">智联</option>
-              </select>
-              <input name="job_type" placeholder="岗位" />
-              <input name="education" placeholder="学历" />
-              <input name="score_min" type="number" min="0" max="100" placeholder="最低分" />
+              <label><span>关键词</span><input name="q" placeholder="姓名 / 手机 / 学校 / 技能" /></label>
+              <label><span>负责人</span><input name="owner" placeholder="宋峰峰 / 和新红" /></label>
+              <label>
+                <span>平台</span>
+                <select name="platform">
+                  <option value="">全部平台</option>
+                  <option value="boss">BOSS</option>
+                  <option value="job51">51job</option>
+                  <option value="zhilian">智联</option>
+                </select>
+              </label>
+              <label><span>岗位</span><input name="job_type" placeholder="岗位" /></label>
+              <label><span>学历</span><input name="education" placeholder="本科 / 硕士" /></label>
+              <label><span>最低分</span><input name="score_min" type="number" min="0" max="100" /></label>
               <button type="submit">筛选</button>
             </form>
-
             <div class="table-wrap">
               <table>
                 <thead>
@@ -76,13 +131,11 @@
               <div class="empty" id="emptyState">正在读取简历库</div>
             </div>
           </div>
-
           <div class="workbench">
             <div class="candidate-list">
               <div class="panel-title">当前结果</div>
               <div id="miniList"></div>
             </div>
-
             <div class="preview-pane">
               <div class="preview-toolbar">
                 <strong id="previewTitle">请选择简历</strong>
@@ -93,7 +146,6 @@
               </div>
               <pre id="resumePreview" class="resume-preview">从左侧列表点击“查看”，这里会固定显示简历内容，不需要整页上下滚动。</pre>
             </div>
-
             <aside class="summary-panel">
               <div class="panel-title">审阅摘要</div>
               <div id="summaryContent" class="summary-content">
@@ -104,12 +156,66 @@
                 <button id="suitableBtn" class="success">合适</button>
                 <button id="unsuitableBtn" class="danger">不合适</button>
                 <button id="moreInfoBtn" class="warning">待补充</button>
+                <button id="interviewBtn" class="primary wide">约面试</button>
               </div>
             </aside>
           </div>
         </section>
+
+        <section class="page" data-page="queue">
+          <section class="panel fill">
+            <div class="panel-head">
+              <h3>待我处理</h3>
+              <button data-quick-tab="queue">刷新队列</button>
+            </div>
+            <div class="task-list" id="queueList"></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="interviews">
+          <div class="interview-layout">
+            <section class="panel">
+              <div class="panel-head"><h3>面试会话</h3></div>
+              <div class="task-list" id="interviewSessions"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><h3>候选人详情</h3></div>
+              <div id="interviewDetail" class="detail-block">从简历库点击“约面试”，或在这里选择已有会话。</div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><h3>题目与飞书</h3></div>
+              <div class="stack">
+                <button id="generateQuestionsBtn">生成题目</button>
+                <button id="syncFeishuBtn">同步飞书</button>
+                <button id="renderImageBtn">生成图片</button>
+                <button id="backfillBtn">反馈回填</button>
+                <p class="muted" id="interviewStatus">真实飞书仍按 mock 接口保护。</p>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page="automation">
+          <section class="panel fill">
+            <div class="panel-head">
+              <h3>自动化控制</h3>
+              <span id="automationSafety" class="safety-pill">读取中</span>
+            </div>
+            <div class="control-grid" id="automationControls"></div>
+            <div class="notice">真实副作用仍由 dry-run / live 守卫控制；本页只集中展示可操作入口。</div>
+          </section>
+        </section>
+
+        <section class="page" data-page="rules">
+          <section class="panel fill">
+            <div class="panel-head"><h3>规则与知识库</h3></div>
+            <div class="detail-block">
+              岗位规则、知识库问答、评分规则和规则建议会收口到这里。当前岗位处理逻辑仍由后端共享规则引擎负责。
+            </div>
+          </section>
+        </section>
       </main>
     </div>
-    <script src="/assets/app.js?v=20260629-review"></script>
+    <script src="/assets/app.js?v=20260629-manager-dashboard"></script>
   </body>
 </html>

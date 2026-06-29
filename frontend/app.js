@@ -1,11 +1,13 @@
 const state = {
+  view: "dashboard",
   user: null,
+  dashboard: null,
   resumes: [],
   selectedId: "",
   context: null,
   tab: "all",
+  interviewSelection: null,
 };
-
 const tabs = [
   ["all", "全部"],
   ["unread", "未看"],
@@ -16,9 +18,8 @@ const tabs = [
   ["needs_more_info", "待补充"],
   ["queue", "待我处理"],
 ];
-
+const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const $ = (id) => document.getElementById(id);
-
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -30,7 +31,6 @@ async function api(path, options = {}) {
   }
   return response.json();
 }
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -38,125 +38,195 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
-
-function labelDecision(value) {
-  return {
-    suitable: "合适",
-    unsuitable: "不合适",
-    needs_more_info: "待补充",
-    undecided: "待判断",
-  }[value || "undecided"];
-}
-
-function decisionClass(value) {
-  return {
-    suitable: "success",
-    unsuitable: "danger",
-    needs_more_info: "warning",
-  }[value] || "";
-}
-
-function platformName(value) {
-  return { boss: "BOSS", job51: "51job", zhilian: "智联" }[value] || value || "未知";
-}
-
-function buildTabs() {
-  $("statusTabs").innerHTML = tabs
-    .map(([key, label]) => `<button data-tab="${key}" class="${state.tab === key ? "active" : ""}">${label}</button>`)
-    .join("");
-  document.querySelectorAll("[data-tab]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.tab = button.dataset.tab;
-      loadResumes();
-    });
+const platformName = (value) => ({ boss: "BOSS", job51: "51job", zhilian: "智联", all: "全部" }[value] || value || "未知");
+const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适", needs_more_info: "待补充", undecided: "待判断" }[value || "undecided"]);
+const decisionClass = (value) => ({ suitable: "success", unsuitable: "danger", needs_more_info: "warning" }[value] || "");
+const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
+const resumeJob = (resume) => resume?.job_type || resume?.jobType || resume?.applied_position || resume?.appliedPosition || "";
+const resumeOwner = (resume) => resume?.linkedOwner || resume?.linked_owner || resume?.source_owner || resume?.sourceOwner || "";
+const resumePlatform = (resume) => resume?.linkedPlatform || resume?.linked_platform || resume?.source_platform || resume?.sourcePlatform || "";
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll("[data-page]").forEach((node) => {
+    node.classList.toggle("active", node.dataset.page === view);
   });
+  document.querySelectorAll("[data-view]").forEach((node) => {
+    node.classList.toggle("active", node.dataset.view === view);
+  });
+  const [eyebrow, title] = pages[view] || pages.dashboard;
+  $("pageEyebrow").textContent = eyebrow;
+  $("pageTitle").textContent = title;
+  if (view === "dashboard") loadDashboard();
+  if (view === "resumes") loadResumes();
+  if (view === "queue") loadQueue();
+  if (view === "interviews") loadInterviewSessions();
+  if (view === "automation") renderAutomationControls();
 }
-
-function queryFromFilters() {
-  const data = new FormData($("filters"));
-  const params = new URLSearchParams({ page_size: "100" });
-  for (const [key, value] of data.entries()) {
-    if (value) params.set(key, value);
-  }
-  if (state.tab === "unread") params.set("read_status", "unread");
-  if (state.tab === "viewed") params.set("read_status", "viewed");
-  if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) {
-    params.set("decision", state.tab);
-  }
-  return params.toString();
-}
-
 async function loadUser() {
   const data = await api("/api/auth/me");
   state.user = data;
   $("userName").textContent = data.user.name;
   $("userScope").textContent = `可见：${data.resumeScope.owners.join("、")} / ${data.resumeScope.platforms.join("、")}`;
 }
-
+async function loadDashboard() {
+  const payload = await api("/api/dashboard/overview");
+  state.dashboard = payload;
+  renderSafety(payload);
+  renderKpis(payload.kpis || []);
+  renderServices(payload.services || []);
+  renderQuickFilters(payload.quickFilters || []);
+  renderDailyRows(payload.recentRecords || []);
+  renderAutomationControls();
+}
+function renderSafety(payload) {
+  const text = payload.dryRun ? "DRY_RUN 已开启：真实副作用受保护" : "LIVE 模式：操作前请二次确认";
+  ["dashboardSafety", "sidebarSafety", "automationSafety"].forEach((id) => {
+    const node = $(id);
+    if (!node) return;
+    node.textContent = text;
+    node.className = payload.dryRun ? "safety-pill safe" : "safety-pill live";
+  });
+}
+function renderKpis(items) {
+  $("kpiGrid").innerHTML = items.map((item) => `<article class="kpi ${escapeHtml(item.tone || "")}"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></article>`).join("");
+}
+function renderServices(items) {
+  $("serviceGrid").innerHTML = items.length
+    ? items
+        .map(
+          (item) => `
+            <article class="service-card">
+              <div>
+                <strong>${escapeHtml(item.label || item.owner)}</strong>
+                <span class="badge ${item.status === "busy" ? "warning" : item.agentReady ? "success" : ""}">
+                  ${escapeHtml(item.status)}
+                </span>
+              </div>
+              <p>浏览器：${item.browserReady ? "在线" : "未就绪"} / CDP：${item.cdpReady ? "通" : "未通"}</p>
+              <p>页面：${escapeHtml(item.pageCount || 0)} / 后端：${escapeHtml(item.browserBackend || "-")}</p>
+            </article>
+          `,
+        )
+        .join("")
+    : `<div class="empty-inline">还没有 worker 状态，启动 worker 后这里会显示服务卡片。</div>`;
+}
+function renderQuickFilters(items) {
+  $("quickFilters").innerHTML = items.map((item) => `<button class="quick-card" data-quick-view="${escapeHtml(item.view)}" data-quick-tab="${escapeHtml(item.tab || "")}">${escapeHtml(item.label)}</button>`).join("");
+  document.querySelectorAll("[data-quick-view]").forEach((button) => {
+    button.onclick = () => {
+      if (button.dataset.quickTab) state.tab = button.dataset.quickTab;
+      setView(button.dataset.quickView);
+    };
+  });
+}
+function renderDailyRows(items) {
+  $("dailyRows").innerHTML = items
+    .map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml((item.time || "").slice(0, 19))}</td>
+          <td>${escapeHtml(platformName(item.platform))}</td>
+          <td>${escapeHtml(item.owner || "")}</td>
+          <td>${escapeHtml(item.candidateName || "")}</td>
+          <td>${escapeHtml(item.position || "")}</td>
+          <td>${escapeHtml(item.action || "")}</td>
+          <td>${escapeHtml(item.result || (item.dryRun ? "dry-run" : ""))}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  $("dailyEmpty").style.display = items.length ? "none" : "block";
+}
+function buildTabs() {
+  $("statusTabs").innerHTML = tabs
+    .map(([key, label]) => `<button data-tab="${key}" class="${state.tab === key ? "active" : ""}">${label}</button>`)
+    .join("");
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    button.onclick = () => {
+      state.tab = button.dataset.tab;
+      if (state.tab === "queue") return loadQueue();
+      loadResumes();
+    };
+  });
+}
+function queryFromFilters() {
+  const data = new FormData($("filters"));
+  const params = new URLSearchParams({ page_size: "100" });
+  for (const [key, value] of data.entries()) if (value) params.set(key, value);
+  if (state.tab === "unread") params.set("read_status", "unread");
+  if (state.tab === "viewed") params.set("read_status", "viewed");
+  if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) params.set("decision", state.tab);
+  return params.toString();
+}
 async function loadResumes() {
   buildTabs();
-  if (state.tab === "queue") {
-    const data = await api("/api/resume-review/queue");
-    state.resumes = data.items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
-  } else {
-    const data = await api(`/api/resumes?${queryFromFilters()}`);
-    state.resumes = data.items || [];
-  }
+  const data = await api(`/api/resumes?${queryFromFilters()}`);
+  state.resumes = data.items || [];
   renderRows();
   renderMiniList();
 }
-
-function renderRows() {
-  const rows = state.resumes.map((resume) => {
-    const review = resume.reviewState || {};
-    const name = resume.name || resume.parsedName || "未命名";
-    const owner = resume.linkedOwner || resume.source_owner || resume.sourceOwner || "";
-    const platform = resume.linkedPlatform || resume.source_platform || resume.sourcePlatform || "";
-    return `
-      <tr class="${resume.id === state.selectedId ? "active" : ""}">
-        <td><strong>${escapeHtml(name)}</strong><br><span class="muted">${escapeHtml(resume.phone || "")}</span></td>
-        <td>${escapeHtml(resume.job_type || resume.jobType || resume.applied_position || resume.appliedPosition || "")}</td>
-        <td>${escapeHtml(platformName(platform))}</td>
-        <td>${escapeHtml(owner)}</td>
-        <td>${resume.match_score ?? resume.matchScore ?? ""}</td>
-        <td>
-          <span class="badge">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
-          <span class="badge ${decisionClass(review.decision)}">${labelDecision(review.decision)}</span>
-        </td>
-        <td>${escapeHtml((resume.updated_at || resume.updatedAt || "").slice(0, 10))}</td>
-        <td>
-          <button data-open="${resume.id}">查看</button>
-          <button data-decision="${resume.id}:suitable">合适</button>
-          <button data-decision="${resume.id}:unsuitable">不合适</button>
-        </td>
-      </tr>
-    `;
-  });
-  $("resumeRows").innerHTML = rows.join("");
-  $("emptyState").style.display = rows.length ? "none" : "block";
-  $("emptyState").textContent = rows.length ? "" : "暂无符合条件的简历";
-  bindRowActions();
+async function loadQueue() {
+  state.tab = "queue";
+  buildTabs();
+  const data = await api("/api/resume-review/queue");
+  const items = data.items || [];
+  state.resumes = items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
+  renderRows();
+  renderMiniList();
+  renderQueue(items);
 }
-
-function renderMiniList() {
-  $("miniList").innerHTML = state.resumes
+function renderRows() {
+  $("resumeRows").innerHTML = state.resumes
     .map((resume) => {
-      const name = resume.name || resume.parsedName || "未命名";
-      const job = resume.job_type || resume.jobType || resume.applied_position || "";
+      const review = resume.reviewState || {};
       return `
-        <button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}">
-          <strong>${escapeHtml(name)}</strong>
-          <small>${escapeHtml(job)}</small>
-        </button>
+        <tr class="${resume.id === state.selectedId ? "active" : ""}">
+          <td><strong>${escapeHtml(resumeName(resume))}</strong><br><span class="muted">${escapeHtml(resume.phone || "")}</span></td>
+          <td>${escapeHtml(resumeJob(resume))}</td>
+          <td>${escapeHtml(platformName(resumePlatform(resume)))}</td>
+          <td>${escapeHtml(resumeOwner(resume))}</td>
+          <td>${escapeHtml(resume.match_score ?? resume.matchScore ?? "")}</td>
+          <td><span class="badge">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
+              <span class="badge ${decisionClass(review.decision)}">${labelDecision(review.decision)}</span></td>
+          <td>${escapeHtml((resume.updated_at || resume.updatedAt || "").slice(0, 10))}</td>
+          <td><button data-open="${resume.id}">查看</button> <button data-decision="${resume.id}:suitable">合适</button></td>
+        </tr>
       `;
     })
     .join("");
+  $("emptyState").style.display = state.resumes.length ? "none" : "block";
   bindRowActions();
 }
-
+function renderMiniList() {
+  $("miniList").innerHTML = state.resumes
+    .map((resume) => `<button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}"><strong>${escapeHtml(resumeName(resume))}</strong><small>${escapeHtml(resumeJob(resume))}</small></button>`)
+    .join("");
+  bindRowActions();
+}
+function renderQueue(items) {
+  $("queueList").innerHTML = items.length
+    ? items
+        .map((item) => {
+          const resume = item.resume || {};
+          return `
+            <article class="task-card">
+              <strong>${escapeHtml(resumeName(resume))}</strong>
+              <span>${escapeHtml(resumeJob(resume))}</span>
+              <p>${escapeHtml(item.assignment?.note || "合适待复核")}</p>
+              <button data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
+            </article>
+          `;
+        })
+        .join("")
+    : `<div class="empty-inline">当前没有待你处理的简历。</div>`;
+  bindRowActions();
+}
 function bindRowActions() {
   document.querySelectorAll("[data-open]").forEach((button) => {
-    button.onclick = () => openResume(button.dataset.open);
+    button.onclick = () => {
+      if (button.dataset.jumpResumes) setView("resumes");
+      openResume(button.dataset.open);
+    };
   });
   document.querySelectorAll("[data-decision]").forEach((button) => {
     button.onclick = () => {
@@ -165,118 +235,155 @@ function bindRowActions() {
     };
   });
 }
-
 async function openResume(id) {
+  if (!id) return;
   state.selectedId = id;
   state.context = await api(`/api/resumes/${id}/review-context`);
   renderRows();
   renderMiniList();
   renderContext();
 }
-
 function resumeText(resume) {
   const payload = resume.payload || {};
-  const parts = [
-    `候选人：${resume.name || resume.parsedName || "未命名"}`,
-    `岗位：${resume.job_type || resume.jobType || resume.applied_position || ""}`,
+  return [
+    `候选人：${resumeName(resume)}`,
+    `岗位：${resumeJob(resume)}`,
     `学历：${resume.education || ""}`,
     `专业：${resume.major || ""}`,
     `电话：${resume.phone || ""}`,
     "",
     payload.rawText || payload.text || payload.summary || "当前没有解析文本。后续接入 PDF 预览后，这里会显示固定高度的简历页视图。",
-  ];
-  return parts.join("\n");
+  ].join("\n");
 }
-
 function renderContext() {
   const context = state.context;
   if (!context) return;
   const resume = context.resume;
   const review = context.reviewState || {};
-  $("previewTitle").textContent = `${resume.name || resume.parsedName || "未命名"} · ${resume.job_type || resume.applied_position || ""}`;
+  $("previewTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
   $("resumePreview").textContent = resumeText(resume);
   $("summaryContent").innerHTML = `
-    <div class="summary-card">
-      <h3>候选人</h3>
-      <p>姓名：${escapeHtml(resume.name || resume.parsedName || "未命名")}</p>
-      <p>岗位：${escapeHtml(resume.job_type || resume.applied_position || "")}</p>
-      <p>电话：${escapeHtml(resume.phone || "")}</p>
-      <p>学历：${escapeHtml(resume.education || "")}</p>
-    </div>
-    <div class="summary-card">
-      <h3>评分</h3>
-      <p>分数：${context.score.value ?? "暂无"}</p>
-      <p>等级：${context.score.grade || "暂无"}</p>
-    </div>
-    <div class="summary-card">
-      <h3>来源</h3>
-      <p>平台：${escapeHtml(platformName(context.conversation.platform))}</p>
-      <p>负责人：${escapeHtml(context.conversation.owner || "")}</p>
-      <p>会话：${escapeHtml(context.conversation.sessionId || "未桥接")}</p>
-    </div>
-    <div class="summary-card">
-      <h3>审阅</h3>
+    <div class="summary-card"><h3>候选人</h3>
+      <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
+      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resume.education || "")}</p></div>
+    <div class="summary-card"><h3>评分</h3>
+      <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
+    <div class="summary-card"><h3>来源</h3>
+      <p>平台：${escapeHtml(platformName(context.conversation?.platform))}</p>
+      <p>负责人：${escapeHtml(context.conversation?.owner || "")}</p>
+      <p>会话：${escapeHtml(context.conversation?.sessionId || "未桥接")}</p></div>
+    <div class="summary-card"><h3>审阅</h3>
       <p>查看：${review.readStatus === "viewed" ? "已看" : "未看"}</p>
-      <p>判断：${labelDecision(review.decision)}</p>
-      <p>备注：${escapeHtml(review.note || "暂无")}</p>
-    </div>
+      <p>判断：${labelDecision(review.decision)}</p><p>备注：${escapeHtml(review.note || "暂无")}</p></div>
   `;
 }
-
 async function setDecision(id, decision) {
-  const reasonTags = {
-    suitable: ["岗位匹配"],
-    unsuitable: ["暂不匹配"],
-    needs_more_info: ["信息待补充"],
-  }[decision] || [];
-  await api(`/api/resumes/${id}/review-decision`, {
-    method: "POST",
-    body: JSON.stringify({ decision, reasonTags, note: "" }),
-  });
+  const reasonTags = { suitable: ["岗位匹配"], unsuitable: ["暂不匹配"], needs_more_info: ["信息待补充"] }[decision] || [];
+  await api(`/api/resumes/${id}/review-decision`, { method: "POST", body: JSON.stringify({ decision, reasonTags, note: "" }) });
   await loadResumes();
-  const index = state.resumes.findIndex((resume) => resume.id === id);
-  const next = state.resumes[index + 1] || state.resumes[index] || state.resumes[0];
+  const next = state.resumes.find((resume) => resume.id === id) || state.resumes[0];
   if (next) await openResume(next.id);
 }
-
+async function requestInterview() {
+  if (!state.selectedId || !state.context) return;
+  const payload = await api("/api/interview/invite", {
+    method: "POST",
+    body: JSON.stringify({ resumeId: state.selectedId, dryRun: true }),
+  });
+  state.interviewSelection = { resume: state.context.resume, payload };
+  setView("interviews");
+  renderInterviewDetail();
+}
+async function loadInterviewSessions() {
+  try {
+    const data = await api("/api/interview-center/sessions");
+    $("interviewSessions").innerHTML = (data.items || []).length
+      ? data.items.map((item) => `<button class="mini-item">${escapeHtml(item.candidateName || item.id)}</button>`).join("")
+      : `<div class="empty-inline">暂无面试会话。</div>`;
+  } catch (error) {
+    $("interviewSessions").innerHTML = `<div class="empty-inline">面试会话读取失败：${escapeHtml(error.message)}</div>`;
+  }
+  renderInterviewDetail();
+}
+function renderInterviewDetail() {
+  const selected = state.interviewSelection;
+  if (!selected) return;
+  const resume = selected.resume || {};
+  $("interviewDetail").innerHTML = `
+    <h3>${escapeHtml(resumeName(resume))}</h3>
+    <p>岗位：${escapeHtml(resumeJob(resume))}</p>
+    <p>来源：${escapeHtml(platformName(resumePlatform(resume)))} / ${escapeHtml(resumeOwner(resume))}</p>
+    <p>入口状态：${selected.payload?.accepted ? "已定位，等待真实约面流程" : "待确认"}</p>
+  `;
+}
+function renderAutomationControls() {
+  const owners = state.user?.resumeScope?.owners || ["宋峰峰", "和新红"];
+  const platforms = state.user?.resumeScope?.platforms || ["boss", "job51", "zhilian"];
+  $("automationControls").innerHTML = `
+    <button class="control-card primary" data-process-all>按配置处理全部</button>
+    ${owners
+      .flatMap((owner) =>
+        platforms.map(
+          (platform) => `
+            <button class="control-card" data-run-platform="${platform}" data-run-owner="${escapeHtml(owner)}">
+              ${escapeHtml(owner)} · ${platformName(platform)} 处理未读
+            </button>
+          `,
+        ),
+      )
+      .join("")}
+  `;
+  document.querySelector("[data-process-all]")?.addEventListener("click", processAll);
+  document.querySelectorAll("[data-run-platform]").forEach((button) => {
+    button.onclick = () => runProcess(button.dataset.runPlatform, button.dataset.runOwner);
+  });
+}
+async function processAll() {
+  await api("/automation/process-all", { method: "POST" });
+  await loadDashboard();
+}
+async function runProcess(platform, owner) {
+  await api(`/automation/${platform}/process-messages?owner=${encodeURIComponent(owner)}`, { method: "POST" });
+  await loadDashboard();
+}
 function move(offset) {
   if (!state.resumes.length) return;
   const index = Math.max(0, state.resumes.findIndex((resume) => resume.id === state.selectedId));
   const next = state.resumes[Math.min(state.resumes.length - 1, Math.max(0, index + offset))];
   if (next) openResume(next.id);
 }
-
 function bindPageActions() {
+  document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
     loadResumes();
+  });
+  $("refreshDashboardBtn").onclick = loadDashboard;
+  $("globalSearch").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    $("filters").q.value = event.target.value;
+    setView("resumes");
   });
   $("viewedBtn").onclick = () => state.selectedId && openResume(state.selectedId);
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("moreInfoBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "needs_more_info");
+  $("interviewBtn").onclick = requestInterview;
   $("prevBtn").onclick = () => move(-1);
   $("nextBtn").onclick = () => move(1);
-  document.querySelectorAll(".nav button").forEach((button) => {
-    button.onclick = () => {
-      document.querySelectorAll(".nav button").forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      if (button.dataset.view === "queue") state.tab = "queue";
-      if (button.dataset.view === "suitable") state.tab = "suitable";
-      if (button.dataset.view === "archive") state.tab = "unsuitable";
-      loadResumes();
-    };
+  ["generateQuestionsBtn", "syncFeishuBtn", "renderImageBtn", "backfillBtn"].forEach((id) => {
+    $(id).onclick = () => ($("interviewStatus").textContent = "当前首版界面已保留入口，真实调用继续复用后端面试中心接口。");
   });
 }
-
 async function init() {
   bindPageActions();
   buildTabs();
   await loadUser();
+  await loadDashboard();
   await loadResumes();
 }
-
 init().catch((error) => {
-  $("emptyState").style.display = "block";
-  $("emptyState").textContent = `加载失败：${error.message}`;
+  $("pageTitle").textContent = "加载失败";
+  $("dailyEmpty").style.display = "block";
+  $("dailyEmpty").textContent = error.message;
 });
