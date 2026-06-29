@@ -31,7 +31,6 @@ from app.platforms.zhilian import selectors as zhilian_selectors
 from app.platforms.zhilian.adapter import ZhilianAdapter
 from app.settings import load_settings
 
-
 PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 90
 JOB51_CLEANUP_TIMEOUT_SECONDS = 12
 
@@ -141,7 +140,14 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     unread = await adapter.select_unread_filter()
     missing: list[str] = []
     if not unread.get("selected"):
-        missing.append(f"unread filter not active: {unread}")
+        row_states = await _candidate_row_states(adapter, platform)
+        if row_states:
+            missing.append(f"unread filter not active: {unread}")
+        else:
+            print(
+                f"preflight unread filter inactive but no real unread rows: {unread}",
+                flush=True,
+            )
     if platform == Platform.JOB51:
         required = {"thread list": job51_selectors.THREAD_ITEM}
         conditional = {
@@ -233,7 +239,7 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                     ).run_current(),
                     timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 summaries.append(
                     _failure_summary(
                         row_state,
@@ -350,7 +356,7 @@ async def _process_zhilian(
                 ).run_current(),
                 timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             summaries.append(
                 _failure_summary(
                     {"id": ref.conversation_id, "label": ref.conversation_id},
@@ -363,7 +369,10 @@ async def _process_zhilian(
             )
             seen.add(ref.conversation_id)
             idle_scans = 0
-            print(f"[{Platform.ZHILIAN.value}] candidate timed out: {ref.conversation_id}", flush=True)
+            print(
+                f"[{Platform.ZHILIAN.value}] candidate timed out: {ref.conversation_id}",
+                flush=True,
+            )
             continue
         conversation_id = str(state.get("conversation_id") or ref.conversation_id)
         seen.update({ref.conversation_id, conversation_id})
@@ -567,7 +576,7 @@ async def _cleanup_job51(page: Any, *, phase: str) -> dict[str, object]:
             cleanup_resume_overlays(page),
             timeout=JOB51_CLEANUP_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {
             "closed": False,
             "reason": f"{phase}_cleanup_timeout",

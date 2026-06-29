@@ -22,6 +22,7 @@ from app.platforms.boss.dom_scripts import (
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
 )
+from app.platforms.boss.row_click import click_row_state, find_row_for_state
 from app.platforms.types import (
     Candidate,
     ChatMessage,
@@ -107,12 +108,14 @@ async def find_next_unread_thread(page: BrowserPage, *, owner: str) -> Conversat
         return None
     for state in unread:
         label = str(state.get("label") or "")
-        row = await _find_row_for_state(page, state)
+        row = await find_row_for_state(page, state)
         if row is None:
             continue
         if _should_skip_label(label):
             continue
         result = await reliable_click_element(page, row, label="BOSS候选人会话")
+        if not result.get("ok"):
+            result = await click_row_state(page, state, label="BOSS候选人会话")
         if result.get("ok"):
             return ConversationRef(Platform.BOSS, owner, str(state.get("id") or label))
     return None

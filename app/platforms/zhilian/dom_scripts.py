@@ -16,7 +16,10 @@ UNREAD_FILTER_STATE_JS = r"""
       rect.width > 0 && rect.height > 0;
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
-  const controls = Array.from(document.querySelectorAll(
+  const exact = Array.from(document.querySelectorAll(
+    ".side-panel-header__checkbox.km-checkbox, .side-panel-header__checkbox"
+  )).filter((el) => visible(el) && text(el) === "未读");
+  const controls = exact.length ? exact : Array.from(document.querySelectorAll(
     ".side-panel-header__checkbox, .km-checkbox, [role='checkbox'], " +
     "label, button, a, span, div, [role='button']"
   )).filter((el) => visible(el) && text(el).includes("未读"));
@@ -45,10 +48,13 @@ CLICK_UNREAD_FILTER_JS = r"""
       rect.width > 0 && rect.height > 0;
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
-  const candidates = Array.from(document.querySelectorAll(
+  const exact = Array.from(document.querySelectorAll(
+    ".side-panel-header__checkbox.km-checkbox, .side-panel-header__checkbox"
+  )).filter((el) => visible(el) && text(el) === "未读");
+  const candidates = (exact.length ? exact : Array.from(document.querySelectorAll(
     ".side-panel-header__checkbox, .km-checkbox, [role='checkbox'], " +
     "label, button, a, span, div, [role='button']"
-  )).filter((el) => visible(el) && text(el).includes("未读"))
+  )).filter((el) => visible(el) && text(el).includes("未读")))
     .sort((a, b) => text(a).length - text(b).length);
   const target = candidates[0];
   if (!target) return { selected: false, reason: "unread_filter_not_found" };
@@ -90,9 +96,21 @@ READ_UNREAD_ROWS_JS = r"""
       const match = text(badge).match(/\d+/);
       return match ? Number.parseInt(match[0], 10) : 0;
     });
+    const hasDot = badges.some((badge) => {
+      const cls = String(badge.className || "");
+      const value = text(badge).replace(/\s+/g, "");
+      const dot = badge.querySelector(".km-badge__item, sup, [class*='dot']");
+      return value !== "0" && (
+        cls.includes("dot") ||
+        (dot && visible(dot) && text(dot).replace(/\s+/g, "") !== "0")
+      );
+    });
     if (!badges.length) return { count: 0, hasUnreadBadge: false };
     const maxCount = counts.length ? Math.max(...counts) : 0;
-    return { count: maxCount > 0 ? maxCount : 1, hasUnreadBadge: true };
+    return {
+      count: maxCount > 0 ? maxCount : (hasDot ? 1 : 0),
+      hasUnreadBadge: maxCount > 0 || hasDot,
+    };
   };
   return {
     unreadActive,
