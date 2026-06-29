@@ -30,7 +30,11 @@ async def select_all_filter(page: Any) -> dict[str, object]:
 
 
 async def process_boss_targets(
-    adapter: BossAdapter, conversation_ids: list[str]
+    adapter: BossAdapter,
+    conversation_ids: list[str],
+    *,
+    conversation_repository: Any | None = None,
+    artifact_store: Any | None = None,
 ) -> list[dict[str, Any]]:
     """按会话 id 逐个处理 BOSS 会话。"""
 
@@ -41,7 +45,11 @@ async def process_boss_targets(
             summaries.append(_not_found_summary(conversation_id))
             continue
         context = await _wait_for_context(adapter)
-        state = await ConversationRunner(adapter).run_current()
+        state = await ConversationRunner(
+            adapter,
+            conversation_repository=conversation_repository,
+            artifact_store=artifact_store,
+        ).run_current()
         messages = state.get("messages") if isinstance(state.get("messages"), list) else []
         candidate = state.get("candidate") if isinstance(state.get("candidate"), dict) else {}
         summaries.append(

@@ -170,3 +170,55 @@
 - 风险 / 待确认：
   - 这次只修“是否已有附件简历”的判定，不新增智联真实 PDF 下载落盘能力。
   - 如果智联真实页面的附件卡片不是文本/文件名形式，后续需要根据登录页面采样继续补充更精准的附件卡片选择器。
+
+---
+
+### 快照 0025：候选人会话状态持久化与简历 artifact 桥接
+- 修改时间：2026-06-29 09:25:51 +08:00
+- 修改原因：
+  - 用户要求把“处理消息状态”和“简历入库解析”拆开：处理消息时只定位平台会话并快写下载 artifact，简历姓名先允许为空，后续解析入库时再回填 `parsed_name`。
+  - 主关联依据必须是下载发生时的 `session_id`，不能依赖简历解析姓名；姓名只用于展示、检索和历史数据兜底匹配。
+- 修改文件：
+  - `app/db/schema.sql`
+  - `app/db/engine.py`
+  - `app/domain/conversation/__init__.py`
+  - `app/domain/conversation/models.py`
+  - `app/domain/conversation/dedup.py`
+  - `app/domain/conversation/identity.py`
+  - `app/domain/conversation/repository.py`
+  - `app/domain/resume/models.py`
+  - `app/domain/resume/repository.py`
+  - `app/domain/resume/name_parser.py`
+  - `app/domain/resume/artifacts.py`
+  - `app/agent/persistence.py`
+  - `app/agent/message_utils.py`
+  - `app/agent/runner.py`
+  - `app/worker/runtime.py`
+  - `app/browser/read_once.py`
+  - `app/platforms/job51/actions_resume.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `app/api/routes/resumes.py`
+  - `app/domain/resume/service.py`
+  - `scripts/run_boss_once.py`
+  - `scripts/boss_targeting.py`
+  - `scripts/platform_once_common.py`
+  - `tests/domain/test_conversation_state_bridge.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增 `conversation_sessions`、`conversation_messages`、`candidate_status`、`resume_artifacts` 四张表；`resumes` 增加 nullable 桥接字段 `parsed_name / linked_session_id / linked_platform / linked_owner / linked_platform_conversation_id / source_artifact_id`。
+  - `run_migrations()` 增加旧表预补列逻辑，避免旧库已有 `resumes` 表时，新索引先于补列执行导致启动失败。
+  - 新增会话身份定位：优先 `platform + owner + platform_conversation_id + position`，没有平台 ID 时用 `candidate_name + position + recent_messages_fingerprint` 兜底；岗位纳入身份键，避免同人不同岗位串档。
+  - 新增会话消息去重与候选人状态持久化；Runner 读取会话后先写 session/messages，处理完成后写阶段、下一动作和状态。
+  - dry-run 只写观察状态和决策，不会把 `resume_requested / resume_downloaded / linked_*` 置为真实完成。
+  - 新增 `resume_artifacts` 桥接层：51job 下载成功后写 `session_id / platform / owner / platform_conversation_id / candidate_name_from_platform / position / file_path / file_hash / parse_status=pending`，`parsed_name` 初始为空。
+  - 新增 `parse_pending_artifacts()`：后续解析 artifact 文件，生成/更新 Resume，并回填 `parsed_name / linked_session_id / source_artifact_id`；简历姓名与平台显示名不一致时仍保持硬关联。
+  - 51job 下载结果补充 `sourceKind`，区分 `attachment` 与 `online_resume`。
+  - worker、BOSS/51/智联一次性脚本和 dry-run read 路径均显式注入同一套持久化仓储。
+  - 简历 API 响应保留 snake_case 字段，同时补充 `parsedName / linkedSessionId / linkedPlatform / linkedOwner / linkedPlatformConversationId / sourceArtifactId`。
+  - 面试入口新增会话定位：有 `linked_session_id` 时直接返回唯一 session；只有姓名+岗位匹配时返回候选列表并标记 `requiresConfirmation=True`。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_conversation_state_bridge.py -q`：7 passed。
+- 风险 / 待确认：
+  - BOSS/智联真实 PDF 下载能力尚未新增；后续实现时必须复用 `ResumeArtifactStore.record_download()`。
+  - artifact 解析目前是轻量文本/PDF 文本提取，复杂简历解析与字段清洗仍应由后续简历入库解析流程承接。

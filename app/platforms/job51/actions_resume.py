@@ -121,12 +121,12 @@ async def request_or_download_resume(
     if isinstance(content, str):
         content = content.encode("utf-8")
     if isinstance(content, bytes):
-        result = save_resume_bytes(
+        result = _with_source_kind(save_resume_bytes(
             content,
             candidate_name=candidate_name,
             applied_position=position,
             memory=memory,
-        )
+        ), "attachment")
         if result.get("ok"):
             return {"requested": False, "resumeReceived": True, **result}
         clicked, confirmed = await _request_resume_with_confirm(page)
@@ -150,13 +150,13 @@ async def _download_attachment_resume(
             payload = await _safe_eval_dict(page, RESUME_PAYLOAD_JS)
         content = await _payload_resume_bytes(page, payload)
         if content is not None:
-            return save_resume_bytes(
+            return _with_source_kind(save_resume_bytes(
                 content,
                 candidate_name=candidate_name,
                 applied_position=applied_position,
                 filename=str(payload.get("filename") or ""),
                 memory=memory,
-            )
+            ), "attachment")
         if not payload.get("href"):
             opened = await _open_attachment_resume_preview(page)
             if not opened:
@@ -168,13 +168,13 @@ async def _download_attachment_resume(
         content = await _fetch_blob_resume_bytes(page, href)
         if content is None:
             return {"ok": False, "blocked": True, "reason": "attachment_blob_fetch_failed"}
-        return save_resume_bytes(
+        return _with_source_kind(save_resume_bytes(
             content,
             candidate_name=candidate_name,
             applied_position=applied_position,
             filename=str(payload.get("filename") or ""),
             memory=memory,
-        )
+        ), "attachment")
     finally:
         await close_resume_preview(page)
 
@@ -210,13 +210,13 @@ async def _download_online_resume(
                 "reason": "online_resume_download_link_missing",
                 "href": href,
             }
-        return save_resume_bytes(
+        return _with_source_kind(save_resume_bytes(
             content,
             candidate_name=candidate_name,
             applied_position=applied_position,
             filename=str(payload.get("filename") or ""),
             memory=memory,
-        )
+        ), "online_resume")
     finally:
         await close_resume_preview(page)
 
@@ -376,6 +376,12 @@ async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
         if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
             return {"verified": True}
     return {"verified": False, "reason": "confirm_not_visible"}
+
+
+def _with_source_kind(result: dict[str, object], source_kind: str) -> dict[str, object]:
+    if result.get("ok"):
+        return {**result, "sourceKind": source_kind}
+    return result
 
 
 async def _safe_eval_dict(

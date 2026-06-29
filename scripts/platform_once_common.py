@@ -15,6 +15,7 @@ from dataclasses import asdict
 from typing import Any
 from urllib.request import urlopen
 
+from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.cloak import cdp_url_for
 from app.browser.manager import BrowserManager
@@ -157,8 +158,14 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
 
 
 async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[str, Any]]:
+    conversation_repository, artifact_store = build_persistence_from_settings()
     if platform == Platform.ZHILIAN:
-        return await _process_zhilian(adapter, limit)
+        return await _process_zhilian(
+            adapter,
+            limit,
+            conversation_repository=conversation_repository,
+            artifact_store=artifact_store,
+        )
 
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -189,7 +196,11 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             )
             if not click.get("ok"):
                 continue
-            state = await ConversationRunner(adapter).run_current()
+            state = await ConversationRunner(
+                adapter,
+                conversation_repository=conversation_repository,
+                artifact_store=artifact_store,
+            ).run_current()
             conversation_id = str(state.get("conversation_id") or label)
             seen.update({row_key, label, conversation_id})
             summary = _summary_from_state(state)
@@ -209,7 +220,13 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
     return summaries
 
 
-async def _process_zhilian(adapter: Any, limit: int) -> list[dict[str, Any]]:
+async def _process_zhilian(
+    adapter: Any,
+    limit: int,
+    *,
+    conversation_repository: Any,
+    artifact_store: Any,
+) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
     max_items = max(1, limit)
@@ -226,7 +243,11 @@ async def _process_zhilian(adapter: Any, limit: int) -> list[dict[str, Any]]:
         if ref.conversation_id in seen:
             idle_scans += 1
             continue
-        state = await ConversationRunner(adapter).run_current()
+        state = await ConversationRunner(
+            adapter,
+            conversation_repository=conversation_repository,
+            artifact_store=artifact_store,
+        ).run_current()
         conversation_id = str(state.get("conversation_id") or ref.conversation_id)
         seen.update({ref.conversation_id, conversation_id})
         summary = _summary_from_state(state)

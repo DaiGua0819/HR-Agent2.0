@@ -17,6 +17,16 @@ from app.db.engine import connect, run_migrations
 from app.domain.resume.models import Resume, ResumeRecord
 from app.settings import AppSettings, load_settings
 
+_BASE_COLUMNS = ["id", "payload", "phone_key", "job_type", "match_score", "updated_at"]
+_BRIDGE_COLUMNS = [
+    "parsed_name",
+    "linked_session_id",
+    "linked_platform",
+    "linked_owner",
+    "linked_platform_conversation_id",
+    "source_artifact_id",
+]
+
 
 class ResumeRepository:
     """封装简历读写边界。"""
@@ -84,16 +94,14 @@ class ResumeRepository:
             return
         if self.read_only and not self.database_path.exists():
             return
-        sql = (
-            "SELECT id, payload, phone_key, job_type, match_score, updated_at "
-            "FROM resumes ORDER BY updated_at DESC"
-        )
         params: tuple[Any, ...] = ()
+        suffix = " ORDER BY updated_at DESC"
         if limit is not None:
-            sql += " LIMIT ?"
+            suffix += " LIMIT ?"
             params = (limit,)
         try:
             with connect(self.database_path, read_only=self.read_only) as connection:
+                sql = f"SELECT {_resume_select_columns(connection)} FROM resumes{suffix}"
                 rows = connection.execute(sql, params).fetchall()
         except sqlite3.Error:
             return
@@ -112,12 +120,12 @@ class ResumeRepository:
             return self._memory_records.get(resume_id)
         if self.read_only and not self.database_path.exists():
             return None
-        sql = (
-            "SELECT id, payload, phone_key, job_type, match_score, updated_at "
-            "FROM resumes WHERE id = ?"
-        )
         try:
             with connect(self.database_path, read_only=self.read_only) as connection:
+                sql = (
+                    f"SELECT {_resume_select_columns(connection)} "
+                    "FROM resumes WHERE id = ?"
+                )
                 row = connection.execute(sql, (resume_id,)).fetchone()
         except sqlite3.Error:
             return None
@@ -136,14 +144,24 @@ class ResumeRepository:
         with connect(self.database_path) as connection:
             connection.execute(
                 """
-                INSERT INTO resumes (id, payload, phone_key, job_type, match_score, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO resumes (
+                  id, payload, phone_key, job_type, match_score, updated_at,
+                  parsed_name, linked_session_id, linked_platform, linked_owner,
+                  linked_platform_conversation_id, source_artifact_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   payload = excluded.payload,
                   phone_key = excluded.phone_key,
                   job_type = excluded.job_type,
                   match_score = excluded.match_score,
-                  updated_at = excluded.updated_at
+                  updated_at = excluded.updated_at,
+                  parsed_name = excluded.parsed_name,
+                  linked_session_id = excluded.linked_session_id,
+                  linked_platform = excluded.linked_platform,
+                  linked_owner = excluded.linked_owner,
+                  linked_platform_conversation_id = excluded.linked_platform_conversation_id,
+                  source_artifact_id = excluded.source_artifact_id
                 """,
                 _record_params(record),
             )
@@ -171,6 +189,22 @@ class ResumeRepository:
             job_type=str(job_type),
             match_score=_optional_int(fields.get("match_score"), current.match_score),
             updated_at=_now_iso(),
+            parsed_name=str(fields.get("parsed_name", current.parsed_name) or ""),
+            linked_session_id=str(
+                fields.get("linked_session_id", current.linked_session_id) or ""
+            ),
+            linked_platform=str(fields.get("linked_platform", current.linked_platform) or ""),
+            linked_owner=str(fields.get("linked_owner", current.linked_owner) or ""),
+            linked_platform_conversation_id=str(
+                fields.get(
+                    "linked_platform_conversation_id",
+                    current.linked_platform_conversation_id,
+                )
+                or ""
+            ),
+            source_artifact_id=str(
+                fields.get("source_artifact_id", current.source_artifact_id) or ""
+            ),
         )
         return self.save(Resume.from_record(record))
 
@@ -199,6 +233,15 @@ class ResumeRepository:
             job_type=row["job_type"],
             match_score=row["match_score"],
             updated_at=row["updated_at"],
+            parsed_name=_row_value(row, "parsed_name"),
+            linked_session_id=_row_value(row, "linked_session_id"),
+            linked_platform=_row_value(row, "linked_platform"),
+            linked_owner=_row_value(row, "linked_owner"),
+            linked_platform_conversation_id=_row_value(
+                row,
+                "linked_platform_conversation_id",
+            ),
+            source_artifact_id=_row_value(row, "source_artifact_id"),
         )
 
 
@@ -210,6 +253,12 @@ def _record_params(record: ResumeRecord) -> tuple[Any, ...]:
         record.job_type,
         record.match_score,
         record.updated_at,
+        record.parsed_name,
+        record.linked_session_id,
+        record.linked_platform,
+        record.linked_owner,
+        record.linked_platform_conversation_id,
+        record.source_artifact_id,
     )
 
 
@@ -221,7 +270,29 @@ def _with_updated_at(record: ResumeRecord, updated_at: str) -> ResumeRecord:
         job_type=record.job_type,
         match_score=record.match_score,
         updated_at=updated_at,
+        parsed_name=record.parsed_name,
+        linked_session_id=record.linked_session_id,
+        linked_platform=record.linked_platform,
+        linked_owner=record.linked_owner,
+        linked_platform_conversation_id=record.linked_platform_conversation_id,
+        source_artifact_id=record.source_artifact_id,
     )
+
+
+def _resume_select_columns(connection: sqlite3.Connection) -> str:
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(resumes)")}
+    columns = []
+    for column in [*_BASE_COLUMNS, *_BRIDGE_COLUMNS]:
+        columns.append(column if column in existing else f"NULL AS {column}")
+    return ", ".join(columns)
+
+
+def _row_value(row: Any, key: str) -> str:
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return ""
+    return str(value or "")
 
 
 def _optional_int(value: object, fallback: int | None) -> int | None:

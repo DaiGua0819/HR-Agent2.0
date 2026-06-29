@@ -6,6 +6,8 @@ from dataclasses import asdict
 from typing import Any
 
 from app.agent.judgement import judge_candidate_reply
+from app.agent.message_utils import append_sent, last_non_system, message_sent
+from app.agent.persistence import ConversationPersistence
 from app.agent.policy import (
     prephrase_candidates,
     prephrase_text,
@@ -26,6 +28,8 @@ from app.agent.screening import (
     select_position_screening_question_text,
 )
 from app.agent.state import GraphState
+from app.domain.conversation.repository import ConversationRepository
+from app.domain.resume.artifacts import ResumeArtifactStore
 from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSink
 from app.platforms.base import PlatformAdapter
 from app.platforms.types import Conversation, MessageSender
@@ -48,17 +52,25 @@ class ConversationRunner:
         rules: dict[str, Any] | None = None,
         llm: Any | None = None,
         decision_sink: InMemoryDecisionSink | None = None,
+        conversation_repository: ConversationRepository | None = None,
+        artifact_store: ResumeArtifactStore | None = None,
     ) -> None:
         self.adapter = adapter
         self.rules = rules or load_chat_rules()
         self.llm = llm
         self.decision_sink = decision_sink or GLOBAL_DECISION_SINK
+        self.persistence = ConversationPersistence(
+            repository=conversation_repository,
+            artifact_store=artifact_store,
+            adapter=adapter,
+        )
 
     async def run_current(self) -> GraphState:
         """读取当前会话并推进一轮。"""
 
         conversation = await self.adapter.read_chat_context()
         state = self._state_from_conversation(conversation)
+        self.persistence.attach(state, conversation)
         return await self._process(state, conversation)
 
     async def _process(self, state: GraphState, conversation: Conversation) -> GraphState:
@@ -69,7 +81,7 @@ class ConversationRunner:
         state["position_rule"] = rule
         state["rule_source"] = rule.get("ruleSource", "")
 
-        last = _last_non_system(conversation)
+        last = last_non_system(conversation)
         if not last or last.sender != MessageSender.CANDIDATE:
             return self._finish(state, "wait", "last_message_not_candidate")
 
@@ -123,6 +135,14 @@ class ConversationRunner:
         *,
         knowledge_answer: str = "",
     ) -> GraphState:
+        if self.persistence.has_resume_completion():
+            return self._finish(
+                state,
+                "wait",
+                "resume_already_completed",
+                knowledgeAnswer=knowledge_answer,
+                result={"skipped": True, "reason": "persisted_resume_completed"},
+            )
         request_state = await self.adapter.inspect_resume_request_state()
         position = conversation.candidate.applied_position
         if request_state.has_resume_attachment:
@@ -154,11 +174,11 @@ class ConversationRunner:
                 result=result,
             )
         candidates = prephrase_candidates(conversation.platform, position, rule)
-        if candidates and not any(_message_sent(conversation, item) for item in candidates):
+        if candidates and not any(message_sent(conversation, item) for item in candidates):
             prompt = prephrase_text(conversation.platform, position, rule)
             if prompt:
                 await self.adapter.send_message(prompt)
-                _append_sent(state, prompt)
+                append_sent(state, prompt)
         result = await self.adapter.request_resume()
         state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
         return self._finish(
@@ -177,8 +197,15 @@ class ConversationRunner:
         reply_text: str,
     ) -> GraphState:
         phrase = initial_common_phrase(rule)
-        if phrase and not _message_sent(conversation, phrase):
+        if phrase and not message_sent(conversation, phrase):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
+        if self.persistence.has_resume_completion():
+            return self._finish(
+                state,
+                "wait",
+                "resume_already_completed",
+                result={"skipped": True, "reason": "persisted_resume_completed"},
+            )
         request_state = await self.adapter.inspect_resume_request_state()
         if request_state.has_resume_attachment:
             return self._finish(
@@ -225,7 +252,7 @@ class ConversationRunner:
             await self.adapter.send_company_info(phrase=phrase, phrase_key="basic_conditions")
         else:
             await self.adapter.send_message(phrase)
-        _append_sent(state, phrase)
+        append_sent(state, phrase)
         return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
 
     async def _handle_screening(
@@ -260,7 +287,7 @@ class ConversationRunner:
             if not next_question:
                 return self._finish(state, "wait", "no_screening_question_text", screening=analysis)
             await self.adapter.send_message(next_question)
-            _append_sent(state, next_question)
+            append_sent(state, next_question)
             return self._finish(
                 state,
                 "ask_screening",
@@ -269,6 +296,15 @@ class ConversationRunner:
                 screening=analysis,
             )
         if status == "accept":
+            if self.persistence.has_resume_completion():
+                return self._finish(
+                    state,
+                    "wait",
+                    "resume_already_completed",
+                    knowledgeAnswer=knowledge_answer,
+                    screening=analysis,
+                    result={"skipped": True, "reason": "persisted_resume_completed"},
+                )
             result = await self.adapter.request_resume()
             state["resume_requested"] = bool(
                 result.get("requested") or result.get("resumeReceived")
@@ -314,7 +350,7 @@ class ConversationRunner:
         return bool(
             phrase
             and is_ai_basic_rule(conversation.candidate.applied_position, rule)
-            and not _message_sent(conversation, phrase)
+            and not message_sent(conversation, phrase)
         )
 
     def _state_from_conversation(self, conversation: Conversation) -> GraphState:
@@ -348,34 +384,12 @@ class ConversationRunner:
                 **extra,
             }
         )
+        self.persistence.finish(state, action=action, reason=reason, extra=extra)
         return state
 
     async def _send_knowledge_answer(self, state: GraphState, answer: str) -> None:
         await self.adapter.send_message(answer)
-        _append_sent(state, answer)
-
-
-def _last_non_system(conversation: Conversation):
-    for message in reversed(conversation.messages):
-        if message.sender != MessageSender.SYSTEM and message.text.strip():
-            return message
-    return None
-
-
-def _message_sent(conversation: Conversation, text: str) -> bool:
-    needle = "".join(text.split())
-    return any(
-        message.sender == MessageSender.ME and needle and needle in "".join(message.text.split())
-        for message in conversation.messages
-    )
-
-
-def _append_sent(state: GraphState, message: str) -> None:
-    sent = state.get("sent_messages")
-    if not isinstance(sent, list):
-        sent = []
-    sent.append(message)
-    state["sent_messages"] = sent
+        append_sent(state, answer)
 
 
 ZhilianConversationRunner = ConversationRunner

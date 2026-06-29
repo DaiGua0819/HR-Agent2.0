@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
@@ -53,7 +54,7 @@ async def list_resumes(
         descending=desc,
     )
     return {
-        "items": [item.model_dump() for item in result.items],
+        "items": [_resume_payload(item) for item in result.items],
         "total": result.total,
         "page": result.page,
         "pageSize": result.page_size,
@@ -68,7 +69,7 @@ async def get_resume(resume_id: str, request: Request) -> dict[str, object]:
     resume = _service(request).get_resume(resume_id)
     if resume is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
-    return resume.model_dump()
+    return _resume_payload(resume)
 
 
 @router.patch("/{resume_id}")
@@ -82,7 +83,7 @@ async def update_resume(
     resume = _service(request).update_resume(resume_id, payload.fields)
     if resume is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
-    return {"status": "updated_in_memory", "resume": resume.model_dump()}
+    return {"status": "updated_in_memory", "resume": _resume_payload(resume)}
 
 
 @router.post("/{resume_id}/rescore")
@@ -93,3 +94,18 @@ async def rescore_resume(resume_id: str, request: Request) -> dict[str, object]:
     if result is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
     return result
+
+
+def _resume_payload(resume: Resume) -> dict[str, object]:
+    payload = resume.model_dump()
+    payload.update(
+        {
+            "parsedName": resume.parsed_name,
+            "linkedSessionId": resume.linked_session_id,
+            "linkedPlatform": resume.linked_platform,
+            "linkedOwner": resume.linked_owner,
+            "linkedPlatformConversationId": resume.linked_platform_conversation_id,
+            "sourceArtifactId": resume.source_artifact_id,
+        }
+    )
+    return payload

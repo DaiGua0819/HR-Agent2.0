@@ -128,6 +128,8 @@ def _filter_resumes(
                     resume.major,
                     resume.applied_position,
                     resume.job_type,
+                    resume.parsed_name,
+                    resume.linked_platform_conversation_id,
                     resume.payload.get("rawText"),
                     resume.payload.get("text"),
                 ]

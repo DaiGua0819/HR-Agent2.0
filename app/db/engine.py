@@ -55,12 +55,51 @@ def initialize_database(database_path: str | Path | None = None) -> None:
 def run_migrations(database_path: str | Path | None = None) -> None:
     """执行幂等迁移。"""
 
+    with connect(database_path) as connection:
+        _preflight_existing_tables(connection)
+        connection.commit()
     initialize_database(database_path)
     with connect(database_path) as connection:
         _add_column_if_missing(connection, "batch_items", "file_path", "TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(connection, "batch_items", "message", "TEXT")
         _add_column_if_missing(connection, "batch_items", "resume_id", "TEXT")
+        _add_column_if_missing(connection, "resumes", "parsed_name", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_session_id", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_platform", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_owner", "TEXT")
+        _add_column_if_missing(
+            connection,
+            "resumes",
+            "linked_platform_conversation_id",
+            "TEXT",
+        )
+        _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
         connection.commit()
+
+
+def _preflight_existing_tables(connection: sqlite3.Connection) -> None:
+    """先补旧表列，再执行 schema.sql 中依赖这些列的索引。"""
+
+    tables = {
+        row["name"]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if "batch_items" in tables:
+        _add_column_if_missing(connection, "batch_items", "file_path", "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(connection, "batch_items", "message", "TEXT")
+        _add_column_if_missing(connection, "batch_items", "resume_id", "TEXT")
+    if "resumes" in tables:
+        _add_column_if_missing(connection, "resumes", "parsed_name", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_session_id", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_platform", "TEXT")
+        _add_column_if_missing(connection, "resumes", "linked_owner", "TEXT")
+        _add_column_if_missing(
+            connection,
+            "resumes",
+            "linked_platform_conversation_id",
+            "TEXT",
+        )
+        _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
 
 
 def _add_column_if_missing(

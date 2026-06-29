@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from app.agent.graph import build_recruit_graph
+from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.manager import BrowserManager
 from app.core.constants import Platform
@@ -33,9 +34,12 @@ async def dry_run_read_once(
     if ref is None:
         return {"owner": owner, "platform": platform.value, "processed": 0, "dryRun": True}
 
+    conversation_repository, artifact_store = build_persistence_from_settings()
     state = await ConversationRunner(
         adapter,
         decision_sink=decision_sink or GLOBAL_DECISION_SINK,
+        conversation_repository=conversation_repository,
+        artifact_store=artifact_store,
     ).run_current()
     graph_state = await build_recruit_graph().ainvoke(
         dict(state),

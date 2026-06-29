@@ -33,12 +33,18 @@ class ResumeRecord:
     job_type: str | None
     match_score: int | None
     updated_at: str
+    parsed_name: str = ""
+    linked_session_id: str = ""
+    linked_platform: str = ""
+    linked_owner: str = ""
+    linked_platform_conversation_id: str = ""
+    source_artifact_id: str = ""
 
     @property
     def candidate_name(self) -> str | None:
         """返回常见字段里的候选人姓名，供 smoke test 与列表页使用。"""
 
-        value = self.payload.get("name") or self.payload.get("candidateName")
+        value = self.parsed_name or self.payload.get("name") or self.payload.get("candidateName")
         return str(value) if value else None
 
 
@@ -59,6 +65,12 @@ class Resume(BaseModel):
     match_score: int | None = None
     source_platform: str = "unknown"
     source_owner: str = ""
+    parsed_name: str = ""
+    linked_session_id: str = ""
+    linked_platform: str = ""
+    linked_owner: str = ""
+    linked_platform_conversation_id: str = ""
+    source_artifact_id: str = ""
     updated_at: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -95,9 +107,10 @@ class Resume(BaseModel):
         source = infer_resume_source(payload)
         phone = payload.get("phone") or record.phone_key
         position = payload.get("applied_position") or record.job_type
+        parsed_name = record.parsed_name or str(payload.get("parsed_name") or "")
         return cls(
             id=record.id,
-            name=payload.get("name") or payload.get("candidateName"),
+            name=payload.get("name") or payload.get("candidateName") or parsed_name,
             phone=phone,
             phone_key=record.phone_key or phone,
             gender=payload.get("gender"),
@@ -108,6 +121,15 @@ class Resume(BaseModel):
             match_score=record.match_score,
             source_platform=source["platform"],
             source_owner=source["owner"],
+            parsed_name=parsed_name,
+            linked_session_id=record.linked_session_id
+            or str(payload.get("linked_session_id") or ""),
+            linked_platform=record.linked_platform or str(payload.get("linked_platform") or ""),
+            linked_owner=record.linked_owner or str(payload.get("linked_owner") or ""),
+            linked_platform_conversation_id=record.linked_platform_conversation_id
+            or str(payload.get("linked_platform_conversation_id") or ""),
+            source_artifact_id=record.source_artifact_id
+            or str(payload.get("source_artifact_id") or payload.get("sourceArtifactId") or ""),
             updated_at=record.updated_at,
             payload=payload,
         )
@@ -120,6 +142,18 @@ class Resume(BaseModel):
             value = getattr(self, key)
             if value:
                 payload[key] = value
+        if self.parsed_name:
+            payload["parsed_name"] = self.parsed_name
+        if self.linked_session_id:
+            payload["linked_session_id"] = self.linked_session_id
+        if self.linked_platform:
+            payload["linked_platform"] = self.linked_platform
+        if self.linked_owner:
+            payload["linked_owner"] = self.linked_owner
+        if self.linked_platform_conversation_id:
+            payload["linked_platform_conversation_id"] = self.linked_platform_conversation_id
+        if self.source_artifact_id:
+            payload["source_artifact_id"] = self.source_artifact_id
         return ResumeRecord(
             id=self.id,
             payload=payload,
@@ -127,4 +161,10 @@ class Resume(BaseModel):
             job_type=self.job_type or self.applied_position,
             match_score=self.match_score,
             updated_at=self.updated_at,
+            parsed_name=self.parsed_name,
+            linked_session_id=self.linked_session_id,
+            linked_platform=self.linked_platform,
+            linked_owner=self.linked_owner,
+            linked_platform_conversation_id=self.linked_platform_conversation_id,
+            source_artifact_id=self.source_artifact_id,
         )

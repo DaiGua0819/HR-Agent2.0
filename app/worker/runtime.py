@@ -11,9 +11,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.graph import build_recruit_graph
+from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.manager import BrowserManager
 from app.core.constants import Platform
+from app.domain.conversation.repository import ConversationRepository
+from app.domain.resume.artifacts import ResumeArtifactStore
 from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSink
 from app.platforms.registry import get_platform_adapter
 from app.settings import load_settings
@@ -33,6 +36,8 @@ class WorkerRuntime:
     agent_busy: bool = False
     paused: set[Platform] = field(default_factory=set)
     events: list[dict[str, object]] = field(default_factory=list)
+    conversation_repository: ConversationRepository | None = None
+    artifact_store: ResumeArtifactStore | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def start(self) -> None:
@@ -45,6 +50,8 @@ class WorkerRuntime:
                 backend=self.browser_backend,
             )
         await self.browser.start()
+        if self.conversation_repository is None or self.artifact_store is None:
+            self.conversation_repository, self.artifact_store = build_persistence_from_settings()
         self.agent_ready = True
 
     async def process_messages(self, platform: Platform) -> dict[str, object]:
@@ -67,6 +74,8 @@ class WorkerRuntime:
                 state = await ConversationRunner(
                     adapter,
                     decision_sink=self.decision_sink,
+                    conversation_repository=self.conversation_repository,
+                    artifact_store=self.artifact_store,
                 ).run_current()
                 graph_stage = await self._graph_stage(state)
                 return {

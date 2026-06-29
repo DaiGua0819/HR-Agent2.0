@@ -15,6 +15,7 @@ import sys
 from typing import Any
 from urllib.request import urlopen
 
+from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.cloak import cdp_url_for
 from app.browser.manager import BrowserManager
@@ -103,10 +104,21 @@ async def main_async() -> None:
                 print(f"- {item}")
         _print_step("4/4 BOSS 关键选择器健康检查通过")
 
+        conversation_repository, artifact_store = build_persistence_from_settings()
         summaries = (
-            await process_boss_targets(adapter, args.conversation_id)
+            await process_boss_targets(
+                adapter,
+                args.conversation_id,
+                conversation_repository=conversation_repository,
+                artifact_store=artifact_store,
+            )
             if args.conversation_id
-            else await _process_boss(adapter, args.limit)
+            else await _process_boss(
+                adapter,
+                args.limit,
+                conversation_repository=conversation_repository,
+                artifact_store=artifact_store,
+            )
         )
         print_summary(summaries, live=live)
     finally:
@@ -201,7 +213,13 @@ async def _verify_boss_chat_ready(page: Any) -> dict[str, object]:
     return {"verified": bool(ready), "reason": "" if ready else "chat_input_not_ready"}
 
 
-async def _process_boss(adapter: BossAdapter, limit: int) -> list[dict[str, Any]]:
+async def _process_boss(
+    adapter: BossAdapter,
+    limit: int,
+    *,
+    conversation_repository: Any,
+    artifact_store: Any,
+) -> list[dict[str, Any]]:
     await adapter.select_positions(None)
     states = await boss_actions.read_unread_row_states(adapter.page)
     summaries: list[dict[str, Any]] = []
@@ -237,7 +255,11 @@ async def _process_boss(adapter: BossAdapter, limit: int) -> list[dict[str, Any]
             )
             continue
         context = await _wait_for_context(adapter)
-        state = await ConversationRunner(adapter).run_current()
+        state = await ConversationRunner(
+            adapter,
+            conversation_repository=conversation_repository,
+            artifact_store=artifact_store,
+        ).run_current()
         conversation_id = str(state.get("conversation_id") or label)
         if conversation_id in seen:
             continue

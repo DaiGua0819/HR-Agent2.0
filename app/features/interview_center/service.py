@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.domain.conversation.models import ConversationSession
+from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.candidate_matcher import match_candidates
@@ -49,8 +51,12 @@ class InterviewCenterService:
         bitable: BitableClientProtocol | None = None,
         llm: QuestionLLMProtocol | None = None,
         output_dir: str | Path | None = None,
+        conversation_repository: ConversationRepository | None = None,
     ) -> None:
         self.repository = repository or ResumeRepository.from_settings()
+        self.conversation_repository = (
+            conversation_repository or ConversationRepository.from_settings()
+        )
         self.store = store or GLOBAL_INTERVIEW_STORE
         self.bitable = bitable or MockFeishuBitableClient()
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
@@ -188,6 +194,36 @@ class InterviewCenterService:
 
         return self._require_session(session_id).to_dict()
 
+    def locate_resume_conversation(self, resume_id: str) -> dict[str, Any]:
+        """Locate the platform conversation behind a resume library entry."""
+
+        resume = self._load_resume(resume_id)
+        if resume is None:
+            raise KeyError("resume_not_found")
+        if resume.linked_session_id:
+            session = self.conversation_repository.get_session(resume.linked_session_id)
+            if session is not None:
+                return {
+                    "resumeId": resume.id,
+                    "matchMode": "linked_session_id",
+                    "requiresConfirmation": False,
+                    "session": _session_payload(session),
+                    "candidates": [],
+                }
+        name = resume.parsed_name or resume.name or ""
+        position = resume.job_type or resume.applied_position or ""
+        candidates = self.conversation_repository.search_by_candidate_name(
+            candidate_name=name,
+            position=position,
+        )
+        return {
+            "resumeId": resume.id,
+            "matchMode": "parsed_name_position" if candidates else "none",
+            "requiresConfirmation": bool(candidates),
+            "session": None,
+            "candidates": [_session_payload(session) for session in candidates],
+        }
+
     def oauth(self) -> FeishuOAuthService:
         """返回 OAuth 服务。"""
 
@@ -268,4 +304,19 @@ def _resume_query(resume: Resume) -> dict[str, Any]:
         "phone": resume.phone or resume.phone_key,
         "job_type": resume.job_type or resume.applied_position,
         "source_platform": resume.source_platform,
+    }
+
+
+def _session_payload(session: ConversationSession) -> dict[str, Any]:
+    return {
+        "id": session.id,
+        "platform": session.platform,
+        "owner": session.owner,
+        "platformConversationId": session.platform_conversation_id,
+        "candidateName": session.candidate_name,
+        "position": session.position,
+        "label": session.label,
+        "currentStage": session.current_stage,
+        "nextAction": session.next_action,
+        "identityConfidence": session.identity_confidence,
     }

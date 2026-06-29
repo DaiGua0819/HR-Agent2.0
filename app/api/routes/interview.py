@@ -54,9 +54,13 @@ async def send_interview_invite(
 ) -> dict[str, object]:
     """简历的“约面试”入口；dry-run 不触发 worker 或真实外部调用。"""
 
-    if payload.dry_run:
-        return {"accepted": True, "dryRun": True, "resumeId": payload.resume_id}
     try:
+        if payload.dry_run:
+            return {
+                "accepted": True,
+                "dryRun": True,
+                **_service(request).locate_resume_conversation(payload.resume_id),
+            }
         return await _service(request).create_session_from_resume(payload.resume_id, dry_run=False)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
