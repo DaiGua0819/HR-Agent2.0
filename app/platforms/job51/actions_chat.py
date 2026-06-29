@@ -375,17 +375,23 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     rows: list[dict[str, object]] = []
+    seen_labels: set[str] = set()
     for item in value:
         if not isinstance(item, dict):
             continue
         unread_count = _safe_int(item.get("unread_count") or item.get("unreadCount"))
         if unread_count <= 0:
             continue
+        label = str(item.get("label") or "")
+        compact_label = "".join(label.split())
+        if compact_label in seen_labels:
+            continue
+        seen_labels.add(compact_label)
         rows.append(
             {
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
-                "label": str(item.get("label") or ""),
+                "label": label,
                 "unread_count": unread_count,
             }
         )

@@ -31,6 +31,9 @@ from boss_once_support import print_summary, reliable_actions_since
 from boss_targeting import process_boss_targets, select_all_filter
 
 
+BOSS_CANDIDATE_TIMEOUT_SECONDS = 45
+
+
 def parse_args() -> argparse.Namespace:
     """解析启动参数。"""
 
@@ -213,6 +216,33 @@ async def _verify_boss_chat_ready(page: Any) -> dict[str, object]:
     return {"verified": bool(ready), "reason": "" if ready else "chat_input_not_ready"}
 
 
+async def _verify_boss_thread_opened(page: Any, target_state: dict[str, Any]) -> dict[str, object]:
+    """确认点击后当前聊天区确实切到了目标 BOSS 会话。"""
+
+    ready = await page.wait_for(selectors.CHAT_INPUT, timeout_ms=6500)
+    if not ready:
+        return {"verified": False, "reason": "chat_input_not_ready"}
+    conversation = await boss_actions.read_chat_context(page, owner="")
+    target_id = str(target_state.get("id") or "").lstrip("_")
+    current_id = str(conversation.id or "").lstrip("_")
+    if target_id and current_id == target_id:
+        return {"verified": True, "reason": "conversation_id_matched"}
+    label = _compact_text(str(target_state.get("label") or ""))
+    name = _compact_text(conversation.candidate.name)
+    position = _compact_text(conversation.candidate.applied_position)
+    if label and name and name in label and (not position or position in label):
+        return {"verified": True, "reason": "candidate_label_matched"}
+    return {
+        "verified": False,
+        "reason": "opened_thread_mismatch",
+        "targetId": target_id,
+        "currentId": current_id,
+        "targetLabel": str(target_state.get("label") or "")[:120],
+        "currentName": conversation.candidate.name,
+        "currentPosition": conversation.candidate.applied_position,
+    }
+
+
 async def _process_boss(
     adapter: BossAdapter,
     limit: int,
@@ -236,12 +266,13 @@ async def _process_boss(
         label = (await row.text()).strip()
         if _skip_row_label(label):
             continue
+        print(f"[BOSS] 准备处理候选人: {label[:120]}", flush=True)
         before_actions = len(getattr(adapter.page, "reliable_actions", []))
         click = await reliable_click_element(
             adapter.page,
             row,
             label="BOSS处理候选人会话",
-            verify=lambda: _verify_boss_chat_ready(adapter.page),
+            verify=lambda: _verify_boss_thread_opened(adapter.page, unread_state),
         )
         if not click.get("ok"):
             summaries.append(
@@ -254,12 +285,31 @@ async def _process_boss(
                 }
             )
             continue
-        context = await _wait_for_context(adapter)
-        state = await ConversationRunner(
-            adapter,
-            conversation_repository=conversation_repository,
-            artifact_store=artifact_store,
-        ).run_current()
+        try:
+            context = await _wait_for_context(adapter)
+            state = await asyncio.wait_for(
+                ConversationRunner(
+                    adapter,
+                    conversation_repository=conversation_repository,
+                    artifact_store=artifact_store,
+                ).run_current(),
+                timeout=BOSS_CANDIDATE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            summaries.append(
+                {
+                    "conversationId": label,
+                    "action": "failed",
+                    "stage": "candidate_timeout",
+                    "decision": {
+                        "reason": "candidate_processing_timeout",
+                        "timeoutSeconds": BOSS_CANDIDATE_TIMEOUT_SECONDS,
+                    },
+                    "reliableActions": reliable_actions_since(adapter.page, before_actions),
+                }
+            )
+            print(f"[BOSS] 候选人处理超时，已跳过: {label[:120]}", flush=True)
+            continue
         conversation_id = str(state.get("conversation_id") or label)
         if conversation_id in seen:
             continue
@@ -347,6 +397,10 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _compact_text(value: str) -> str:
+    return "".join(value.split())
 
 
 async def _close_manager(manager: BrowserManager) -> None:

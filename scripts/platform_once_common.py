@@ -32,6 +32,10 @@ from app.platforms.zhilian.adapter import ZhilianAdapter
 from app.settings import load_settings
 
 
+PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 90
+JOB51_CLEANUP_TIMEOUT_SECONDS = 12
+
+
 def run(platform: Platform) -> None:
     """Run one platform once from a thin wrapper."""
 
@@ -186,7 +190,7 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             if seen.intersection(row_keys) or _skip_label(platform, label):
                 continue
             if platform == Platform.JOB51:
-                await cleanup_resume_overlays(adapter.page)
+                await _cleanup_job51(adapter.page, phase="before_candidate")
             row = await _find_candidate_row(adapter, platform, row_state)
             if row is None:
                 continue
@@ -195,6 +199,7 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 platform, label
             ):
                 continue
+            print(f"[{platform.value}] preparing candidate: {label[:120]}", flush=True)
             before_actions = len(getattr(adapter.page, "reliable_actions", []))
             click = await reliable_click_element(
                 adapter.page,
@@ -203,20 +208,61 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 verify=lambda: _verify_chat_ready(adapter, platform),
             )
             if not click.get("ok"):
+                summaries.append(
+                    _failure_summary(
+                        row_state,
+                        action="failed",
+                        stage="open_thread_failed",
+                        reason=str(click.get("reason") or "click_not_verified"),
+                        reliable_actions=getattr(adapter.page, "reliable_actions", [])[
+                            before_actions:
+                        ],
+                    )
+                )
+                seen.update(row_keys)
+                progressed = True
                 continue
-            state = await ConversationRunner(
-                adapter,
-                conversation_repository=conversation_repository,
-                artifact_store=artifact_store,
-            ).run_current()
+            try:
+                state = await asyncio.wait_for(
+                    ConversationRunner(
+                        adapter,
+                        conversation_repository=conversation_repository,
+                        artifact_store=artifact_store,
+                    ).run_current(),
+                    timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                summaries.append(
+                    _failure_summary(
+                        row_state,
+                        action="failed",
+                        stage="candidate_timeout",
+                        reason="candidate_processing_timeout",
+                        reliable_actions=getattr(adapter.page, "reliable_actions", [])[
+                            before_actions:
+                        ],
+                        extra={"timeoutSeconds": PLATFORM_CANDIDATE_TIMEOUT_SECONDS},
+                    )
+                )
+                seen.update(row_keys)
+                if platform == Platform.JOB51:
+                    await _cleanup_job51(adapter.page, phase="after_timeout")
+                progressed = True
+                print(f"[{platform.value}] candidate timed out: {label[:120]}", flush=True)
+                continue
             summary = _summary_from_state(state)
             summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[
                 before_actions:
             ]
             if platform == Platform.JOB51:
-                summary["cleanup"] = await cleanup_resume_overlays(adapter.page)
+                summary["cleanup"] = await _cleanup_job51(adapter.page, phase="after_candidate")
+            processed_keys = _seen_keys_for_processed_item(row_state, summary)
+            if seen.intersection(processed_keys):
+                seen.update(processed_keys)
+                progressed = True
+                continue
             summaries.append(summary)
-            seen.update(_seen_keys_for_processed_item(row_state, summary))
+            seen.update(processed_keys)
             progressed = True
         if len(summaries) >= max_items:
             break
@@ -252,11 +298,31 @@ async def _process_zhilian(
         if ref.conversation_id in seen:
             idle_scans += 1
             continue
-        state = await ConversationRunner(
-            adapter,
-            conversation_repository=conversation_repository,
-            artifact_store=artifact_store,
-        ).run_current()
+        print(f"[{platform.value}] preparing candidate: {ref.conversation_id}", flush=True)
+        try:
+            state = await asyncio.wait_for(
+                ConversationRunner(
+                    adapter,
+                    conversation_repository=conversation_repository,
+                    artifact_store=artifact_store,
+                ).run_current(),
+                timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            summaries.append(
+                _failure_summary(
+                    {"id": ref.conversation_id, "label": ref.conversation_id},
+                    action="failed",
+                    stage="candidate_timeout",
+                    reason="candidate_processing_timeout",
+                    reliable_actions=getattr(adapter.page, "reliable_actions", [])[before_actions:],
+                    extra={"timeoutSeconds": PLATFORM_CANDIDATE_TIMEOUT_SECONDS},
+                )
+            )
+            seen.add(ref.conversation_id)
+            idle_scans = 0
+            print(f"[{platform.value}] candidate timed out: {ref.conversation_id}", flush=True)
+            continue
         conversation_id = str(state.get("conversation_id") or ref.conversation_id)
         seen.update({ref.conversation_id, conversation_id})
         summary = _summary_from_state(state)
@@ -408,9 +474,56 @@ def _summary_from_state(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _failure_summary(
+    row_state: dict[str, object],
+    *,
+    action: str,
+    stage: str,
+    reason: str,
+    reliable_actions: list[Any],
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    label = str(row_state.get("label") or row_state.get("id") or "")
+    decision = {"action": action, "reason": reason}
+    if extra:
+        decision.update(extra)
+    return {
+        "sessionId": "",
+        "conversationId": str(row_state.get("id") or label),
+        "recentMessagesFingerprint": "",
+        "candidate": {"label": label},
+        "job": "",
+        "lastMessage": {},
+        "action": action,
+        "stage": stage,
+        "ruleSource": "",
+        "sentMessages": [],
+        "artifactWritten": False,
+        "candidateStatusWritten": False,
+        "decision": decision,
+        "reliableActions": reliable_actions,
+    }
+
+
+async def _cleanup_job51(page: Any, *, phase: str) -> dict[str, object]:
+    try:
+        return await asyncio.wait_for(
+            cleanup_resume_overlays(page),
+            timeout=JOB51_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "closed": False,
+            "reason": f"{phase}_cleanup_timeout",
+            "timeoutSeconds": JOB51_CLEANUP_TIMEOUT_SECONDS,
+        }
+    except Exception as error:
+        return {"closed": False, "reason": f"{phase}_cleanup_error", "error": str(error)}
+
+
 def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: bool) -> None:
     mode = "LIVE" if live else "dry-run"
-    failed = sum(1 for item in items if item.get("action") == "send_failed")
+    failed = sum(1 for item in items if item.get("action") in {"failed", "send_failed"})
     skipped = sum(1 for item in items if item.get("action") == "skip")
     processed = max(0, len(items) - failed - skipped)
     print(f"\n===== {platform.value} {mode} summary =====")

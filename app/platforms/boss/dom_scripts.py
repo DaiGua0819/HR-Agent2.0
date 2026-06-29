@@ -154,7 +154,7 @@ READ_CHAT_CONTEXT_JS = r"""
     .filter((item) => item.text);
   const rawPosition = visibleText(jobNode).replace(/^沟通职位[:：]\s*/, "");
   return {
-    id: attr(active, "data-id") || attr(active, "data-uid") || label || location.href,
+    id: attr(active, "id") || attr(active, "data-id") || attr(active, "data-uid") || label || location.href,
     name: visibleText(nameNode).split(/\n/)[0] || topText.split(/\s+/)[0] || "",
     position: rawPosition || topText.replace(/^\S+\s*/, "") || "",
     label: label || topText,

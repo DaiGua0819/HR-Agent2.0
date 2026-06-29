@@ -124,6 +124,23 @@ def test_boss_direct_resume_position_question_still_requests_resume() -> None:
     assert page.resume_requests == 1
 
 
+def test_boss_direct_resume_exchange_resume_intent_requests_resume() -> None:
+    """直求简历岗位里“交换简历/发简历”是简历意图，不应当成未知岗位问题。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "运营A",
+            [{"sender": "other", "text": "方便交换简历深度了解一下岗位吗？"}],
+        ),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages == ["可以发一份简历过来吗"]
+    assert page.resume_requests == 1
+
+
 def test_boss_direct_resume_unknown_job_detail_question_escalates() -> None:
     """Direct-resume jobs do not bypass unknown job-detail questions."""
 

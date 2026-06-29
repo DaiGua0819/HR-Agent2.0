@@ -15,13 +15,20 @@ from app.platforms.job51 import selectors
 async def open_chat_page(page: BrowserPage) -> None:
     """进入 51job 人才沟通页，找不到入口时回工作台重试。"""
 
+    if await _wait_chat_shell(page, timeout_ms=3000):
+        return
     for attempt in range(2):
         click = await reliable_click(page, selectors.CHAT_ENTRY, label="51job人才沟通入口")
         await asyncio.sleep(1)
         if click.get("ok") and await _wait_chat_shell(page):
             return
         if attempt == 0:
-            await page.goto(selectors.CHAT_HOME_URL)
+            try:
+                await page.goto(selectors.CHAT_HOME_URL)
+            except Exception:
+                if await _wait_chat_shell(page, timeout_ms=3000):
+                    return
+                raise
             await asyncio.sleep(3)
 
 

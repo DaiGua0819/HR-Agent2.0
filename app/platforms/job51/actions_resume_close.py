@@ -80,6 +80,60 @@ CLOSE_ONLINE_RESUME_JS = r"""
 """
 
 
+CLOSE_GENERIC_BLOCKERS_JS = r"""
+() => {
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) || "" : "");
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const blockerSelectors = [
+    "#driver-popover-item",
+    ".el-dialog__wrapper",
+    ".el-message-box__wrapper",
+    ".wechat-notify",
+    "[class*='guide']",
+    "[class*='popover']"
+  ].join(",");
+  const blockers = Array.from(document.querySelectorAll(blockerSelectors)).filter(visible);
+  const safe = /关闭|取消|稍后|再说|知道了|我知道了|不感兴趣|跳过|close|cancel|later|skip/i;
+  const risky = /确定|确认|保存|提交|发送|开启|启用|同意|求简历|下载|save|submit|send|confirm|ok/i;
+  for (const blocker of blockers) {
+    const controls = Array.from(blocker.querySelectorAll(
+      ".el-dialog__headerbtn, .el-message-box__headerbtn, .el-icon-close, " +
+      ".close, .close-btn, [class*='close'], [title], [aria-label], " +
+      "button, .el-button, [role='button'], a, span, i, svg, div"
+    )).filter(visible).map((el) => {
+      const rect = el.getBoundingClientRect();
+      const label = [
+        text(el), attr(el, "class"), attr(el, "title"), attr(el, "aria-label"), attr(el, "id")
+      ].join(" ").replace(/\s+/g, " ").trim();
+      return { el, rect, label };
+    });
+    const semantic = controls.find((item) => safe.test(item.label) && !risky.test(item.label));
+    const topRight = controls.filter((item) => {
+      const r = item.rect;
+      const b = blocker.getBoundingClientRect();
+      return r.width >= 8 && r.width <= 80 && r.height >= 8 && r.height <= 80 &&
+        r.top >= b.top && r.top <= b.top + 120 && r.right >= b.right - 160;
+    }).sort((a, b) => b.rect.right - a.rect.right || a.rect.top - b.rect.top)[0];
+    const target = semantic ? semantic.el : topRight && topRight.el;
+    if (target) {
+      const label = semantic ? semantic.label : topRight.label;
+      target.click();
+      return { closed: true, source: "generic_blocker", label, blockerText: text(blocker).slice(0, 160) };
+    }
+  }
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  return { closed: false, reason: blockers.length ? "generic_close_control_not_found" : "generic_blocker_not_found" };
+}
+"""
+
+
 async def close_resume_preview(page: BrowserPage) -> dict[str, object]:
     """关闭附件/在线简历预览层，动作后至少等待 1 秒。"""
 
@@ -104,6 +158,10 @@ async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
     export = await _close_export_dialog(page)
     actions.append({"name": "export_dialog", **export})
     if export.get("closed"):
+        closed += 1
+    generic = await _close_generic_blocker(page)
+    actions.append({"name": "generic_blocker", **generic})
+    if generic.get("closed"):
         closed += 1
     try:
         pressed = await page.press("body", "Escape", timeout_ms=1000)
@@ -142,5 +200,14 @@ async def _close_export_dialog(page: BrowserPage) -> dict[str, object]:
         result = await page.eval_js("job51.close_export_dialog")
     except Exception as error:
         return {"closed": False, "reason": "export_close_error", "error": str(error)}
+    await asyncio.sleep(1)
+    return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
+
+
+async def _close_generic_blocker(page: BrowserPage) -> dict[str, object]:
+    try:
+        result = await page.eval_js(CLOSE_GENERIC_BLOCKERS_JS)
+    except Exception as error:
+        return {"closed": False, "reason": "generic_close_error", "error": str(error)}
     await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}

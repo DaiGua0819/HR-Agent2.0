@@ -475,6 +475,26 @@ class ConversationRunner:
         if not looks_like_question(text):
             return False
         compact = "".join(text.lower().split())
+        resume_intent_terms = (
+            "发简历",
+            "发送简历",
+            "交换简历",
+            "看看简历",
+            "看简历",
+            "查看简历",
+            "投递简历",
+            "传简历",
+            "给简历",
+            "简历发",
+            "附件简历",
+            "在线简历",
+            "sendresume",
+            "sendcv",
+            "exchangeresume",
+            "exchangecv",
+        )
+        if any(term in compact for term in resume_intent_terms):
+            return False
         detail_terms = (
             "detail",
             "details",
