@@ -115,3 +115,34 @@
 - 风险 / 待确认：
   - live 输出在 PowerShell 中出现中文编码乱码，后续如果需要人工复盘候选人姓名和话术，应改用 `PYTHONIOENCODING=utf-8` 或写 JSON 报告文件。
   - 当前脚本仍坚持“只处理未读候选人消息”，不会处理 51job 的 `[平台推荐]` 或“已读未回”列表；如果后续要处理这些，需要单独做主动联系/跟进流程。
+
+---
+
+### 快照 0023：智联真实未读会话打开与 Enter 发送修复
+- 修改时间：2026-06-27 17:15:35 +08:00
+- 修改原因：
+  - 真实智联页面中，通用 locator 点击 `.im-session-item__box` 不稳定，可能只保持在旧会话，导致候选人/岗位上下文误读。
+  - 智联右侧详情没有稳定左侧 active 行，候选人和岗位必须从 `#im-session-detail` 的“沟通职位”区域读取，不能从左侧列表或全页 header 猜。
+  - 真实发送按钮点击后未触发发送，原因是 `fill()` 后直接点按钮不能稳定触发智联内部输入状态；经验证聚焦输入框后按 Enter 可以真实发送。
+- 修改文件：
+  - `app/platforms/zhilian/dom_scripts.py`
+  - `app/platforms/zhilian/actions.py`
+  - `scripts/platform_once_common.py`
+  - `app/browser/base.py`
+  - `app/browser/playwright_cdp.py`
+  - `app/browser/fake_page.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增智联真实 DOM 会话行内部点击脚本，按行内实际坐标派发点击，并在动作层用右侧候选人/岗位做身份校验。
+  - 智联未读行解析改为只认真实未读红点；有红点但无数字时按 1 条未读处理，不再因“未读筛选已打开”把所有行兜底成未读。
+  - 智联上下文读取优先从 `#im-session-detail` 抽取候选人、岗位和消息，修复左侧第一行误当当前会话的问题。
+  - 智联消息方向修正为只识别 `--me` / `mine` / `myself`，避免把 `resume` 字符串误判成己方消息。
+  - 浏览器页面接口新增 `press()`；Playwright CDP 用真实键盘按键，FakePage 用当前输入模拟发送。
+  - 智联发送动作改为填入后优先按 Enter 并校验最新己方消息，失败时再回退点击发送按钮。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_zhilian_phase1.py -q`：7 passed。
+  - `.venv312\Scripts\python.exe -m ruff check app\browser\base.py app\browser\fake_page.py app\browser\playwright_cdp.py app\platforms\zhilian\actions.py app\platforms\zhilian\dom_scripts.py scripts\platform_once_common.py`：All checks passed。
+  - 真实智联 live 处理宋峰峰账号 3 人：郑潮洋发送外贸销售经历筛选问题；王振中发送 AI 应用开发基础条件；frank 命中已收到附件简历分支，未重复发送。
+- 风险 / 待确认：
+  - 智联附件简历目前仍只识别“已收到/可查看附件简历”，未实现像 51job 一样的真实 PDF 落盘下载。
+  - PowerShell 直接输出中文仍可能乱码；真实复盘建议继续用 `PYTHONIOENCODING=utf-8` 或输出 JSON 文件。

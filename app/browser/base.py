@@ -43,6 +43,14 @@ class BrowserPage(Protocol):
     async def fill(self, selector: str, value: str, timeout_ms: int | None = None) -> bool:
         """填入第一个匹配输入元素，返回是否成功。"""
 
+    async def press(
+        self,
+        selector: str,
+        key: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        """Focus an element and press a keyboard key."""
+
     async def text(self, selector: str | None = None) -> str:
         """读取指定元素或页面正文文本。"""
 

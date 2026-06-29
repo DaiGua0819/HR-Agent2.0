@@ -164,6 +164,19 @@ class FakePage:
         await element.fill(value)
         return True
 
+    async def press(
+        self,
+        selector: str,
+        key: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        _ = selector, timeout_ms
+        if key == "Enter" and self.input_text:
+            self.append_sent_message(self.input_text)
+            self.input_text = ""
+            return True
+        return False
+
     async def text(self, selector: str | None = None) -> str:
         if selector is None:
             return self.body_text

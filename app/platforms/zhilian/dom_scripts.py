@@ -68,10 +68,10 @@ READ_UNREAD_ROWS_JS = r"""
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
   const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) : "");
-  const rows = Array.from(document.querySelectorAll(
-    ".im-session-item__box, .im-session-item, " +
-    ".im-session-list [class*='session'], [class*='session-item']"
-  )).filter(visible);
+  let rows = Array.from(document.querySelectorAll(".im-session-item__box")).filter(visible);
+  if (!rows.length) {
+    rows = Array.from(document.querySelectorAll(".im-session-item")).filter(visible);
+  }
   const unreadActive = Array.from(document.querySelectorAll(
     ".side-panel-header__checkbox, .km-checkbox, [role='checkbox'], " +
     "label, button, span, div, [role='button']"
@@ -90,24 +90,187 @@ READ_UNREAD_ROWS_JS = r"""
       const match = text(badge).match(/\d+/);
       return match ? Number.parseInt(match[0], 10) : 0;
     });
-    return counts.length ? Math.max(...counts) : 0;
+    if (!badges.length) return 0;
+    return counts.length ? Math.max(...counts) : 1;
   };
   return {
     unreadActive,
     rows: rows.map((row, index) => {
       const label = text(row);
-      const positionNode = row.querySelector(
-        ".im-session-item-subtitle__suffix, [class*='subtitle'], [class*='position']"
-      );
+      const lines = label.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const offset = /^\d+$/.test(lines[0] || "") ? 1 : 0;
+      const parsedPosition = lines[offset + 1] || "";
+      const positionNode = row.querySelector(".im-session-item-subtitle__suffix");
       const count = parseBadge(row);
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
         label,
-        position: text(positionNode),
-        unreadCount: count || (unreadActive ? 1 : 0),
+        position: text(positionNode) || parsedPosition,
+        unreadCount: count,
       };
     }),
+  };
+}
+"""
+
+CLICK_SESSION_ROW_JS = r"""
+(target) => {
+  const wanted = target || {};
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) : "");
+  let rows = Array.from(document.querySelectorAll(".im-session-item__box")).filter(visible);
+  if (!rows.length) {
+    rows = Array.from(document.querySelectorAll(".im-session-item")).filter(visible);
+  }
+  const normalized = (value) => String(value || "").replace(/\s+/g, "");
+  const wantedId = normalized(wanted.id).replace(/^_+/, "");
+  const wantedLabel = normalized(wanted.label);
+  let row = null;
+  let index = Number.isFinite(Number(wanted.index)) ? Number(wanted.index) : -1;
+  if (wantedId) {
+    row = rows.find((item) => normalized(attr(item, "id")).replace(/^_+/, "") === wantedId);
+  }
+  if (!row && wantedLabel) {
+    row = rows.find((item) => normalized(text(item)) === wantedLabel) ||
+      rows.find((item) => normalized(text(item)).includes(wantedLabel));
+  }
+  if (!row && index >= 0 && index < rows.length) {
+    row = rows[index];
+  }
+  if (!row) {
+    row = rows[0] || null;
+    index = row ? rows.indexOf(row) : -1;
+  }
+  if (!row) return { opened: false, reason: "session_row_not_found" };
+  const rect = row.getBoundingClientRect();
+  const x = rect.left + Math.min(Math.max(rect.width * 0.32, 64), Math.max(rect.width - 12, 1));
+  const y = rect.top + rect.height / 2;
+  const clickTarget = document.elementFromPoint(x, y) || row;
+  for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+    clickTarget.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+    }));
+  }
+  return {
+    opened: true,
+    index: rows.indexOf(row),
+    label: text(row),
+    id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
+    targetTag: clickTarget.tagName,
+    targetClass: String(clickTarget.className || ""),
+  };
+}
+"""
+
+READ_CHAT_CONTEXT_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const firstText = (selectors, root = document) => {
+    for (const selector of selectors) {
+      const el = root.querySelector(selector);
+      if (visible(el) && text(el)) return text(el);
+    }
+    return "";
+  };
+  const detail = document.querySelector("#im-session-detail, .im-session-detail") || document;
+  const detailText = text(detail);
+  const detailLines = detailText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const nameFromDetail = detailLines.find((line) =>
+    !line.includes("沟通职位") &&
+    !line.includes("当前沟通") &&
+    !line.includes("浏览过职位") &&
+    !line.includes("星期") &&
+    !line.includes("昨天") &&
+    !line.includes("今天")
+  ) || "";
+  const detailPositionMatch = detailText.match(/沟通职位：\s*([^\n]+)/) ||
+    detailText.match(/当前沟通(.+?)职位/);
+  const selected = Array.from(document.querySelectorAll(
+    ".im-session-item__box, .im-session-item, [class*='session-item']"
+  )).filter(visible).find((row) => {
+    const cls = String(row.className || "");
+    return cls.includes("active") || cls.includes("selected") ||
+      cls.includes("current") || row.getAttribute("aria-selected") === "true";
+  });
+  const header = document.querySelector(
+    ".im-chat-header, .im-chat__header, [class*='chat-header'], [class*='dialog-header']"
+  );
+  const selectedLabel = text(selected);
+  const candidateName = nameFromDetail || firstText([
+    ".im-chat-header__name",
+    ".im-chat-title__name",
+    "[class*='chat-header'] [class*='name']",
+    "[class*='header'] [class*='name']",
+    ".im-session-item--active .im-session-item__name-title",
+  ], header || document) || firstText([
+    ".im-session-item--active .im-session-item__name-title",
+    ".im-session-item.active .im-session-item__name-title",
+    ".im-session-item__box.active .im-session-item__name-title",
+  ]) || selectedLabel.split(/\n/).filter(Boolean)[0] || "";
+  const position = (detailPositionMatch ? detailPositionMatch[1].trim() : "") || firstText([
+    ".im-chat-header__job",
+    ".im-chat-header__position",
+    "[class*='chat-header'] [class*='job']",
+    "[class*='chat-header'] [class*='position']",
+    ".im-session-item--active .im-session-item-subtitle__suffix",
+  ], header || document) || firstText([
+    ".im-session-item--active .im-session-item-subtitle__suffix",
+    ".im-session-item.active .im-session-item-subtitle__suffix",
+    ".im-session-item__box.active .im-session-item-subtitle__suffix",
+  ]);
+  const messageRoot = detail.querySelector(".im-timeline, .im-session-detail__main-inner") ||
+    detail;
+  let messageNodes = Array.from(messageRoot.querySelectorAll(".km-list__item.im-message"))
+    .filter(visible);
+  if (!messageNodes.length) {
+    messageNodes = Array.from(messageRoot.querySelectorAll(".im-message")).filter(visible);
+  }
+  const messages = messageNodes.map((node) => {
+    const raw = firstText([
+      ".im-message__text",
+      ".im-message__bubble-inner",
+      ".im-message__custom--box",
+    ], node) || text(node);
+    const cls = String(node.className || "");
+    const mine = cls.includes("mine") || cls.includes("--me") || cls.includes("myself") ||
+      node.querySelector("[class*='mine'], [class*='bubble--me'], [class*='myself']");
+    const system = cls.includes("system") || cls.includes("toast") ||
+      node.querySelector("[class*='toast'], [class*='system']");
+    return {
+      sender: system ? "system" : (mine ? "me" : "other"),
+      text: raw,
+      rawText: raw,
+      time: firstText(["time", "[class*='time']"], node),
+    };
+  }).filter((item) => item.text);
+  const last = messages.length ? messages[messages.length - 1] : null;
+  return {
+    id: selected ? (selected.getAttribute("id") || selectedLabel || candidateName) : candidateName,
+    name: candidateName,
+    position,
+    label: selectedLabel,
+    messages,
+    latest_message: last ? last.text : "",
+    unreadCount: 1,
   };
 }
 """

@@ -157,6 +157,9 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
 
 
 async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[str, Any]]:
+    if platform == Platform.ZHILIAN:
+        return await _process_zhilian(adapter, limit)
+
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
     max_items = max(1, limit)
@@ -203,6 +206,35 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
         scrolled = await _scroll_thread_list(adapter, platform, scrolls)
         scrolls += 1
         idle_scans = 0 if scrolled else idle_scans + 1
+    return summaries
+
+
+async def _process_zhilian(adapter: Any, limit: int) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    max_items = max(1, limit)
+    scrolls = 0
+    idle_scans = 0
+    while len(summaries) < max_items and idle_scans < 3:
+        before_actions = len(getattr(adapter.page, "reliable_actions", []))
+        ref = await adapter.find_next_unread_thread()
+        if ref is None:
+            scrolled = await _scroll_thread_list(adapter, Platform.ZHILIAN, scrolls)
+            scrolls += 1
+            idle_scans = 0 if scrolled else idle_scans + 1
+            continue
+        if ref.conversation_id in seen:
+            idle_scans += 1
+            continue
+        state = await ConversationRunner(adapter).run_current()
+        conversation_id = str(state.get("conversation_id") or ref.conversation_id)
+        seen.update({ref.conversation_id, conversation_id})
+        summary = _summary_from_state(state)
+        summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[
+            before_actions:
+        ]
+        summaries.append(summary)
+        idle_scans = 0
     return summaries
 
 

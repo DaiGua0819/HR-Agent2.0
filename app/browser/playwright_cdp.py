@@ -70,6 +70,15 @@ class PlaywrightCDPPage:
         await element.fill(value, timeout_ms=timeout_ms)
         return True
 
+    async def press(self, selector: str, key: str, timeout_ms: int | None = None) -> bool:
+        locator = self.page.locator(selector).last
+        if not await locator.count():
+            return False
+        kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
+        await locator.focus(**kwargs)
+        await self.page.keyboard.press(key)
+        return True
+
     async def text(self, selector: str | None = None) -> str:
         if selector is None:
             return await self.page.inner_text("body")

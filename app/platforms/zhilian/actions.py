@@ -27,7 +27,9 @@ from app.platforms.types import (
 )
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.dom_scripts import (
+    CLICK_SESSION_ROW_JS,
     CLICK_UNREAD_FILTER_JS,
+    READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
     UNREAD_FILTER_STATE_JS,
 )
@@ -48,11 +50,14 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     if clicked.get("selected"):
         await asyncio.sleep(1)
         state = await _unread_filter_state(page)
+        row_states = await read_unread_row_states(page)
+        selected = bool(state.get("active")) or bool(row_states)
         return {
-            "selected": bool(state.get("active")),
+            "selected": selected,
             "label": str(clicked.get("label") or ""),
             "state": state,
             "click": clicked,
+            "fallbackRows": len(row_states) if not state.get("active") else 0,
         }
     elements = await page.query_all(selectors.UNREAD_FILTER)
     for element in elements:
@@ -65,11 +70,14 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
                 verify=lambda: _verify_unread_active(page),
             )
             state = await _unread_filter_state(page)
+            row_states = await read_unread_row_states(page)
+            selected = bool(click.get("ok")) and (bool(state.get("active")) or bool(row_states))
             return {
-                "selected": bool(click.get("ok")) and bool(state.get("active")),
+                "selected": selected,
                 "label": label,
                 "state": state,
                 "click": click,
+                "fallbackRows": len(row_states) if not state.get("active") else 0,
             }
     return {"selected": False, "reason": "unread_filter_not_found"}
 
@@ -80,10 +88,10 @@ async def select_positions(
     """选择全部职位或指定职位。"""
 
     label = target_position or selectors.ALL_POSITION_OPTION_TEXT
+    if not target_position:
+        return {"selected": True, "label": label, "mode": "all", "skippedClick": True}
     click = await reliable_click(page, selectors.POSITION_FILTER, label="智联职位筛选")
     clicked = bool(click.get("ok"))
-    if label == selectors.ALL_POSITION_OPTION_TEXT:
-        return {"selected": clicked, "label": label, "mode": "all"}
     return {"selected": clicked, "label": label, "mode": "target"}
 
 
@@ -106,15 +114,7 @@ async def find_next_unread_thread(
         position = str(state.get("position") or "").strip()
         if allowed and not any(_position_matches(position, item) for item in allowed):
             continue
-        row = await _find_session_for_state(page, state)
-        if row is None:
-            continue
-        click = await reliable_click_element(
-            page,
-            row,
-            label="智联候选人会话",
-            verify=lambda: _verify_chat_ready(page),
-        )
+        click = await _open_session_from_state(page, state)
         if not click.get("ok"):
             continue
         conversation_id = str(state.get("id") or label)
@@ -171,6 +171,8 @@ async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
     """读取当前智联会话上下文。"""
 
     raw = await _safe_eval_dict(page, "zhilian.read_chat_context")
+    if not _raw_context_has_content(raw):
+        raw = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
     candidate = Candidate(
         name=str(raw.get("name") or raw.get("candidate_name") or ""),
         applied_position=str(raw.get("position") or raw.get("appliedPosition") or ""),
@@ -297,6 +299,33 @@ async def proactive_greet(
 
 
 async def _click_send(page: BrowserPage, message: str) -> dict[str, object]:
+    try:
+        pressed = await page.press(selectors.CHAT_INPUT, "Enter", timeout_ms=5000)
+    except Exception as error:
+        pressed = False
+        press_error = str(error)
+    else:
+        press_error = ""
+    if pressed:
+        await asyncio.sleep(1)
+        verified = await _verify_recent_mine_message(page, message)
+        if verified.get("verified"):
+            return {
+                "ok": True,
+                "action": "press",
+                "label": "智联输入框 Enter 发送",
+                "verified": True,
+            }
+    button = await _find_button_by_text(page, "button, [role='button']", "发送")
+    if button is not None:
+        return await reliable_click_element(
+            page,
+            button,
+        label="智联发送按钮",
+        verify=lambda: _verify_recent_mine_message(page, message),
+    )
+    if press_error:
+        return {"ok": False, "reason": "press_enter_failed", "error": press_error}
     send_selectors = (
         ".im-sender button, .im-sender [role='button'], "
         "button[class*='send'], [class*='send'], [class*='submit']"
@@ -354,6 +383,41 @@ async def _find_session_for_state(
     if 0 <= index < len(rows):
         return rows[index]
     return None
+
+
+async def _open_session_from_state(
+    page: BrowserPage,
+    state: dict[str, object],
+) -> dict[str, object]:
+    """用真实 DOM 内部点击打开智联会话，失败时回退到通用点击。"""
+
+    target = {
+        "id": str(state.get("id") or ""),
+        "label": str(state.get("label") or ""),
+        "index": _safe_int(state.get("index")),
+    }
+    result = await _safe_eval_dict(page, CLICK_SESSION_ROW_JS, target)
+    if result.get("opened"):
+        await asyncio.sleep(1)
+        verified = await _verify_chat_ready(page)
+        context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+        identity_ok = _state_matches_context(state, context)
+        if verified.get("verified") and identity_ok:
+            return {"ok": True, "method": "dom_inner_click", "result": result}
+    row = await _find_session_for_state(page, state)
+    if row is None:
+        return {
+            "ok": False,
+            "method": "dom_inner_click",
+            "result": result,
+            "reason": "session_row_not_found",
+        }
+    return await reliable_click_element(
+        page,
+        row,
+        label="智联候选人会话",
+        verify=lambda: _verify_chat_ready(page),
+    )
 
 
 async def _verify_unread_active(page: BrowserPage) -> dict[str, object]:
@@ -424,6 +488,36 @@ def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
         if message.sender != MessageSender.SYSTEM and message.text.strip():
             return message
     return None
+
+
+def _raw_context_has_content(raw: dict[str, object]) -> bool:
+    messages = raw.get("messages") if raw else None
+    return bool(
+        raw
+        and (
+            raw.get("name")
+            or raw.get("candidate_name")
+            or raw.get("position")
+            or raw.get("appliedPosition")
+            or (isinstance(messages, list) and messages)
+        )
+    )
+
+
+def _state_matches_context(state: dict[str, object], context: dict[str, object]) -> bool:
+    if not context:
+        return False
+    label = "".join(str(state.get("label") or "").split())
+    expected_position = "".join(str(state.get("position") or "").split())
+    name = "".join(str(context.get("name") or context.get("candidate_name") or "").split())
+    position = "".join(str(context.get("position") or context.get("appliedPosition") or "").split())
+    if name and name in label:
+        return True
+    if expected_position and position and (
+        expected_position in position or position in expected_position
+    ):
+        return True
+    return False
 
 
 def _should_skip_label(label: str) -> bool:
