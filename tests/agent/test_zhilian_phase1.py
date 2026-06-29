@@ -12,6 +12,7 @@ from app.browser.fake_page import FakePage
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.actions import (
+    inspect_resume_request_state,
     read_unread_conversations,
     request_resume,
     select_unread_filter,
@@ -29,6 +30,21 @@ class FakeLLM:
     async def judge(self, payload: dict[str, object]) -> dict[str, str]:
         _ = payload
         return {"status": self.status}
+
+
+class TextOnlyPage:
+    """Minimal page for Zhilian resume-state fallback tests."""
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = script, arg
+        return {}
+
+    async def text(self, selector: str | None = None) -> str:
+        _ = selector
+        return self.body
 
 
 def test_ai_basic_flow_send_accept_reject_and_unclear() -> None:
@@ -163,6 +179,34 @@ def test_zhilian_request_resume_state_and_confirm() -> None:
     assert result["requested"] is True
     assert result["confirmed"] is True
     assert page.resume_requests == 1
+
+
+def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> None:
+    """The request button is not evidence that an attachment was received."""
+
+    request_button = asyncio.run(
+        inspect_resume_request_state(TextOnlyPage(selectors.REQUEST_RESUME_TEXT))  # type: ignore[arg-type]
+    )
+    assert request_button.has_resume_attachment is False
+    assert request_button.already_requested is False
+
+    view_attachment = asyncio.run(
+        inspect_resume_request_state(TextOnlyPage(selectors.ATTACHMENT_VIEW_TEXT))  # type: ignore[arg-type]
+    )
+    assert view_attachment.has_resume_attachment is True
+
+    file_name = asyncio.run(
+        inspect_resume_request_state(TextOnlyPage("candidate_resume.pdf"))  # type: ignore[arg-type]
+    )
+    assert file_name.has_resume_attachment is True
+
+    requested = asyncio.run(
+        inspect_resume_request_state(
+            TextOnlyPage("\u5df2\u5411\u5bf9\u65b9\u8981\u9644\u4ef6\u7b80\u5386")
+        )  # type: ignore[arg-type]
+    )
+    assert requested.has_resume_attachment is False
+    assert requested.already_requested is True
 
 
 def test_knowledge_answer_and_unknown_question_escalation() -> None:

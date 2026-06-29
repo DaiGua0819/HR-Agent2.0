@@ -32,6 +32,7 @@ from app.platforms.zhilian.dom_scripts import (
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
     UNREAD_FILTER_STATE_JS,
+    ZHILIAN_RESUME_STATE_JS,
 )
 
 SYSTEM_SKIP_TERMS = ("平台推荐", "系统提示", "广告", "职位助手", "智联小助手")
@@ -219,12 +220,9 @@ async def inspect_resume_request_state(page: BrowserPage) -> ResumeRequestState:
 
     raw = await _safe_eval_dict(page, "zhilian.inspect_resume_request_state")
     if not raw:
-        body = await page.text()
-        raw = {
-            "hasResumeAttachment": selectors.ATTACHMENT_VIEW_TEXT in body or "附件简历" in body,
-            "alreadyRequested": "已要附件简历" in body or "已向对方要附件简历" in body,
-            "summary": body[-240:],
-        }
+        raw = await _safe_eval_dict(page, ZHILIAN_RESUME_STATE_JS)
+    if not raw:
+        raw = _resume_state_from_text(await page.text())
     return ResumeRequestState(
         has_resume_attachment=bool(raw.get("hasResumeAttachment")),
         already_requested=bool(raw.get("alreadyRequested")),
@@ -502,6 +500,40 @@ def _raw_context_has_content(raw: dict[str, object]) -> bool:
             or (isinstance(messages, list) and messages)
         )
     )
+
+
+def _resume_state_from_text(text: str) -> dict[str, object]:
+    has_file_name = any(
+        marker in text.lower() for marker in (".pdf", ".doc", ".docx", ".wps", ".rtf")
+    )
+    has_resume_attachment = selectors.ATTACHMENT_VIEW_TEXT in text or has_file_name
+    already_requested = (
+        "已要附件简历" in text
+        or "已向对方要附件简历" in text
+        or "已请求附件简历" in text
+    )
+    can_request = (
+        not has_resume_attachment
+        and not already_requested
+        and selectors.REQUEST_RESUME_TEXT in text
+    )
+    evidence = ""
+    if has_file_name:
+        evidence = "file_name"
+    elif selectors.ATTACHMENT_VIEW_TEXT in text:
+        evidence = "view_attachment_resume"
+    elif already_requested:
+        evidence = "already_requested"
+    elif can_request:
+        evidence = "request_button"
+    return {
+        "hasResumeAttachment": has_resume_attachment,
+        "alreadyRequested": already_requested,
+        "canRequestResume": can_request,
+        "summary": text[-240:],
+        "evidence": evidence,
+        "source": "text_fallback",
+    }
 
 
 def _state_matches_context(state: dict[str, object], context: dict[str, object]) -> bool:

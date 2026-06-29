@@ -146,3 +146,27 @@
 - 风险 / 待确认：
   - 智联附件简历目前仍只识别“已收到/可查看附件简历”，未实现像 51job 一样的真实 PDF 落盘下载。
   - PowerShell 直接输出中文仍可能乱码；真实复盘建议继续用 `PYTHONIOENCODING=utf-8` 或输出 JSON 文件。
+---
+
+### 快照 0024：收紧智联附件简历检测
+- 修改时间：2026-06-29 08:34:39 +08:00
+- 修改原因：
+  - 智联页面里“要附件简历”只是可点击请求入口，不代表候选人已经发送附件简历。
+  - 之前 fallback 文本检测把“附件简历”宽泛命中为已收到，可能导致符合条件候选人被误判为已有简历，从而不再请求附件。
+- 修改文件：
+  - `app/platforms/zhilian/dom_scripts.py`
+  - `app/platforms/zhilian/actions.py`
+  - `tests/agent/test_zhilian_phase1.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增 `ZHILIAN_RESUME_STATE_JS`，只在当前聊天详情区内判断简历状态，避免扫描全页按钮文字。
+  - 只有真实文件名后缀（`.pdf/.doc/.docx/.wps/.rtf`）、“查看附件简历”或附件卡片证据才算 `hasResumeAttachment=True`。
+  - “要附件简历”仅作为 `canRequestResume` 证据，不再算已收到附件。
+  - “已要附件简历 / 已向对方要附件简历 / 已请求附件简历”单独归为 `alreadyRequested=True`。
+  - 新增回归测试覆盖：请求按钮不算已收到、查看附件算已收到、文件名算已收到、已请求不算已收到但标记已请求。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_zhilian_phase1.py -q`：8 passed。
+  - `.venv312\Scripts\python.exe -m ruff check app\platforms\zhilian\actions.py app\platforms\zhilian\dom_scripts.py tests\agent\test_zhilian_phase1.py`：All checks passed。
+- 风险 / 待确认：
+  - 这次只修“是否已有附件简历”的判定，不新增智联真实 PDF 下载落盘能力。
+  - 如果智联真实页面的附件卡片不是文本/文件名形式，后续需要根据登录页面采样继续补充更精准的附件卡片选择器。

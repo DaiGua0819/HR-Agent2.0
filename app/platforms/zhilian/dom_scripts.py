@@ -274,3 +274,64 @@ READ_CHAT_CONTEXT_JS = r"""
   };
 }
 """
+
+ZHILIAN_RESUME_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const detail = document.querySelector("#im-session-detail, .im-session-detail");
+  if (!detail) {
+    return {
+      hasResumeAttachment: false,
+      alreadyRequested: false,
+      canRequestResume: false,
+      summary: "",
+      evidence: "detail_not_found",
+      source: "zhilian_resume_dom",
+    };
+  }
+  const messageRoot = detail.querySelector(".im-timeline, .im-session-detail__main-inner") ||
+    detail;
+  const senderRoot = detail.querySelector(".im-sender, .session-new-action");
+  const messageText = text(messageRoot);
+  const senderText = text(senderRoot);
+  const messageNodes = Array.from(messageRoot.querySelectorAll(
+    ".km-list__item.im-message, .im-message, [class*='message']"
+  )).filter(visible);
+  const nodeText = messageNodes.map((node) => text(node)).join("\n");
+  const scopedText = [messageText, nodeText].join("\n");
+  const hasFileName = /\.(pdf|docx?|wps|rtf)(\s|$|[?）)\]])/i.test(scopedText);
+  const viewAttachmentNode = messageNodes.find((node) => text(node).includes("查看附件简历"));
+  const attachmentCard = messageNodes.find((node) => {
+    const value = text(node);
+    const cls = String(node.className || "");
+    if (value.includes("要附件简历") || value.includes("已要附件简历")) return false;
+    return value.includes("查看附件简历") ||
+      (value.includes("附件简历") && /resume|attach|file/i.test(cls));
+  });
+  const hasResumeAttachment = Boolean(hasFileName || viewAttachmentNode || attachmentCard);
+  const alreadyRequested = /已要附件简历|已向对方要附件简历|已请求附件简历/.test(scopedText);
+  const canRequestResume = !hasResumeAttachment && !alreadyRequested &&
+    (senderText.includes("要附件简历") || scopedText.includes("要附件简历"));
+  let evidence = "";
+  if (hasFileName) evidence = "file_name";
+  else if (viewAttachmentNode) evidence = "view_attachment_resume";
+  else if (attachmentCard) evidence = "attachment_card";
+  else if (alreadyRequested) evidence = "already_requested";
+  else if (canRequestResume) evidence = "request_button";
+  return {
+    hasResumeAttachment,
+    alreadyRequested,
+    canRequestResume,
+    summary: scopedText.slice(-500),
+    evidence,
+    source: "zhilian_resume_dom",
+  };
+}
+"""
