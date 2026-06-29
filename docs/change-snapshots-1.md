@@ -340,3 +340,251 @@
   - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
 - 风险 / 待确认：
   - 当前先用原生多选控件承接旧站多选能力；如果你希望完全复刻旧站的下拉复选交互，可以在下一步只改前端控件样式，不需要再改后端筛选语义。
+
+---
+
+### 快照 0030：简历库筛选区恢复折叠形态并移除重复结论筛选
+- 修改时间：2026-06-29 18:27:55 +08:00
+- 修改原因：
+  - 简历库筛选条件全部铺开后占用首屏空间较多，用户要求恢复成之前更清爽的折叠形态。
+  - “筛选结论”已由上方状态 Tab 承担，表单内再次出现会造成重复入口和理解负担。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/styles.css`
+  - `frontend/app.js`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 表单默认只保留关键词、负责人、平台、岗位、筛选和重置。
+  - 学历、学校层次、毕业届别、分数区间、入库时间、排序、只看需复核移动到“更多筛选”折叠区。
+  - 删除表单里的“筛选结论”多选框，保留顶部状态 Tab 的结论筛选能力。
+  - 点击“重置”后自动收起更多筛选，页面回到默认紧凑状态。
+- 验证结果：
+  - 本次为前端静态布局调整，后端筛选接口未改动。
+  - 预发布服务同步后需访问 `http://218.244.142.84:18080/index.html` 手动确认折叠交互和缓存刷新。
+- 风险 / 待确认：
+  - 当前使用原生 `details/summary` 实现折叠；若后续要做成更复杂的下拉筛选抽屉，可继续只改前端，不影响 API。
+
+---
+
+### 快照 0031：简历查看增加即时反馈和错误可见性
+- 修改时间：2026-06-29 18:38:49 +08:00
+- 修改原因：
+  - 用户反馈简历库点击“查看”没有反应。
+  - 排查发现 `/api/resumes/{id}/review-context` 接口可正常返回，问题更集中在前端点击后缺少即时反馈、失败时静默，以及预览区不一定进入用户视线。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 点击“查看”后立即高亮当前行，并在预览区显示“正在读取简历...”。
+  - 读取成功后渲染右侧预览和审阅摘要，并把预览标题滚动到可见位置。
+  - 读取失败时在预览区展示错误信息，不再表现为“没有反应”。
+  - 刷新前端资源版本号到 `20260629-view-feedback`，避免浏览器继续使用旧 `app.js`。
+- 验证结果：
+  - `node --check frontend/app.js`：通过。
+  - 预发布服务同步后需刷新 `http://218.244.142.84:18080/index.html` 手动确认点击反馈。
+- 风险 / 待确认：
+  - 如果你仍看不到预览，下一步需要在浏览器控制台看是否有运行时错误，或者把预览区改为点击后右侧抽屉/弹窗。
+
+---
+
+### 快照 0032：简历库页面恢复整体上下滚动
+- 修改时间：2026-06-29 18:43:24 +08:00
+- 修改原因：
+  - 用户反馈简历库内部可以滚动，但整个页面没有上下滑动方式。
+  - 排查发现桌面端 `body`、`.page` 和简历页 `44% / 56%` 固定网格共同把页面锁在一屏内，只允许表格和简历文本内部滚动。
+- 修改文件：
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - `.page` 改为可滚动容器，主内容区保留固定顶部栏。
+  - 简历页改为上方简历库面板 + 下方工作台的自然高度布局，页面整体可以继续向下滚动。
+  - 工作台设置稳定最小高度，保留候选列表、简历预览和审阅摘要各自的内部滚动。
+  - 刷新资源版本号到 `20260629-page-scroll`，避免浏览器继续使用旧 CSS。
+- 验证结果：
+  - `node --check frontend/app.js`：通过。
+  - 预发布服务同步后需刷新 `http://218.244.142.84:18080/index.html` 手动确认整页滚动。
+- 风险 / 待确认：
+  - 这次保留了表格内部滚动；如果你希望完全取消内层滚动，只让页面一条滚动轴到底，可以继续调整表格容器高度策略。
+
+---
+
+### 快照 0033：简历查看加载 PDF 预览视图
+- 修改时间：2026-06-29 18:54:03 +08:00
+- 修改原因：
+  - 用户要求点击“查看”后把真实简历视图加载进右侧预览区，而不是只显示解析文本。
+  - 预发布库样例简历已有 `payload.pdfPath`，且旧系统 uploads 下 PDF 文件真实存在。
+- 修改文件：
+  - `app/domain/resume/files.py`
+  - `app/api/routes/resumes.py`
+  - `app/domain/resume_review/service.py`
+  - `frontend/index.html`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `tests/domain/test_resume_review_workbench.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增 `GET /api/resumes/{resume_id}/file`，只按简历 id 从数据库记录的 `pdfPath/filePath` 等字段读取本地 PDF/图片文件，不允许前端传任意路径。
+  - `GET /api/resumes` 和简历详情返回 `hasFilePreview/filePreviewUrl`，审阅上下文返回 `file.available/previewUrl/name`。
+  - 前端右侧预览区改为 PDF 优先：有文件则内嵌 PDF，下面折叠展示解析文本；无文件继续展示文本视图。
+  - 刷新资源版本号到 `20260629-pdf-preview`。
+- 验证结果：
+  - 新增红灯测试先确认 `/api/resumes/resume-pdf/file` 缺失时返回 404；实现后通过。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_resume_review_workbench.py -q`：5 passed，1 warning。
+  - `node --check frontend/app.js`：通过。
+  - `.venv312\Scripts\python.exe -m compileall app\api\routes\resumes.py app\domain\resume\files.py app\domain\resume_review\service.py`：通过。
+  - `.venv312\Scripts\python.exe -m ruff check app\api\routes\resumes.py app\domain\resume\files.py app\domain\resume_review\service.py tests\domain\test_resume_review_workbench.py`：All checks passed。
+- 风险 / 待确认：
+  - 当前预览依赖数据库中已有本地文件路径且服务器能访问该文件；缺失文件会自动回退为无预览。
+  - 后续如果需要 Word/图片转 PDF 或多页图片预览，可以复用同一 `/file` 安全入口继续扩展。
+
+---
+
+### 快照 0034：简历预览改为只显示简历内容图片
+- 修改时间：2026-06-29 19:00:54 +08:00
+- 修改原因：
+  - 用户截图反馈：右侧预览嵌入的是浏览器 PDF 阅读器，包含左侧缩略图、顶部工具栏、下载/打印按钮等无关 UI。
+  - 用户只想看到简历纸张内容本身。
+- 修改文件：
+  - `app/domain/resume/files.py`
+  - `app/api/routes/resumes.py`
+  - `app/domain/resume_review/service.py`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `tests/domain/test_resume_review_workbench.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增 `GET /api/resumes/{resume_id}/preview-image`，用 PyMuPDF 把 PDF 首页渲染为 PNG；图片文件则直接返回图片 bytes。
+  - 审阅上下文新增 `file.previewImageUrl`，前端优先加载图片预览。
+  - 前端从 `<iframe>` PDF 阅读器改为 `<img>` 简历纸张图片，去掉 PDF 工具栏和缩略图区域。
+  - 原 PDF 保留为折叠区里的“打开原 PDF”链接，默认界面只展示简历内容。
+  - 刷新资源版本号到 `20260629-resume-image`。
+- 验证结果：
+  - 新增红灯测试先确认 `/preview-image` 缺失时 404；实现后通过。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_resume_review_workbench.py -q`：6 passed，1 warning。
+  - `node --check frontend/app.js`：通过。
+  - `.venv312\Scripts\python.exe -m compileall app\api\routes\resumes.py app\domain\resume\files.py app\domain\resume_review\service.py`：通过。
+  - `.venv312\Scripts\python.exe -m ruff check app\api\routes\resumes.py app\domain\resume\files.py app\domain\resume_review\service.py tests\domain\test_resume_review_workbench.py`：All checks passed。
+- 风险 / 待确认：
+  - 当前只渲染 PDF 首页；若有多页简历，下一步可以增加页码切换或长图拼接。
+  - 首次加载会实时渲染 PNG；后续如数据量大，可加预览图片缓存。
+---
+
+### 快照 0035：右侧简历预览进一步收窄为纯内容图片
+- 修改时间：2026-06-29 19:05:17 +08:00
+- 修改原因：
+  - 用户截图指出右侧仍出现 PDF 阅读器的左侧缩略图和顶部工具栏，只希望看到简历正文内容。
+  - 上一版虽然已将 PDF 渲染为图片，但预览区下方仍保留“解析文本和原文件”折叠入口，视觉上不够纯粹。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - `renderResumePreview()` 在存在 `file.previewImageUrl` 时只渲染 `<img>` 简历页图片。
+  - 右侧预览区不再默认输出原 PDF 链接、解析文本折叠块或 PDF iframe。
+  - `.image-preview` 去掉为折叠块预留的第二行，只把空间留给简历内容图片。
+- 验证结果：
+  - `node --check frontend/app.js`：通过。
+  - `.venv312\Scripts\python.exe -m compileall app\api\routes\resumes.py app\domain\resume\files.py app\domain\resume_review\service.py`：通过。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_resume_review_workbench.py -q`：6 passed，1 warning。
+  - 预发布 `http://218.244.142.84:18080/api/resumes/{id}/preview-image` 返回 `200 image/png`，PNG 魔数为 `89-50-4E-47-0D-0A-1A-0A`。
+- 风险 / 待确认：
+  - 当前仍只显示 PDF 首页；如果需要多页简历连续查看，后续可增加翻页或长图拼接。
+---
+
+### 快照 0036：简历库改为十人一页并为普通成员隐藏表格块
+- 修改时间：2026-06-29 19:20:00 +08:00
+- 修改原因：
+  - 用户希望简历库先按十个人一页展示，避免单页列表过长。
+  - 管理员现有表格页面保持可见；普通 member 只隐藏截图中的上方简历表格块，保留下方简历查看工作台。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 简历列表请求默认使用 `page_size=10`，并带上当前页码。
+  - 新增 `resumePagination` 分页条，支持上一页/下一页和总数显示。
+  - 登录后根据 `roles` 判断 member 模式；普通成员会给页面加 `member-resume-mode`，仅隐藏 `#resumeTableBlock`。
+  - 管理员没有 `member-resume-mode`，原表格块继续显示。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：2 passed。
+  - `node --check frontend/app.js`：通过。
+- 风险 / 待确认：
+  - member 隐藏表格后仍通过下方“当前结果”列表查看本页 10 份简历；如果希望 member 也隐藏候选人小列表，需要再单独调整。
+---
+
+### 快照 0037：member 筛选区保持可见并移除简历预览双滚动条
+- 修改时间：2026-06-29 19:28:00 +08:00
+- 修改原因：
+  - 用户反馈 member 界面需要显示顶部筛选/状态/可见范围这一块内容。
+  - 简历预览区同时存在外层和图片舞台两条竖向滚动条，阅读体验混乱。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - member 模式下 `.library-panel` 改为 sticky 顶部吸附，筛选区和状态 Tab 在滚动查看简历时仍保持可见。
+  - `.resume-image-stage` 不再设置 `overflow: auto`，只保留外层 `.resume-preview` 作为唯一滚动容器。
+  - 刷新 `styles.css` 版本号到 `20260629-member-sticky-single-scroll`。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：3 passed。
+  - `node --check frontend/app.js`：通过。
+  - `.venv312\Scripts\python.exe -m ruff check tests\domain\test_frontend_resume_member_view.py`：All checks passed。
+- 风险 / 待确认：
+  - 当前只让 member 的筛选区 sticky；管理员页面不变。
+---
+
+### 快照 0038：修复 member 简历库筛选区与工作台重叠
+- 修改时间：2026-06-29 19:43:06 +08:00
+- 修改原因：
+  - 用户反馈 member 页面视觉异常，顶部状态 Tab、筛选条件、分页和下方简历工作台发生压缩重叠。
+  - 浏览器实测发现 `.library-panel` 内容需要约 236px，但 member 页面外层 grid 第一行被压缩成 112px，导致工作台顶上来。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - member 模式下 `[data-page="resumes"].active` 改为 `max-content minmax(560px, max-content)`，让筛选区按内容真实高度展开。
+  - member 模式下 `.library-panel` 增加 `min-height: max-content`，避免 Tab、筛选、分页被压缩。
+  - 刷新 `styles.css` 版本号到 `20260629-member-layout-fix2`，避免浏览器继续使用旧样式缓存。
+  - 增加前端契约测试，确保 member 表格块继续隐藏、筛选区不 sticky、简历图片预览仍保持单滚动容器。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：3 passed。
+  - `.venv312\Scripts\python.exe -m ruff check tests\domain\test_frontend_resume_member_view.py`：All checks passed。
+  - `node --check frontend/app.js`：通过。
+  - 浏览器注入同等 CSS 后实测：筛选区 238px、工作台 top=342px，不再覆盖分页。
+- 风险 / 待确认：
+  - 当前修复只改变普通 member 简历库布局；管理员页面不加 `member-resume-mode`，原有表格视图不受影响。
+
+---
+
+### 快照 0039：简历库增加左右键翻阅与审阅后自动下一份
+- 修改时间：2026-06-29 19:56:50 +08:00
+- 修改原因：
+  - 用户希望审阅简历时减少鼠标操作：左键查看上一份，右键查看下一份。
+  - 当前页最后一份继续按右键时，应自动加载下一页十份并打开第一份。
+  - 点击右侧“已看 / 合适 / 不合适 / 待补充”后，应自动进入下一份简历继续审阅。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 新增 `moveToAdjacentResume()`，统一处理上一份 / 下一份 / 跨页翻阅。
+  - 新增 `bindResumeKeyboardNavigation()`，只在简历库页响应 `ArrowLeft` / `ArrowRight`，输入框、文本框、下拉框内不拦截键盘。
+  - 新增 `markViewedAndAdvance()` 与 `advanceAfterReviewAction()`，审阅动作写入成功后自动打开下一份；当前页到底时自动进入下一页第一份。
+  - “约面试”不自动跳转下一份，避免刚创建面试会话后丢失上下文。
+  - 刷新 `app.js` 版本号到 `20260629-review-keyboard-flow`。
+- 验证结果：
+  - 先补前端契约测试并确认失败，再实现逻辑后通过。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：5 passed。
+  - `.venv312\Scripts\python.exe -m ruff check tests\domain\test_frontend_resume_member_view.py`：All checks passed。
+  - `node --check frontend/app.js`：通过。
+- 风险 / 待确认：
+  - 当前键盘快捷键只在简历库页面生效；如果后续要在面试中心复用，需要单独接入，避免页面级快捷键互相抢焦点。

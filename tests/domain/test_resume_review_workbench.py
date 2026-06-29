@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.control_plane.main import create_app
 from app.db.engine import connect, run_migrations
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
+from app.domain.resume.service import ResumeService
 from app.domain.resume_review.repository import ResumeReviewRepository
 from app.domain.resume_review.service import ResumeReviewService
+from fastapi.testclient import TestClient
 
 
 def test_review_migration_creates_tables(tmp_path: Path) -> None:
@@ -87,6 +90,62 @@ def test_unsuitable_decision_does_not_create_assignment(tmp_path: Path) -> None:
     assert service.queue_for_user("local-admin") == []
 
 
+def test_resume_file_route_returns_pdf_from_stored_resume_path(tmp_path: Path) -> None:
+    """PDF 预览接口只通过简历 id 读取数据库中的文件路径。"""
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "resume.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n% preview\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-pdf",
+            name="李四",
+            phone="13900139000",
+            job_type="电气工程师",
+            payload={"pdfPath": str(pdf_path), "rawText": "李四 电气工程师"},
+        )
+    )
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        response = client.get("/api/resumes/resume-pdf/file")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content.startswith(b"%PDF-1.4")
+
+
+def test_resume_preview_image_route_renders_pdf_page(tmp_path: Path) -> None:
+    """简历图片预览接口把 PDF 首页渲染成图片，避免暴露浏览器 PDF 工具栏。"""
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "resume.pdf"
+    _write_minimal_pdf(pdf_path)
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-image",
+            name="王五",
+            phone="13700137000",
+            job_type="销售管培生",
+            payload={"pdfPath": str(pdf_path), "rawText": "王五 销售管培生"},
+        )
+    )
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        response = client.get("/api/resumes/resume-image/preview-image")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG")
+
+
 def _service(tmp_path: Path) -> tuple[ResumeRepository, ResumeReviewService]:
     database = tmp_path / "review.sqlite"
     resume_repo = ResumeRepository(database)
@@ -114,3 +173,13 @@ def _save_resume(repository: ResumeRepository) -> Resume:
     )
     repository.save(resume)
     return Resume.from_record(repository.get("resume-1"))
+
+
+def _write_minimal_pdf(path: Path) -> None:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=360, height=480)
+    page.insert_text((48, 80), "Resume Preview", fontsize=18)
+    document.save(path)
+    document.close()

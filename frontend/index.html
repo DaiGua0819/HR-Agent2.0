@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-resume-filters" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260629-member-layout-fix2" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260629-feishu-login" />
   </head>
   <body>
@@ -197,7 +197,7 @@
                 <button class="secondary" type="reset">重置</button>
               </div>
             </form>
-            <div class="table-wrap">
+            <div class="table-wrap" id="resumeTableBlock">
               <table>
                 <thead>
                   <tr>
@@ -215,6 +215,7 @@
               </table>
               <div class="empty" id="emptyState">正在读取简历库</div>
             </div>
+            <div class="pagination" id="resumePagination"></div>
           </div>
           <div class="workbench">
             <div class="candidate-list">
@@ -229,7 +230,7 @@
                   <button id="nextBtn">下一份</button>
                 </div>
               </div>
-              <pre id="resumePreview" class="resume-preview">从左侧列表点击“查看”，这里会固定显示简历内容，不需要整页上下滚动。</pre>
+              <div id="resumePreview" class="resume-preview">从左侧列表点击“查看”，这里会固定显示简历内容，不需要整页上下滚动。</div>
             </div>
             <aside class="summary-panel">
               <div class="panel-title">审阅摘要</div>
@@ -302,6 +303,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260629-resume-filters"></script>
+    <script src="/assets/app.js?v=20260629-review-keyboard-flow"></script>
   </body>
 </html>

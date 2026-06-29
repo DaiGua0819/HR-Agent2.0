@@ -1,4 +1,17 @@
-const state = { view: "dashboard", user: null, dashboard: null, resumes: [], selectedId: "", context: null, tab: "all", interviewSelection: null };
+const state = {
+  view: "dashboard",
+  user: null,
+  dashboard: null,
+  resumes: [],
+  selectedId: "",
+  context: null,
+  tab: "all",
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  pages: 0,
+  interviewSelection: null,
+};
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["undecided", "待判断"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const $ = (id) => document.getElementById(id);
@@ -27,6 +40,10 @@ const uiAccess = () => state.user?.uiAccess || { defaultView: "resumes", views: 
 const canView = (view) => hrAuth.canView(state.user, view);
 const canAction = (action) => hrAuth.canAction(state.user, action);
 const setAllowedNavigation = () => hrAuth.setAllowedNavigation(state.user);
+const isMemberUser = () => (state.user?.roles || []).includes("member") && !(state.user?.roles || []).includes("super_admin");
+function setResumeMemberMode() {
+  document.body.classList.toggle("member-resume-mode", isMemberUser());
+}
 function setView(view) {
   if (state.user && !canView(view)) view = uiAccess().defaultView;
   state.view = view;
@@ -130,6 +147,7 @@ function buildTabs() {
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.onclick = () => {
       state.tab = button.dataset.tab;
+      state.page = 1;
       if (state.tab === "queue") return loadQueue();
       loadResumes();
     };
@@ -137,7 +155,7 @@ function buildTabs() {
 }
 function queryFromFilters() {
   const data = new FormData($("filters"));
-  const params = new URLSearchParams({ page_size: "100" });
+  const params = new URLSearchParams({ page: String(state.page), page_size: "10" });
   for (const [key, value] of data.entries()) {
     const cleaned = String(value || "").trim();
     if (!cleaned) continue;
@@ -152,8 +170,13 @@ async function loadResumes() {
   buildTabs();
   const data = await api(`/api/resumes?${queryFromFilters()}`);
   state.resumes = data.items || [];
+  state.total = data.total || 0;
+  state.page = data.page || 1;
+  state.pageSize = data.pageSize || 10;
+  state.pages = data.pages || 0;
   renderRows();
   renderMiniList();
+  renderPagination();
 }
 async function loadQueue() {
   state.tab = "queue";
@@ -161,8 +184,13 @@ async function loadQueue() {
   const data = await api("/api/resume-review/queue");
   const items = data.items || [];
   state.resumes = items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
+  state.total = state.resumes.length;
+  state.page = 1;
+  state.pageSize = 10;
+  state.pages = state.resumes.length ? 1 : 0;
   renderRows();
   renderMiniList();
+  renderPagination();
   renderQueue(items);
 }
 function renderRows() {
@@ -192,6 +220,27 @@ function renderMiniList() {
     .map((resume) => `<button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}"><strong>${escapeHtml(resumeName(resume))}</strong><small>${escapeHtml(resumeJob(resume))}</small></button>`)
     .join("");
   bindRowActions();
+}
+function renderPagination() {
+  const node = $("resumePagination");
+  if (!node) return;
+  const pages = Math.max(1, state.pages || 1);
+  const current = Math.min(Math.max(1, state.page || 1), pages);
+  node.innerHTML = `
+    <span>第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
+    <div>
+      <button data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
+      <button data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
+    </div>
+  `;
+  node.querySelectorAll("[data-page-move]").forEach((button) => {
+    button.onclick = () => {
+      const nextPage = current + Number(button.dataset.pageMove || 0);
+      if (nextPage < 1 || nextPage > pages) return;
+      state.page = nextPage;
+      loadResumes();
+    };
+  });
 }
 function renderQueue(items) {
   $("queueList").innerHTML = items.length
@@ -228,6 +277,12 @@ function bindRowActions() {
 async function openResume(id) {
   if (!id) return;
   state.selectedId = id;
+  renderRows();
+  renderMiniList();
+  $("previewTitle").textContent = "正在读取简历...";
+  $("resumePreview").className = "resume-preview";
+  $("resumePreview").textContent = "正在加载候选人详情和审阅摘要，请稍候。";
+  $("summaryContent").innerHTML = `<p class="muted">正在读取审阅摘要...</p>`;
   state.context = await api(`/api/resumes/${id}/review-context`);
   renderRows();
   renderMiniList();
@@ -245,13 +300,30 @@ function resumeText(resume) {
     payload.rawText || payload.text || payload.summary || "当前没有解析文本。后续接入 PDF 预览后，这里会显示固定高度的简历页视图。",
   ].join("\n");
 }
+function renderResumePreview(context) {
+  const resume = context.resume;
+  const file = context.file || {};
+  const preview = $("resumePreview");
+  if (!preview) return;
+  if (file.available && file.previewImageUrl) {
+    preview.className = "resume-preview image-preview";
+    preview.innerHTML = `
+      <div class="resume-image-stage">
+        <img alt="${escapeHtml(resumeName(resume))} 简历内容" src="${escapeHtml(file.previewImageUrl)}" />
+      </div>
+    `;
+    return;
+  }
+  preview.className = "resume-preview text-preview";
+  preview.textContent = resumeText(resume);
+}
 function renderContext() {
   const context = state.context;
   if (!context) return;
   const resume = context.resume;
   const review = context.reviewState || {};
   $("previewTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
-  $("resumePreview").textContent = resumeText(resume);
+  renderResumePreview(context);
   $("summaryContent").innerHTML = `
     <div class="summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
@@ -270,9 +342,44 @@ function renderContext() {
 async function setDecision(id, decision) {
   const reasonTags = { suitable: ["岗位匹配"], unsuitable: ["暂不匹配"], needs_more_info: ["信息待补充"] }[decision] || [];
   await api(`/api/resumes/${id}/review-decision`, { method: "POST", body: JSON.stringify({ decision, reasonTags, note: "" }) });
+  await advanceAfterReviewAction(id);
+}
+async function markViewedAndAdvance(id) {
+  await api(`/api/resumes/${id}/view`, { method: "POST" });
+  await advanceAfterReviewAction(id);
+}
+async function advanceAfterReviewAction(id) {
+  const currentIndex = state.resumes.findIndex((resume) => resume.id === id);
+  const nextId = currentIndex >= 0 ? state.resumes[currentIndex + 1]?.id : "";
+  const currentPage = state.page;
+  const shouldLoadNextPage = !nextId && currentIndex >= 0 && currentPage < state.pages;
   await loadResumes();
-  const next = state.resumes.find((resume) => resume.id === id) || state.resumes[0];
-  if (next) await openResume(next.id);
+  if (nextId && state.resumes.some((resume) => resume.id === nextId)) {
+    await openResume(nextId);
+    return;
+  }
+  if (shouldLoadNextPage) {
+    state.page = currentPage + 1;
+    await loadResumes();
+    const first = state.resumes[0];
+    if (first) await openResume(first.id);
+    return;
+  }
+  const fallbackIndex = currentIndex >= 0 ? Math.min(currentIndex, state.resumes.length - 1) : 0;
+  const fallback = state.resumes[fallbackIndex];
+  if (fallback && fallback.id !== id) {
+    await openResume(fallback.id);
+    return;
+  }
+  if (!state.resumes.length) {
+    state.selectedId = "";
+    state.context = null;
+    renderRows();
+    renderMiniList();
+    $("previewTitle").textContent = "没有更多简历";
+    $("resumePreview").textContent = "当前筛选条件下已经没有待查看的简历。";
+    $("summaryContent").innerHTML = `<p class="muted">当前筛选条件下没有更多简历。</p>`;
+  }
 }
 async function requestInterview() {
   if (!state.selectedId || !state.context || !canAction("interview:invite")) return;
@@ -340,27 +447,66 @@ async function runProcess(platform, owner) {
   await api(`/automation/${platform}/process-messages?owner=${encodeURIComponent(owner)}`, { method: "POST" });
   await loadDashboard();
 }
-function move(offset) {
+async function moveToAdjacentResume(direction) {
   if (!state.resumes.length) return;
-  const index = Math.max(0, state.resumes.findIndex((resume) => resume.id === state.selectedId));
-  const next = state.resumes[Math.min(state.resumes.length - 1, Math.max(0, index + offset))];
-  if (next) openResume(next.id);
+  const selectedIndex = state.resumes.findIndex((resume) => resume.id === state.selectedId);
+  const index = selectedIndex >= 0 ? selectedIndex : direction > 0 ? -1 : state.resumes.length;
+  const nextIndex = index + direction;
+  if (nextIndex >= 0 && nextIndex < state.resumes.length) {
+    await openResume(state.resumes[nextIndex].id);
+    return;
+  }
+  const targetPage = state.page + direction;
+  if (targetPage < 1 || targetPage > state.pages) return;
+  state.page = targetPage;
+  await loadResumes();
+  const target = direction > 0 ? state.resumes[0] : state.resumes[state.resumes.length - 1];
+  if (target) await openResume(target.id);
+}
+function move(offset) {
+  void moveToAdjacentResume(offset);
+}
+function shouldIgnoreResumeShortcut(event) {
+  const target = event.target;
+  if (!target) return false;
+  const tag = (target.tagName || "").toUpperCase();
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tag);
+}
+function bindResumeKeyboardNavigation() {
+  document.addEventListener("keydown", (event) => {
+    if (state.view !== "resumes" || shouldIgnoreResumeShortcut(event)) return;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveToAdjacentResume(-1);
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      moveToAdjacentResume(1);
+    }
+  });
 }
 function bindPageActions() {
   hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
+    state.page = 1;
     loadResumes();
   });
-  $("filters").addEventListener("reset", () => setTimeout(loadResumes, 0));
+  $("filters").addEventListener("reset", () =>
+    setTimeout(() => {
+      state.page = 1;
+      loadResumes();
+    }, 0),
+  );
   $("refreshDashboardBtn").onclick = loadDashboard;
   $("globalSearch").addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     $("filters").q.value = event.target.value;
+    state.page = 1;
     setView("resumes");
   });
-  $("viewedBtn").onclick = () => state.selectedId && openResume(state.selectedId);
+  $("viewedBtn").onclick = () => state.selectedId && markViewedAndAdvance(state.selectedId);
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("moreInfoBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "needs_more_info");
@@ -371,14 +517,16 @@ function bindPageActions() {
   ["generateQuestionsBtn", "syncFeishuBtn", "renderImageBtn", "backfillBtn"].forEach((id) => {
     $(id).onclick = () => ($("interviewStatus").textContent = "当前首版界面已保留入口，真实调用继续复用后端面试中心接口。");
   });
+  bindResumeKeyboardNavigation();
 }
 async function afterLogin(user) {
-  state.user = user; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setView(uiAccess().defaultView);
+  state.user = user; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode(); setView(uiAccess().defaultView);
   if (canView("resumes")) await loadResumes();
 }
 async function logout() {
   await api("/api/auth/logout", { method: "POST" });
   state.user = null; state.selectedId = ""; state.context = null;
+  setResumeMemberMode();
   hrAuth.showLogin();
 }
 async function init() {

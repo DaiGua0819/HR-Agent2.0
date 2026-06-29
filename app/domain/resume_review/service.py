@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.domain.resume.files import preview_file_path
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume_review.models import (
@@ -120,7 +121,13 @@ class ResumeReviewService:
             state = self.mark_viewed(resume.id, user_id)
         else:
             state = self.state_for_resume(resume.id, user_id)
-        file_path = resume.payload.get("file_path") or resume.payload.get("filePath") or ""
+        file_path = (
+            resume.payload.get("file_path")
+            or resume.payload.get("filePath")
+            or resume.payload.get("pdfPath")
+            or ""
+        )
+        preview_path = preview_file_path(resume)
         parse_status = resume.payload.get("parse_status") or resume.payload.get("parseStatus") or ""
         return {
             "resume": resume.model_dump(),
@@ -140,6 +147,14 @@ class ResumeReviewService:
                 "sourceArtifactId": resume.source_artifact_id,
                 "filePath": str(file_path),
                 "parseStatus": str(parse_status),
+            },
+            "file": {
+                "available": preview_path is not None,
+                "previewUrl": f"/api/resumes/{resume.id}/file" if preview_path else "",
+                "previewImageUrl": (
+                    f"/api/resumes/{resume.id}/preview-image" if preview_path else ""
+                ),
+                "name": preview_path.name if preview_path else "",
             },
             "permissions": {
                 "canReview": True,

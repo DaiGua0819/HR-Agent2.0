@@ -9,9 +9,11 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import LOCAL_USER
+from app.domain.resume.files import preview_file_path, preview_media_type, render_preview_image
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
 from app.domain.resume_review.service import ResumeReviewService
@@ -110,6 +112,41 @@ async def get_resume(resume_id: str, request: Request) -> dict[str, object]:
     return _resume_payload(resume)
 
 
+@router.get("/{resume_id}/file")
+async def get_resume_file(resume_id: str, request: Request) -> FileResponse:
+    """按简历 id 返回数据库记录的 PDF/图片预览文件。"""
+
+    resume = _service(request).get_resume(resume_id)
+    if resume is None:
+        raise HTTPException(status_code=404, detail="resume_not_found")
+    path = preview_file_path(resume)
+    if path is None:
+        raise HTTPException(status_code=404, detail="resume_file_not_found")
+    return FileResponse(
+        path,
+        media_type=preview_media_type(path),
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/{resume_id}/preview-image")
+async def get_resume_preview_image(resume_id: str, request: Request) -> Response:
+    """按简历 id 返回无工具栏的简历图片预览。"""
+
+    resume = _service(request).get_resume(resume_id)
+    if resume is None:
+        raise HTTPException(status_code=404, detail="resume_not_found")
+    path = preview_file_path(resume)
+    if path is None:
+        raise HTTPException(status_code=404, detail="resume_file_not_found")
+    try:
+        body, media_type = render_preview_image(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=body, media_type=media_type)
+
+
 @router.patch("/{resume_id}")
 async def update_resume(
     resume_id: str,
@@ -136,6 +173,7 @@ async def rescore_resume(resume_id: str, request: Request) -> dict[str, object]:
 
 def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[str, object]:
     payload = resume.model_dump()
+    file_path = preview_file_path(resume)
     payload.update(
         {
             "parsedName": resume.parsed_name,
@@ -144,6 +182,9 @@ def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[
             "linkedOwner": resume.linked_owner,
             "linkedPlatformConversationId": resume.linked_platform_conversation_id,
             "sourceArtifactId": resume.source_artifact_id,
+            "hasFilePreview": file_path is not None,
+            "filePreviewUrl": f"/api/resumes/{resume.id}/file" if file_path else "",
+            "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
             "reviewState": _review_state_payload(review_state),
         }
     )
