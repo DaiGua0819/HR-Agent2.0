@@ -98,7 +98,7 @@ def _admin_match_source(profile: FeishuProfile) -> str:
     admin_open_ids = set(config.admin_open_ids)
     if profile.open_id in admin_open_ids:
         return "open_id"
-    if not admin_open_ids and profile.name in set(config.bootstrap_admin_names):
+    if profile.name in set(config.bootstrap_admin_names):
         return "bootstrap_name"
     return ""
 

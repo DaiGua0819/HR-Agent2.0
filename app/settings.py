@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -197,6 +198,7 @@ def _split_env_values(env_name: str) -> list[str]:
 def load_settings() -> AppSettings:
     """加载并缓存应用配置。"""
 
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
     settings = AppSettings()
     accounts_config = _load_yaml_config("accounts.yaml")
     model_config = _load_yaml_config("model.yaml")

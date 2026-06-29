@@ -5,47 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-role-login" />
-    <link rel="stylesheet" href="/assets/auth.css?v=20260629-role-login" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260629-feishu-login" />
+    <link rel="stylesheet" href="/assets/auth.css?v=20260629-feishu-login" />
   </head>
   <body>
     <section id="loginScreen" class="login-screen">
       <div class="login-visual">
-        <div class="login-brand"><span>HR</span><strong>HR-Agent Control Plane</strong></div>
-        <h1>用飞书身份进入招聘自动化控制台</h1>
-        <p>登录后按角色与负责人范围展示功能。管理员可以看全局，普通成员只看到被授权的简历库和候选人数据。</p>
+        <div class="login-brand"><span>HR</span><strong>HR Agent</strong></div>
+        <div class="login-visual-copy">
+          <p class="login-kicker">Recruiting Control Plane</p>
+          <h1>用飞书身份进入招聘工作台</h1>
+          <p>管理员进入完整控制台，成员只进入授权范围内的简历库。所有访问都按公司飞书租户校验。</p>
+        </div>
         <div class="login-points">
-          <span>简历库权限隔离</span>
-          <span>三平台 Agent 统一权限入口</span>
+          <span>公司飞书验证</span>
+          <span>角色自动分流</span>
+          <span>简历库范围隔离</span>
           <span>HttpOnly Session</span>
-          <span>OAuth 登录</span>
         </div>
       </div>
       <div class="login-card">
-        <span class="login-env">Production · 仅公司飞书可访问</span>
-        <p class="eyebrow">Secure Entry</p>
-        <h2>欢迎回来</h2>
-        <p class="login-copy">继续前请使用飞书完成授权。系统会根据你的账号自动加载可见菜单和简历库范围。</p>
-        <button id="feishuLoginBtn" class="primary feishu-login" type="button"><span>飞</span>使用飞书授权登录</button>
-        <div class="login-divider"><span>权限预览</span></div>
-        <div class="access-preview">
-          <strong>示例：简历查看者</strong>
-          <dl>
-            <div><dt>可见负责人</dt><dd>按授权范围</dd></div>
-            <div><dt>可见平台</dt><dd>全平台</dd></div>
-            <div><dt>可用模块</dt><dd>简历库</dd></div>
-          </dl>
+        <span class="login-env">仅限公司飞书账号</span>
+        <div class="login-card-head">
+          <p class="eyebrow">Secure Entry</p>
+          <h2>登录 HR Agent</h2>
+          <p class="login-copy">继续前请完成飞书授权。系统会根据你的飞书身份自动加载可见页面和简历范围。</p>
+        </div>
+        <button id="feishuLoginBtn" class="primary feishu-login" type="button">
+          <span aria-hidden="true">飞</span>
+          <strong>使用飞书授权登录</strong>
+        </button>
+        <div class="login-assurance" aria-label="登录权限说明">
+          <div><strong>管理员</strong><span>王鑫力、和新红可查看全部页面</span></div>
+          <div><strong>成员</strong><span>仅查看自己的简历库</span></div>
+          <div><strong>安全</strong><span>非公司租户无法进入系统</span></div>
         </div>
         <p id="loginError" class="login-error" aria-live="polite"></p>
-        <details class="dev-login">
-          <summary>本地开发登录</summary>
-          <form id="loginForm">
-            <label><span>账号</span><input id="loginUsername" name="username" autocomplete="username" placeholder="admin / member" /></label>
-            <label><span>密码</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" /></label>
-            <button type="submit">使用本地账号进入</button>
-          </form>
-          <p class="login-hint">本地默认：admin/admin，member/member；生产请使用飞书授权。</p>
-        </details>
       </div>
     </section>
     <div id="app" class="shell" hidden>
@@ -257,7 +252,7 @@
         </section>
       </main>
     </div>
-    <script src="/assets/auth.js?v=20260629-role-login"></script>
-    <script src="/assets/app.js?v=20260629-role-login"></script>
+    <script src="/assets/auth.js?v=20260629-feishu-login"></script>
+    <script src="/assets/app.js?v=20260629-feishu-login"></script>
   </body>
 </html>

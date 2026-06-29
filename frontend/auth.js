@@ -10,8 +10,6 @@ const hrAuth = (() => {
     login().hidden = false;
     app().hidden = true;
     error().textContent = message;
-    const password = document.getElementById("loginPassword");
-    if (password) password.value = "";
   }
   function showApp() {
     login().hidden = true;
@@ -39,20 +37,6 @@ const hrAuth = (() => {
     document.getElementById("feishuLoginBtn").onclick = () => {
       window.location.href = "/api/auth/feishu/start";
     };
-    document.getElementById("loginForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      error().textContent = "";
-      const body = JSON.stringify({
-        username: document.getElementById("loginUsername").value,
-        password: document.getElementById("loginPassword").value,
-      });
-      try {
-        const user = await api("/api/auth/login", { method: "POST", body });
-        await afterLogin(user);
-      } catch {
-        showLogin("账号或密码不正确，请重新输入。");
-      }
-    });
   }
   return { access, canView, canAction, showLogin, showApp, setAllowedNavigation, updateUserCard, bindLogin };
 })();

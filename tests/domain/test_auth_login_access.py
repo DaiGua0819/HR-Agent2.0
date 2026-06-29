@@ -76,8 +76,8 @@ def test_logout_clears_login_session() -> None:
     assert me.status_code == 401
 
 
-def test_frontend_has_login_screen_and_ui_access_hooks() -> None:
-    """The static app starts at login and switches navigation by uiAccess."""
+def test_frontend_has_feishu_only_login_screen_and_ui_access_hooks() -> None:
+    """The static app starts at a Feishu-only production login screen."""
 
     root = Path(__file__).resolve().parents[2]
     html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
@@ -88,8 +88,9 @@ def test_frontend_has_login_screen_and_ui_access_hooks() -> None:
 
     assert 'id="loginScreen"' in html
     assert 'id="feishuLoginBtn"' in html
-    assert 'id="loginForm"' in html
+    assert 'id="loginForm"' not in html
+    assert "admin / member" not in html
     assert "uiAccess" in script
     assert "/api/auth/feishu/start" in script
-    assert "loginForm" in script
     assert "setAllowedNavigation" in script
+    assert "/api/auth/login" not in script

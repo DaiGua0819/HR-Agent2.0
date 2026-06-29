@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from app.auth.feishu_oauth import FeishuProfile
@@ -106,6 +107,35 @@ def test_feishu_callback_maps_bootstrap_admin_by_name(monkeypatch) -> None:
     assert payload["feishu"]["adminMatchedBy"] == "bootstrap_name"
 
 
+def test_feishu_callback_keeps_bootstrap_admin_names_after_open_id_is_set(
+    monkeypatch,
+) -> None:
+    """Known admin names stay admin until every admin open_id has been collected."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    monkeypatch.setenv("FEISHU_ADMIN_OPEN_IDS", "ou_wang")
+    monkeypatch.setenv("FEISHU_BOOTSTRAP_ADMIN_NAMES", "He Admin")
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_he", tenant_key="tenant-a", name="He Admin"),
+    )
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        client.get(
+            f"/api/auth/feishu/callback?code=ok-code&state={state}",
+            follow_redirects=False,
+        )
+        me = client.get("/api/auth/me")
+
+    load_settings.cache_clear()
+    assert me.status_code == 200
+    payload = me.json()
+    assert payload["roles"] == ["super_admin"]
+    assert payload["feishu"]["adminMatchedBy"] == "bootstrap_name"
+
+
 def test_feishu_callback_maps_member_to_resume_library(monkeypatch) -> None:
     """Company users who are not admins become resume-library-only members."""
 
@@ -131,3 +161,30 @@ def test_feishu_callback_maps_member_to_resume_library(monkeypatch) -> None:
     assert payload["roles"] == ["member"]
     assert payload["uiAccess"]["views"] == ["resumes"]
     assert payload["resumeScope"]["owners"] == ["普通同事"]
+
+
+def test_feishu_callback_writes_login_diagnostics(tmp_path, monkeypatch) -> None:
+    """A successful Feishu login leaves a safe identity snapshot for bootstrap setup."""
+
+    monkeypatch.delenv("FEISHU_ALLOWED_TENANT_KEYS", raising=False)
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_first", tenant_key="tenant-first", name="Admin One"),
+    )
+    diagnostics_path = tmp_path / "last_feishu_login.json"
+    app.state.feishu_login_diagnostics_path = diagnostics_path
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        response = client.get(
+            f"/api/auth/feishu/callback?code=ok-code&state={state}",
+            follow_redirects=False,
+        )
+
+    load_settings.cache_clear()
+    assert response.status_code == 307
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert payload["feishu"]["openId"] == "ou_first"
+    assert payload["feishu"]["tenantKey"] == "tenant-first"
+    assert "accessToken" not in json.dumps(payload)

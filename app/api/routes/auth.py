@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -14,6 +17,7 @@ from pydantic import BaseModel
 from app.auth.access import feishu_payload, user_payload, validate_company
 from app.auth.feishu_oauth import FeishuOAuthService
 from app.domain.resume_review.models import LocalUser
+from app.settings import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 SESSION_COOKIE = "hr_agent_session"
@@ -118,6 +122,7 @@ async def feishu_callback(
         profile = await _feishu_service(request).exchange_code(code)
         validate_company(profile)
         session_payload = feishu_payload(profile)
+        _write_feishu_login_diagnostics(request, session_payload)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -186,3 +191,30 @@ def _feishu_service(request: Request) -> FeishuOAuthService:
         service = FeishuOAuthService()
         request.app.state.feishu_oauth_service = service
     return service
+
+
+def _write_feishu_login_diagnostics(
+    request: Request,
+    payload: dict[str, object],
+) -> None:
+    """Persist non-token Feishu identity fields for first-run allow-list setup."""
+
+    path = getattr(request.app.state, "feishu_login_diagnostics_path", None)
+    diagnostics_path = (
+        Path(path)
+        if path
+        else PROJECT_ROOT / "data" / "diagnostics" / "last_feishu_login.json"
+    )
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    feishu = payload.get("feishu", {})
+    user = payload.get("user", {})
+    safe_payload = {
+        "loggedAt": datetime.now(UTC).isoformat(),
+        "user": user,
+        "roles": payload.get("roles", []),
+        "feishu": feishu,
+    }
+    diagnostics_path.write_text(
+        json.dumps(safe_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
