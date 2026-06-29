@@ -2,9 +2,113 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>HR Agent Control Plane</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HR Agent 简历审阅工作台</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
-    <!-- Phase 0 占位：后续沿用旧前端 API 契约接入控制面。 -->
+    <div id="app" class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">HR</div>
+          <div>
+            <strong>HR Agent</strong>
+            <span>招聘控制面</span>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="active" data-view="resumes">简历库</button>
+          <button data-view="queue">待我处理</button>
+          <button data-view="suitable">合适待复核</button>
+          <button data-view="archive">不合适归档</button>
+          <button data-view="automation">自动化控制</button>
+          <button data-view="monitoring">监控日志</button>
+        </nav>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">本地预览</p>
+            <h1>简历审阅工作台</h1>
+          </div>
+          <div class="user-card">
+            <span id="userName">加载中</span>
+            <small id="userScope">读取权限范围</small>
+          </div>
+        </header>
+
+        <section class="content">
+          <div class="library-panel">
+            <div class="tabs" id="statusTabs"></div>
+            <form class="filters" id="filters">
+              <input name="q" placeholder="搜索姓名 / 手机 / 学校 / 技能" />
+              <input name="owner" placeholder="负责人" />
+              <select name="platform">
+                <option value="">全部平台</option>
+                <option value="boss">BOSS</option>
+                <option value="job51">51job</option>
+                <option value="zhilian">智联</option>
+              </select>
+              <input name="job_type" placeholder="岗位" />
+              <input name="education" placeholder="学历" />
+              <input name="score_min" type="number" min="0" max="100" placeholder="最低分" />
+              <button type="submit">筛选</button>
+            </form>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>候选人</th>
+                    <th>岗位</th>
+                    <th>平台</th>
+                    <th>负责人</th>
+                    <th>评分</th>
+                    <th>状态</th>
+                    <th>更新时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="resumeRows"></tbody>
+              </table>
+              <div class="empty" id="emptyState">正在读取简历库</div>
+            </div>
+          </div>
+
+          <div class="workbench">
+            <div class="candidate-list">
+              <div class="panel-title">当前结果</div>
+              <div id="miniList"></div>
+            </div>
+
+            <div class="preview-pane">
+              <div class="preview-toolbar">
+                <strong id="previewTitle">请选择简历</strong>
+                <div>
+                  <button id="prevBtn">上一份</button>
+                  <button id="nextBtn">下一份</button>
+                </div>
+              </div>
+              <pre id="resumePreview" class="resume-preview">从左侧列表点击“查看”，这里会固定显示简历内容，不需要整页上下滚动。</pre>
+            </div>
+
+            <aside class="summary-panel">
+              <div class="panel-title">审阅摘要</div>
+              <div id="summaryContent" class="summary-content">
+                <p class="muted">选择候选人后显示摘要、评分、来源和处理状态。</p>
+              </div>
+              <div class="action-bar">
+                <button id="viewedBtn">已看</button>
+                <button id="suitableBtn" class="success">合适</button>
+                <button id="unsuitableBtn" class="danger">不合适</button>
+                <button id="moreInfoBtn" class="warning">待补充</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/assets/app.js"></script>
   </body>
 </html>

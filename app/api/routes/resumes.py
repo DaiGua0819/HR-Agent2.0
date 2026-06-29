@@ -11,8 +11,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.routes.auth import LOCAL_USER
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
+from app.domain.resume_review.service import ResumeReviewService
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
 
@@ -31,6 +33,10 @@ def _service(request: Request) -> ResumeService:
     return service
 
 
+def _review_service(request: Request) -> ResumeReviewService | None:
+    return getattr(request.app.state, "resume_review_service", None)
+
+
 @router.get("")
 async def list_resumes(
     request: Request,
@@ -39,22 +45,44 @@ async def list_resumes(
     q: str = "",
     job_type: str = "",
     source_platform: str = "",
+    owner: str = "",
+    platform: str = "",
+    education: str = "",
+    read_status: str = "",
+    decision: str = "",
+    score_min: int | None = None,
+    score_max: int | None = None,
     sort: str = "updated_at",
     desc: bool = True,
 ) -> dict[str, object]:
     """列出简历，支持筛选、排序和分页。"""
 
+    review_service = _review_service(request)
+    review_states = review_service.states_for_user(LOCAL_USER.id) if review_service else {}
     result = _service(request).list_resumes(
         page=page,
         page_size=page_size,
         query=q,
         job_type=job_type,
-        source_platform=source_platform,
+        source_platform=platform or source_platform,
+        owner=owner,
+        education=education,
+        score_min=score_min,
+        score_max=score_max,
+        read_status=read_status,
+        decision=decision,
+        review_states=review_states,
         sort=sort,
         descending=desc,
     )
     return {
-        "items": [_resume_payload(item) for item in result.items],
+        "items": [
+            _resume_payload(
+                item,
+                review_state=review_states.get(item.id) if review_states else None,
+            )
+            for item in result.items
+        ],
         "total": result.total,
         "page": result.page,
         "pageSize": result.page_size,
@@ -96,7 +124,7 @@ async def rescore_resume(resume_id: str, request: Request) -> dict[str, object]:
     return result
 
 
-def _resume_payload(resume: Resume) -> dict[str, object]:
+def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[str, object]:
     payload = resume.model_dump()
     payload.update(
         {
@@ -106,6 +134,26 @@ def _resume_payload(resume: Resume) -> dict[str, object]:
             "linkedOwner": resume.linked_owner,
             "linkedPlatformConversationId": resume.linked_platform_conversation_id,
             "sourceArtifactId": resume.source_artifact_id,
+            "reviewState": _review_state_payload(review_state),
         }
     )
     return payload
+
+
+def _review_state_payload(state: object | None) -> dict[str, object]:
+    if state is None:
+        return {
+            "readStatus": "unread",
+            "decision": "undecided",
+            "reasonTags": [],
+            "note": "",
+        }
+    return {
+        "id": getattr(state, "id", ""),
+        "readStatus": getattr(state, "read_status", "unread"),
+        "decision": getattr(state, "decision", "undecided"),
+        "reasonTags": getattr(state, "reason_tags", []),
+        "note": getattr(state, "note", ""),
+        "assignedTo": getattr(state, "assigned_to", ""),
+        "viewedAt": getattr(state, "viewed_at", ""),
+    }

@@ -47,6 +47,13 @@ class ResumeService:
         query: str = "",
         job_type: str = "",
         source_platform: str = "",
+        owner: str = "",
+        education: str = "",
+        score_min: int | None = None,
+        score_max: int | None = None,
+        read_status: str = "",
+        decision: str = "",
+        review_states: dict[str, Any] | None = None,
         sort: str = "updated_at",
         descending: bool = True,
     ) -> ResumeListResult:
@@ -60,6 +67,13 @@ class ResumeService:
             query=query,
             job_type=job_type,
             source_platform=source_platform,
+            owner=owner,
+            education=education,
+            score_min=score_min,
+            score_max=score_max,
+            read_status=read_status,
+            decision=decision,
+            review_states=review_states or {},
         )
         resumes = _sort_resumes(resumes, sort=sort, descending=descending)
         total = len(resumes)
@@ -108,15 +122,39 @@ def _filter_resumes(
     query: str,
     job_type: str,
     source_platform: str,
+    owner: str,
+    education: str,
+    score_min: int | None,
+    score_max: int | None,
+    read_status: str,
+    decision: str,
+    review_states: dict[str, Any],
 ) -> list[Resume]:
     needle = clean_text(query).lower()
     job = clean_text(job_type)
     platform = clean_text(source_platform)
+    owner_value = clean_text(owner)
+    education_value = clean_text(education)
     result: list[Resume] = []
     for resume in resumes:
         if job and job not in (resume.job_type or resume.applied_position or ""):
             continue
-        if platform and platform != resume.source_platform:
+        if platform and platform not in {resume.source_platform, resume.linked_platform}:
+            continue
+        if owner_value and owner_value not in {resume.source_owner, resume.linked_owner}:
+            continue
+        if education_value and education_value not in clean_text(resume.education):
+            continue
+        if score_min is not None and (resume.match_score is None or resume.match_score < score_min):
+            continue
+        if score_max is not None and (resume.match_score is None or resume.match_score > score_max):
+            continue
+        state = review_states.get(resume.id)
+        state_read = getattr(state, "read_status", "unread")
+        state_decision = getattr(state, "decision", "undecided")
+        if read_status and state_read != read_status:
+            continue
+        if decision and state_decision != decision:
             continue
         if needle:
             haystack = " ".join(

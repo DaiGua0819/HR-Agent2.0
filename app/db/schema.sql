@@ -212,6 +212,68 @@ CREATE INDEX IF NOT EXISTS idx_interview_sessions_resume
 CREATE INDEX IF NOT EXISTS idx_interview_sessions_status
   ON interview_sessions(status, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS resume_review_states (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  resume_id TEXT NOT NULL,
+  read_status TEXT NOT NULL DEFAULT 'unread',
+  decision TEXT NOT NULL DEFAULT 'undecided',
+  reason_tags TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '',
+  assigned_to TEXT NOT NULL DEFAULT '',
+  viewed_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, resume_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_review_states_user
+  ON resume_review_states(user_id, read_status, decision, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resume_review_states_resume
+  ON resume_review_states(resume_id);
+
+CREATE TABLE IF NOT EXISTS resume_review_events (
+  id TEXT PRIMARY KEY,
+  resume_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  before_json TEXT NOT NULL DEFAULT '{}',
+  after_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_review_events_resume
+  ON resume_review_events(resume_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS resume_assignments (
+  id TEXT PRIMARY KEY,
+  resume_id TEXT NOT NULL,
+  from_user_id TEXT NOT NULL,
+  assigned_to_user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  source_decision_id TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_assignments_user
+  ON resume_assignments(assigned_to_user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resume_assignments_resume
+  ON resume_assignments(resume_id, status);
+
+CREATE TABLE IF NOT EXISTS resume_saved_views (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  filters_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_saved_views_user
+  ON resume_saved_views(user_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
   thread_id TEXT NOT NULL,
   checkpoint_id TEXT NOT NULL,
