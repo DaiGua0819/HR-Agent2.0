@@ -37,6 +37,8 @@ async def _wait_chat_shell(page: BrowserPage, timeout_ms: int = 12000) -> bool:
 
     deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
     while asyncio.get_running_loop().time() < deadline:
+        if await _looks_like_chat_page(page):
+            return True
         for selector in (
             selectors.THREAD_ITEM,
             selectors.CHAT_INPUT,
@@ -46,3 +48,14 @@ async def _wait_chat_shell(page: BrowserPage, timeout_ms: int = 12000) -> bool:
                 return True
         await asyncio.sleep(1)
     return False
+
+
+async def _looks_like_chat_page(page: BrowserPage) -> bool:
+    try:
+        url = str(getattr(page, "url", "") or "").lower()
+        body = await page.text()
+    except Exception:
+        return False
+    return "ehire.51job.com/revision/chat" in url and all(
+        term in body for term in ("人才沟通", "全部职位", "未读")
+    )

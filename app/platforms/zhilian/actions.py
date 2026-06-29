@@ -491,7 +491,7 @@ async def _open_session_from_state(
     if result.get("opened"):
         await asyncio.sleep(1)
         verified = await _verify_chat_ready(page)
-        context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+        context = await _read_context_payload(page)
         identity_ok = _state_matches_context(state, context)
         if verified.get("verified") and identity_ok:
             return {"ok": True, "method": "dom_inner_click", "result": result}
@@ -503,12 +503,23 @@ async def _open_session_from_state(
             "result": result,
             "reason": "session_row_not_found",
         }
-    return await reliable_click_element(
+    fallback = await reliable_click_element(
         page,
         row,
         label="智联候选人会话",
         verify=lambda: _verify_chat_ready(page),
     )
+    if not fallback.get("ok"):
+        return fallback
+    context = await _read_context_payload(page)
+    if _state_matches_context(state, context):
+        return fallback
+    return {
+        **fallback,
+        "ok": False,
+        "reason": "candidate_identity_mismatch",
+        "context": context,
+    }
 
 
 async def _verify_unread_active(page: BrowserPage) -> dict[str, object]:
@@ -527,6 +538,13 @@ async def _unread_filter_state(page: BrowserPage) -> dict[str, object]:
     if not raw:
         raw = await _safe_eval_dict(page, UNREAD_FILTER_STATE_JS)
     return raw if raw else {"active": False, "reason": "unread_state_unknown"}
+
+
+async def _read_context_payload(page: BrowserPage) -> dict[str, object]:
+    context = await _safe_eval_dict(page, "zhilian.read_chat_context")
+    if context:
+        return context
+    return await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
 
 
 async def _verify_recent_mine_message(
@@ -665,6 +683,8 @@ def _state_matches_context(state: dict[str, object], context: dict[str, object])
     expected_position = "".join(str(state.get("position") or "").split())
     name = "".join(str(context.get("name") or context.get("candidate_name") or "").split())
     position = "".join(str(context.get("position") or context.get("appliedPosition") or "").split())
+    if name and label and name not in label:
+        return False
     if name and name in label:
         return True
     if expected_position and position and (

@@ -61,6 +61,8 @@ async def detect_login_page(page: BrowserPage, platform: Platform) -> LoginDetec
     url = (await _current_url(page)).lower()
     body = (await _safe_body_text(page)).strip()
     body_lower = body.lower()
+    if _looks_like_logged_in_chat(platform, url, body):
+        return LoginDetection(platform=platform, logged_out=False, url=url, sample=body[:120])
     markers = _login_url_markers(platform)
     if any(marker in url for marker in markers):
         return LoginDetection(
@@ -195,10 +197,18 @@ def _login_selector(platform: Platform) -> str:
     if platform == Platform.BOSS:
         return ".login-container,.login-box,.login-form,.scan-login,.qrcode-box"
     if platform == Platform.JOB51:
-        return ".login-container,.login-box,.login-form,.qrcode-box,.el-form"
+        return ".login-container,.login-box,.login-form"
     if platform == Platform.ZHILIAN:
         return ".login-container,.login-box,.login-form,.qrcode-box,.passport-login"
     return ".login-container,.login-box,.login-form"
+
+
+def _looks_like_logged_in_chat(platform: Platform, url: str, body: str) -> bool:
+    if platform == Platform.JOB51:
+        return "ehire.51job.com/revision/chat" in url and all(
+            term in body for term in ("人才沟通", "全部职位", "未读")
+        )
+    return False
 
 
 _LOGIN_TEXT_TERMS = (

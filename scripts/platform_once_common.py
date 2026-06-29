@@ -207,6 +207,8 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 label=f"{platform.value}候选人会话",
                 verify=lambda: _verify_chat_ready(adapter, platform),
             )
+            if platform == Platform.JOB51:
+                click = await _ensure_job51_thread_opened(adapter, row_state, click)
             if not click.get("ok"):
                 summaries.append(
                     _failure_summary(
@@ -275,6 +277,46 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
     return summaries
 
 
+async def _ensure_job51_thread_opened(
+    adapter: Any,
+    row_state: dict[str, object],
+    click: dict[str, Any],
+) -> dict[str, Any]:
+    expected = {
+        "id": str(row_state.get("id") or row_state.get("label") or ""),
+        "label": str(row_state.get("label") or ""),
+        "name": str(row_state.get("name") or ""),
+        "position": str(row_state.get("position") or ""),
+    }
+    ready = bool(click.get("ok")) or await job51_chat.wait_chat_ready(
+        adapter.page,
+        timeout_ms=2500,
+    )
+    opened = await job51_chat.verify_opened_candidate(adapter.page, expected, chat_ready=ready)
+    if opened.get("opened"):
+        return {**click, "ok": True, "opened": opened}
+    fallback = await job51_chat.click_thread_by_state(adapter.page, row_state)
+    if fallback.get("clicked"):
+        await asyncio.sleep(1)
+        ready = await job51_chat.wait_chat_ready(adapter.page, timeout_ms=6500)
+        opened = await job51_chat.verify_opened_candidate(adapter.page, expected, chat_ready=ready)
+        if opened.get("opened"):
+            return {
+                **click,
+                "ok": True,
+                "fallback": fallback,
+                "opened": opened,
+                "reason": "",
+            }
+    return {
+        **click,
+        "ok": False,
+        "reason": str(opened.get("reason") or fallback.get("reason") or "open_not_verified"),
+        "opened": opened,
+        "fallback": fallback,
+    }
+
+
 async def _process_zhilian(
     adapter: Any,
     limit: int,
@@ -298,7 +340,7 @@ async def _process_zhilian(
         if ref.conversation_id in seen:
             idle_scans += 1
             continue
-        print(f"[{platform.value}] preparing candidate: {ref.conversation_id}", flush=True)
+        print(f"[{Platform.ZHILIAN.value}] preparing candidate: {ref.conversation_id}", flush=True)
         try:
             state = await asyncio.wait_for(
                 ConversationRunner(
@@ -321,7 +363,7 @@ async def _process_zhilian(
             )
             seen.add(ref.conversation_id)
             idle_scans = 0
-            print(f"[{platform.value}] candidate timed out: {ref.conversation_id}", flush=True)
+            print(f"[{Platform.ZHILIAN.value}] candidate timed out: {ref.conversation_id}", flush=True)
             continue
         conversation_id = str(state.get("conversation_id") or ref.conversation_id)
         seen.update({ref.conversation_id, conversation_id})
@@ -350,17 +392,31 @@ async def _find_candidate_row(
     label = str(state.get("label") or "").strip()
     if row_id:
         for row in rows:
-            current_id = str(await row.attr("id") or "").lstrip("_")
+            current_id = str(await _safe_element_attr(row, "id") or "").lstrip("_")
             if current_id == row_id:
                 return row
     if label:
         for row in rows:
-            if (await row.text()).strip() == label:
+            if (await _safe_element_text(row)).strip() == label:
                 return row
     index = _safe_int(state.get("index"))
     if 0 <= index < len(rows):
         return rows[index]
     return None
+
+
+async def _safe_element_attr(element: Any, name: str, timeout_seconds: float = 3.0) -> str | None:
+    try:
+        return await asyncio.wait_for(element.attr(name), timeout=timeout_seconds)
+    except Exception:
+        return None
+
+
+async def _safe_element_text(element: Any, timeout_seconds: float = 3.0) -> str:
+    try:
+        return await asyncio.wait_for(element.text(), timeout=timeout_seconds)
+    except Exception:
+        return ""
 
 
 async def _candidate_rows(adapter: Any, platform: Platform) -> list[Any]:

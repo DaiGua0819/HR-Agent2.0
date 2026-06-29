@@ -139,6 +139,67 @@ async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef 
     return None
 
 
+async def click_thread_by_state(
+    page: BrowserPage,
+    state: dict[str, object],
+) -> dict[str, object]:
+    """Click a 51job conversation row with a JS fallback for virtual-list rows."""
+
+    payload = {
+        "id": str(state.get("id") or "").lstrip("_"),
+        "label": str(state.get("label") or "").strip(),
+        "index": _safe_int(state.get("index")),
+    }
+    result = await _safe_eval_dict(
+        page,
+        """
+        (expected) => {
+          const visible = (el) => {
+            if (!el) return false;
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== "none" && style.visibility !== "hidden" &&
+              rect.width > 0 && rect.height > 0;
+          };
+          const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+          const compact = (value) => String(value || "").replace(/\\s+/g, "");
+          const rows = Array.from(document.querySelectorAll("#conversation-list .list-item"))
+            .filter(visible);
+          const target = rows.find((row) => {
+            const id = String(row.id || row.getAttribute("data-id") ||
+              row.getAttribute("data-uid") || "").replace(/^_/, "");
+            return expected.id && id === expected.id;
+          }) || rows.find((row) => expected.label && compact(text(row)) === compact(expected.label))
+            || rows[Number(expected.index || 0)];
+          if (!target) return { clicked: false, reason: "thread_row_not_found" };
+          target.scrollIntoView({ block: "center", inline: "nearest" });
+          const clickTarget = target.querySelector(".conversation-item") ||
+            target.querySelector(".item-content") || target.querySelector(".info") || target;
+          for (const type of ["mouseover", "mousemove", "mousedown", "mouseup", "click"]) {
+            clickTarget.dispatchEvent(new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+            }));
+          }
+          return { clicked: true, source: "dom_click", label: text(target) };
+        }
+        """,
+        payload,
+    )
+    if result.get("clicked"):
+        return result
+    rows = await page.query_all(selectors.THREAD_ITEM)
+    index = payload["index"]
+    if isinstance(index, int) and 0 <= index < len(rows):
+        try:
+            await rows[index].click(timeout_ms=3000)
+            return {"clicked": True, "source": "element_click", "index": index}
+        except Exception as error:
+            return {"clicked": False, "reason": "element_click_failed", "error": str(error)}
+    return result or {"clicked": False, "reason": "thread_row_not_found"}
+
+
 async def verify_opened_candidate(
     page: BrowserPage,
     expected: dict[str, object],

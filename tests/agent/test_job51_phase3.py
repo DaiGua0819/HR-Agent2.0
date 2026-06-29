@@ -13,12 +13,14 @@ from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.job51.actions_chat import (
+    click_thread_by_state,
     find_next_thread,
     read_unread_conversations,
     select_unread_filter,
     should_skip_thread_label,
     verify_opened_candidate,
 )
+from app.platforms.job51.actions_navigation import _wait_chat_shell
 from app.platforms.job51.actions_resume import (
     InMemoryResumeDownloadMemory,
     resume_download_suitability_guard,
@@ -27,7 +29,7 @@ from app.platforms.job51.actions_resume import (
 )
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
-from scripts.platform_once_common import _seen_keys_for_processed_item
+from scripts.platform_once_common import _find_candidate_row, _seen_keys_for_processed_item
 
 
 def test_job51_reuses_shared_graph_and_runner() -> None:
@@ -104,6 +106,17 @@ def test_job51_unread_filter_refreshes_when_already_checked() -> None:
     ]
 
 
+def test_job51_chat_shell_accepts_logged_in_chat_text() -> None:
+    """51job 聊天页 CSS 短暂不可见时，用页面特征避免无意义重跳转。"""
+
+    page = FakePage(
+        url="https://ehire.51job.com/Revision/chat?rt=1",
+        body_text="人才沟通 全部职位 未读 AI沟通",
+    )
+
+    assert asyncio.run(_wait_chat_shell(page, timeout_ms=100)) is True
+
+
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:
     """51job 点开未读行后校验当前聊天区身份，避免虚拟列表误读上一个人。"""
 
@@ -124,6 +137,22 @@ def test_job51_find_next_thread_verifies_opened_candidate() -> None:
         )
     )
     assert opened["opened"] is True
+
+
+def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
+    """51job 行点击支持 row state fallback，避开真实虚拟列表原生点击不稳。"""
+
+    page = FakePage(
+        conversations=[
+            conversation("销售管培生", [{"sender": "other", "text": "你好"}], label="候选人A"),
+            conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}], label="候选人B"),
+        ]
+    )
+
+    result = asyncio.run(click_thread_by_state(page, {"index": 1, "label": "候选人B"}))
+
+    assert result["clicked"] is True
+    assert page.selected_index == 1
 
 
 def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
@@ -179,6 +208,24 @@ def test_job51_seen_keys_survive_label_changes() -> None:
 
     assert first & second
     assert "session:session-1" in first
+
+
+def test_job51_find_candidate_row_skips_slow_virtual_rows() -> None:
+    """A stale virtual-list row must not block matching the next real unread row."""
+
+    slow = SlowRow(row_id="slow", label="", fail_text=True)
+    target = SlowRow(row_id="target", label="Candidate B")
+    adapter = RowAdapter([slow, target])
+
+    row = asyncio.run(
+        _find_candidate_row(
+            adapter,
+            Platform.JOB51,
+            {"id": "", "label": "Candidate B", "index": 0},
+        )
+    )
+
+    assert row is target
 
 
 def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
@@ -248,6 +295,28 @@ def test_job51_request_resume_rejects_preview_only() -> None:
     assert result["downloaded"] is False
     assert result["reason"] == "preview_only_rejected"
     assert page.resume_requests == 1
+
+
+def test_job51_attachment_without_download_link_blocks_without_request() -> None:
+    """附件卡存在但真实下载链接缺失时，明确 blocked，不继续点求简历。"""
+
+    page = FakePage(
+        conversations=[
+            conversation(
+                "B端社交媒体运营",
+                [{"sender": "other", "text": "我已投递"}],
+                has_attachment_card=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["blocked"] is True
+    assert result["downloaded"] is False
+    assert result["requested"] is False
+    assert page.resume_requests == 0
 
 
 def test_job51_does_not_download_resume_before_candidate_qualifies() -> None:
@@ -340,6 +409,35 @@ def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:
     assert result["greeted"] == 1
     assert page.proactive_greets == ["候选A"]
     assert any(item["reason"] == "already_viewed_badge" for item in result["skipped"])
+
+
+class RowAdapter:
+    def __init__(self, rows: list["SlowRow"]) -> None:
+        self.page = RowPage(rows)
+
+
+class RowPage:
+    def __init__(self, rows: list["SlowRow"]) -> None:
+        self.rows = rows
+
+    async def query_all(self, selector: str) -> list["SlowRow"]:
+        _ = selector
+        return self.rows
+
+
+class SlowRow:
+    def __init__(self, *, row_id: str, label: str, fail_text: bool = False) -> None:
+        self.row_id = row_id
+        self.label = label
+        self.fail_text = fail_text
+
+    async def attr(self, name: str) -> str | None:
+        return self.row_id if name == "id" else None
+
+    async def text(self) -> str:
+        if self.fail_text:
+            raise TimeoutError("virtual row text timed out")
+        return self.label
 
 
 def run_case(convo: dict[str, object]):

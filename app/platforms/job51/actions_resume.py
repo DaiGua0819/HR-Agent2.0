@@ -96,6 +96,8 @@ async def request_or_download_resume(
         )
         if result.get("ok"):
             return {"requested": False, "resumeReceived": True, **result}
+        if result.get("blocked"):
+            return {"requested": False, "downloaded": False, **result}
         if not payload.get("previewOnly"):
             clicked, confirmed = await _request_resume_with_confirm(page)
             return {"requested": clicked, "confirmed": confirmed, "downloaded": False, **result}

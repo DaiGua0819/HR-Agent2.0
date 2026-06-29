@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-CHAT_HOME_URL = "https://ehire.51job.com/"
+CHAT_HOME_URL = "https://ehire.51job.com/Revision/chat"
 CHAT_ENTRY = "#sensor_talentcommunicate"
 POSITION_MENU = ".position-menu .menu-item"
 POSITION_MENU_SHORT = ".menu-item_content_short"

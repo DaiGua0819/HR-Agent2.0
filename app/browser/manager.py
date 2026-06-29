@@ -94,15 +94,15 @@ def _chat_url_for(platform: Platform) -> str:
         return boss_selectors.CHAT_URL
     if platform == Platform.ZHILIAN:
         return zhilian_selectors.CHAT_URL
-    return os.getenv("JOB51_CHAT_URL", "https://ehire.51job.com/").strip()
+    return os.getenv("JOB51_CHAT_URL", "https://ehire.51job.com/Revision/chat").strip()
 
 
 def _url_hint_for(platform: Platform) -> str:
     if platform == Platform.BOSS:
         return "zhipin.com"
     if platform == Platform.ZHILIAN:
-        return "zhaopin.com"
-    return os.getenv("JOB51_URL_HINT", "51job.com").strip()
+        return "rd6.zhaopin.com/app/im"
+    return os.getenv("JOB51_URL_HINT", "ehire.51job.com/Revision/chat").strip()
 
 
 def _fake_page(owner: str, platform: Platform) -> FakePage:

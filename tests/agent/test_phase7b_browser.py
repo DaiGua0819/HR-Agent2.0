@@ -11,10 +11,26 @@ import json
 import pytest
 from app.browser.fake_page import FakePage
 from app.browser.manager import BrowserManager
+from app.browser.playwright_cdp import PlaywrightCDPConnection
 from app.browser.read_once import dry_run_read_once
 from app.browser.selector_validation import detect_login_page, validate_platform_selectors
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
+
+
+class TinyPage:
+    def __init__(self, url: str, rows: int = 0) -> None:
+        self.url = url
+        self.rows = rows
+
+    async def evaluate(self, script: str) -> int:
+        _ = script
+        return self.rows
+
+
+class TinyContext:
+    def __init__(self, pages: list[TinyPage]) -> None:
+        self.pages = pages
 
 
 def test_selector_validation_reports_statuses_on_fake_page() -> None:
@@ -40,18 +56,30 @@ def test_login_detection_identifies_login_page_before_selector_validation() -> N
     assert detection.reason == "url_login_marker"
 
 
+def test_job51_chat_page_is_not_misread_as_login() -> None:
+    """51job 聊天页里可能有登录字样，不能被误判为登录页。"""
+
+    page = FakePage(
+        url="https://ehire.51job.com/Revision/chat?rt=1",
+        body_text="人才沟通 全部职位 未读 开启微信通知 登录",
+    )
+    detection = asyncio.run(detect_login_page(page, Platform.JOB51))
+
+    assert detection.logged_out is False
+
+
 def test_cloak_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
     """cloak 后端通过 CDP 连接工厂装配三平台页面，单测不连真实浏览器。"""
 
     urls: list[str] = []
+    connection = FakeConnection()
 
     async def ready(_url: str, *, timeout_seconds: float = 5) -> bool:
         _ = timeout_seconds
         return True
-
     async def connect(url: str) -> FakeConnection:
         urls.append(url)
-        return FakeConnection()
+        return connection
 
     monkeypatch.setattr("app.browser.lifecycle.ensure_cdp_ready", ready)
     monkeypatch.setattr("app.browser.playwright_cdp.connect_cdp_browser", connect)
@@ -62,6 +90,11 @@ def test_cloak_browser_manager_can_be_mocked_without_cdp(monkeypatch) -> None:
     assert urls == ["http://127.0.0.1:9222"]
     assert set(manager.pages) == {Platform.BOSS, Platform.JOB51, Platform.ZHILIAN}
     assert manager.pages[Platform.BOSS] is not manager.pages[Platform.ZHILIAN]
+    job51_request = next(item for item in connection.requests if item["name"] == "job51")
+    assert job51_request["url"] == "https://ehire.51job.com/Revision/chat"
+    assert job51_request["url_hint"] == "ehire.51job.com/Revision/chat"
+    zhilian_request = next(item for item in connection.requests if item["name"] == "zhilian")
+    assert zhilian_request["url_hint"] == "rd6.zhaopin.com/app/im"
 
 
 def test_per_platform_cloak_backend_is_rejected() -> None:
@@ -70,6 +103,36 @@ def test_per_platform_cloak_backend_is_rejected() -> None:
     manager = BrowserManager(owner="和新红", cdp_port=9222, backend="cloak-per-platform")
     with pytest.raises(ValueError, match="fake/cloak"):
         asyncio.run(manager.start())
+
+
+def test_cdp_page_lookup_prefers_latest_matching_tab() -> None:
+    """多个同平台标签页并存时，优先复用最新的匹配页。"""
+
+    old = TinyPage("https://ehire.51job.com/Revision/chat?rt=old")
+    new = TinyPage("https://ehire.51job.com/Revision/chat?rt=new")
+    connection = PlaywrightCDPConnection(
+        playwright=None,
+        browser=None,
+        context=TinyContext([old, new]),
+    )
+
+    assert connection._find_page("ehire.51job.com/Revision/chat") is new
+
+
+def test_cdp_job51_lookup_prefers_ready_chat_tab() -> None:
+    """51job 多标签并存时，优先选已有会话列表的聊天页。"""
+
+    ready = TinyPage("https://ehire.51job.com/Revision/chat?rt=ready", rows=8)
+    blank = TinyPage("https://ehire.51job.com/Revision/chat?rt=blank", rows=0)
+    connection = PlaywrightCDPConnection(
+        playwright=None,
+        browser=None,
+        context=TinyContext([ready, blank]),
+    )
+
+    page = asyncio.run(connection._find_ready_page("ehire.51job.com/Revision/chat"))
+
+    assert page is ready
 
 
 def test_dry_run_read_once_records_intent_without_side_effect(monkeypatch) -> None:
@@ -108,6 +171,7 @@ class FakeConnection:
 
     def __init__(self) -> None:
         self.created: list[FakePage] = []
+        self.requests: list[dict[str, str]] = []
 
     async def ensure_page(
         self,
@@ -116,7 +180,7 @@ class FakeConnection:
         url: str = "",
         url_hint: str = "",
     ) -> FakePage:
-        _ = (name, url_hint)
+        self.requests.append({"name": name, "url": url, "url_hint": url_hint})
         page = FakePage()
         if url:
             await page.goto(url)

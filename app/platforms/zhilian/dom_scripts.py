@@ -150,11 +150,12 @@ CLICK_SESSION_ROW_JS = r"""
     index = row ? rows.indexOf(row) : -1;
   }
   if (!row) return { opened: false, reason: "session_row_not_found" };
+  row.scrollIntoView({ block: "center", inline: "nearest" });
   const rect = row.getBoundingClientRect();
   const x = rect.left + Math.min(Math.max(rect.width * 0.32, 64), Math.max(rect.width - 12, 1));
   const y = rect.top + rect.height / 2;
   const clickTarget = document.elementFromPoint(x, y) || row;
-  for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+  for (const type of ["mouseover", "mousemove", "pointerdown", "mousedown", "mouseup", "click"]) {
     clickTarget.dispatchEvent(new MouseEvent(type, {
       bubbles: true,
       cancelable: true,

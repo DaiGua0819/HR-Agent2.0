@@ -351,7 +351,7 @@ class PlaywrightCDPConnection:
     ) -> PlaywrightCDPPage:
         """按 URL hint 复用标签页；找不到时新建并导航。"""
 
-        page = self._find_page(url_hint or url)
+        page = await self._find_ready_page(url_hint or url)
         if page is None:
             page = await self.context.new_page()
             if url:
@@ -364,10 +364,38 @@ class PlaywrightCDPConnection:
         if not hint:
             return None
         host = urlparse(hint).hostname or hint
-        for page in self.context.pages:
+        for page in reversed(self.context.pages):
             if host and host in str(page.url or ""):
                 return page
         return None
+
+    async def _find_ready_page(self, hint: str) -> Any | None:
+        if not hint:
+            return None
+        if "ehire.51job.com/Revision/chat" not in hint:
+            return self._find_page(hint)
+        fallback = None
+        host = urlparse(hint).hostname or hint
+        for page in reversed(self.context.pages):
+            if not (host and host in str(page.url or "")):
+                continue
+            fallback = fallback or page
+            if await self._has_job51_chat_rows(page):
+                return page
+        return fallback
+
+    @staticmethod
+    async def _has_job51_chat_rows(page: Any) -> bool:
+        try:
+            count = await asyncio.wait_for(
+                page.evaluate(
+                    "() => document.querySelectorAll('#conversation-list .list-item').length"
+                ),
+                timeout=2,
+            )
+        except Exception:
+            return False
+        return bool(count)
 
     @staticmethod
     def _is_blank(page: Any) -> bool:

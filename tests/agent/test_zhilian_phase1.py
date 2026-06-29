@@ -14,6 +14,7 @@ from app.domain.conversation.repository import ConversationRepository
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.actions import (
+    _state_matches_context,
     find_next_unread_thread,
     inspect_resume_request_state,
     read_unread_conversations,
@@ -169,6 +170,7 @@ def test_zhilian_unread_rows_exclude_read_and_system_labels() -> None:
             {
                 **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
                 "id": "real-unread",
+                "name": "Bob",
                 "label": "Bob SalesRole",
                 "unread_count": 1,
             },
@@ -181,6 +183,21 @@ def test_zhilian_unread_rows_exclude_read_and_system_labels() -> None:
     assert [row["id"] for row in rows] == ["real-unread"]
     assert ref is not None
     assert ref.conversation_id == "real-unread"
+
+
+def test_zhilian_identity_requires_name_when_available() -> None:
+    """同岗位多候选人时，不能只靠岗位相同误判打开成功。"""
+
+    state = {"label": "文成 AI应用开发实习生", "position": "AI应用开发实习生"}
+
+    assert not _state_matches_context(
+        state,
+        {"name": "杜智", "position": "AI应用开发实习生"},
+    )
+    assert _state_matches_context(
+        state,
+        {"name": "文成", "position": "AI应用开发实习生"},
+    )
 
 
 def test_zhilian_request_resume_state_and_confirm() -> None:
