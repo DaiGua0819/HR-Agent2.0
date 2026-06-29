@@ -134,6 +134,7 @@ function renderRows() {
   });
   $("resumeRows").innerHTML = rows.join("");
   $("emptyState").style.display = rows.length ? "none" : "block";
+  $("emptyState").textContent = rows.length ? "" : "暂无符合条件的简历";
   bindRowActions();
 }
 
