@@ -140,6 +140,19 @@ def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
     assert page.resume_requests == 1
 
 
+def test_direct_resume_candidate_rejection_skips_without_requesting_resume() -> None:
+    """候选人明确拒绝时，直求简历岗位也不能继续求简历。"""
+
+    state, page = run_case(
+        conversation("运营A", [{"sender": "other", "text": "你好，职位不太合适，谢谢关注！"}])
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "candidate_rejected"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
 def test_job51_seen_keys_survive_label_changes() -> None:
     """A candidate already processed in this run is deduped beyond volatile row labels."""
 

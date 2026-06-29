@@ -219,8 +219,8 @@ def test_zhilian_request_resume_state_and_confirm() -> None:
     assert page.resume_requests == 1
 
 
-def test_zhilian_request_resume_ignores_hidden_confirm_button() -> None:
-    """Hidden confirm buttons must not be treated as a successful request."""
+def test_zhilian_request_resume_does_not_require_confirm_dialog() -> None:
+    """智联点击“要附件简历”后无确认弹窗，点击成功即视为请求已发出。"""
 
     page = FakePage(
         conversations=[
@@ -234,8 +234,9 @@ def test_zhilian_request_resume_ignores_hidden_confirm_button() -> None:
     result = asyncio.run(request_resume(page))
 
     assert result["requested"] is True
-    assert result["confirmed"] is False
-    assert result["verifyReason"] == "confirm_button_not_visible"
+    assert result["confirmed"] is True
+    assert result["verifyReason"] == "no_confirm_required"
+    assert page.resume_requests == 1
     assert page.current_conversation().get("resume_request_confirmed") is not True
 
 
@@ -263,6 +264,23 @@ def test_zhilian_request_resume_downloads_attachment_after_request() -> None:
     assert result["downloaded"] is True
     assert result["sourceKind"] == "attachment"
     assert page.current_conversation()["zhilian_view_attachment_clicked"] is True
+
+
+def test_zhilian_send_message_records_enter_send_action() -> None:
+    """Enter 发送成功时也要进入 reliable_actions，方便 live summary 证明已发送。"""
+
+    page = FakePage(
+        conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])]
+    )
+
+    result = asyncio.run(send_message(page, "基础条件确认话术"))
+
+    assert result.sent is True
+    assert result.verified is True
+    assert any(
+        action.get("action") == "press" and action.get("label") == "智联输入框 Enter 发送"
+        for action in page.reliable_actions
+    )
 
 
 def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> None:

@@ -79,3 +79,12 @@ def test_review_actions_advance_to_next_resume() -> None:
     assert 'setDecision(state.selectedId, "unsuitable")' in script
     assert 'setDecision(state.selectedId, "needs_more_info")' in script
     assert "markViewedAndAdvance(state.selectedId)" in script
+
+
+def test_workbench_is_tall_enough_for_ten_member_results() -> None:
+    """The member workbench should show ten left-side candidates without scrolling."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    workbench_block = styles.split("grid-template-columns: 220px", 1)[1].split("}", 1)[0]
+
+    assert "min-height: 704px" in workbench_block

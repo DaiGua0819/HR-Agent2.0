@@ -84,6 +84,13 @@ class ConversationRunner:
         last = last_non_system(conversation)
         if not last or last.sender != MessageSender.CANDIDATE:
             return self._finish(state, "wait", "last_message_not_candidate")
+        if _candidate_rejected_conversation(last.text):
+            return self._finish(
+                state,
+                "skip",
+                "candidate_rejected",
+                evidence=last.text,
+            )
 
         if self._needs_initial_ai_basic_phrase(conversation, rule):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
@@ -524,3 +531,26 @@ class ConversationRunner:
         return state
 
 ZhilianConversationRunner = ConversationRunner
+
+
+def _candidate_rejected_conversation(text: str) -> bool:
+    """识别候选人明确结束沟通的短句，避免继续求简历。"""
+
+    compact = "".join(str(text or "").lower().split())
+    if not compact:
+        return False
+    reject_terms = (
+        "职位不太合适",
+        "岗位不太合适",
+        "职位不合适",
+        "岗位不合适",
+        "不太匹配",
+        "不匹配",
+        "不考虑",
+        "暂不考虑",
+        "不感兴趣",
+        "不用了",
+        "算了",
+        "谢谢关注",
+    )
+    return any(term in compact for term in reject_terms)

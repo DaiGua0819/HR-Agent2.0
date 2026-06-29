@@ -315,7 +315,7 @@ tr.active { background: #f0f6ff; }
 .workbench {
   display: grid;
   grid-template-columns: 220px minmax(360px, 1fr) 330px;
-  min-height: 560px;
+  min-height: 704px;
 }
 .candidate-list,
 .summary-panel,

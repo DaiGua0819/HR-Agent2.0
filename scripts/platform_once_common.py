@@ -442,12 +442,18 @@ def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: boo
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {"type": "bytes", "length": len(value)}
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
     try:
         json.dumps(value, ensure_ascii=False)
         return value
     except TypeError:
         if hasattr(value, "__dataclass_fields__"):
-            return asdict(value)
+            return _jsonable(asdict(value))
         return str(value)
 
 

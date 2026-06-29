@@ -253,13 +253,12 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
         page,
         button,
         label="智联要附件简历",
-        verify=lambda: _request_resume_progress_visible(page),
     )
-    if not click.get("ok") and not _click_attempted(click):
+    if not click.get("ok"):
         return {
             "requested": False,
             "blocked": True,
-            "reason": "request_resume_click_not_verified",
+            "reason": "request_resume_click_failed",
             "state": state,
             "click": click,
         }
@@ -275,29 +274,12 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
             "state": after,
             **download,
         }
-    confirm = await _click_request_resume_confirm(page)
-    await asyncio.sleep(1)
-    after = await inspect_resume_request_state(page)
-    if after.has_resume_attachment:
-        download = await _download_attachment_resume(page)
-        return {
-            "requested": True,
-            "resumeReceived": True,
-            "confirmed": bool(confirm.get("clicked") or after.already_requested),
-            "verifyReason": "" if download.get("ok") else str(download.get("reason") or ""),
-            "state": after,
-            "confirm": confirm,
-            **download,
-        }
-    confirmed = bool(confirm.get("clicked") and after.already_requested)
-    if after.already_requested and not confirm.get("blocked"):
-        confirmed = True
     return {
         "requested": True,
-        "confirmed": confirmed,
-        "verifyReason": "" if confirmed else str(confirm.get("reason") or "confirm_not_verified"),
+        "confirmed": True,
+        "verifyReason": "" if after.already_requested else "no_confirm_required",
         "state": after,
-        "confirm": confirm,
+        "click": click,
     }
 
 
@@ -348,12 +330,15 @@ async def _click_send(page: BrowserPage, message: str) -> dict[str, object]:
         await asyncio.sleep(1)
         verified = await _verify_recent_mine_message(page, message)
         if verified.get("verified"):
-            return {
+            result = {
                 "ok": True,
                 "action": "press",
                 "label": "智联输入框 Enter 发送",
                 "verified": True,
+                "verify": verified,
             }
+            _record_reliable_action(page, result)
+            return result
     button = await _find_button_by_text(page, "button, [role='button']", "发送")
     if button is not None:
         return await reliable_click_element(
@@ -385,6 +370,12 @@ async def _find_button_by_text(
         if expected_text in (await element.text()):
             return element
     return None
+
+
+def _record_reliable_action(page: BrowserPage, result: dict[str, object]) -> None:
+    actions = getattr(page, "reliable_actions", None)
+    if isinstance(actions, list):
+        actions.append(result)
 
 
 async def _click_request_resume_confirm(page: BrowserPage) -> dict[str, object]:
