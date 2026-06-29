@@ -1,0 +1,113 @@
+/* Login page styles are kept separate from the dashboard shell. */
+
+.login-screen {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.1fr) minmax(320px, 420px);
+  min-height: 100vh;
+  padding: 48px;
+  gap: 28px;
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.12), transparent 42%),
+    linear-gradient(315deg, rgba(21, 128, 61, 0.1), transparent 36%),
+    #f7f9fc;
+}
+.login-screen[hidden] { display: none; }
+.login-visual,
+.login-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.login-visual {
+  min-height: 560px;
+  display: grid;
+  align-content: end;
+  gap: 18px;
+  padding: 34px;
+  color: #fff;
+  background:
+    linear-gradient(rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.82)),
+    url("https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1500&q=80")
+      center/cover;
+}
+.login-brand {
+  position: absolute;
+  top: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.login-brand span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--primary);
+  font-weight: 800;
+}
+.login-visual h1 {
+  max-width: 520px;
+  font-size: 42px;
+  line-height: 1.12;
+}
+.login-visual p {
+  max-width: 560px;
+  margin: 0;
+  color: #dbeafe;
+  line-height: 1.8;
+}
+.login-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.login-points span {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+}
+.login-card {
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  background: #fff;
+}
+.login-card h2 { font-size: 26px; }
+.login-card label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.login-card input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: var(--ink);
+}
+.login-card button { width: 100%; padding: 11px 14px; }
+.login-error {
+  min-height: 20px;
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+.login-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+@media (max-width: 860px) {
+  .login-screen {
+    grid-template-columns: 1fr;
+    padding: 18px;
+  }
+  .login-visual { min-height: 360px; }
+  .login-visual h1 { font-size: 32px; }
+}

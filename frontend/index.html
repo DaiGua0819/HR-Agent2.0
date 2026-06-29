@@ -5,10 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-manager-dashboard" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260629-role-login" />
+    <link rel="stylesheet" href="/assets/auth.css?v=20260629-role-login" />
   </head>
   <body>
-    <div id="app" class="shell">
+    <section id="loginScreen" class="login-screen">
+      <div class="login-visual">
+        <div class="login-brand"><span>HR</span><strong>HR Agent</strong></div>
+        <h1>招聘控制台登录</h1>
+        <p>管理员进入完整控制台，普通成员只进入自己的简历库。真实飞书授权接入前，本地先用 mock 账号验证角色分流。</p>
+        <div class="login-points">
+          <span>简历库权限隔离</span>
+          <span>自动化操作受 dry-run / live 守卫保护</span>
+          <span>后续可替换为飞书 OAuth</span>
+        </div>
+      </div>
+      <form id="loginForm" class="login-card">
+        <p class="eyebrow">Secure Entry</p>
+        <h2>登录工作台</h2>
+        <label>
+          <span>账号</span>
+          <input id="loginUsername" name="username" autocomplete="username" placeholder="admin / member" required />
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="primary" type="submit">进入系统</button>
+        <p id="loginError" class="login-error" aria-live="polite"></p>
+        <p class="login-hint">本地开发默认：admin/admin，member/member；部署时用环境变量覆盖。</p>
+      </form>
+    </section>
+    <div id="app" class="shell" hidden>
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">HR</div>
@@ -40,6 +68,7 @@
               <span id="userName">加载中</span>
               <small id="userScope">读取权限范围</small>
             </div>
+            <button id="logoutBtn">退出</button>
           </div>
         </header>
 
@@ -216,6 +245,7 @@
         </section>
       </main>
     </div>
-    <script src="/assets/app.js?v=20260629-manager-dashboard"></script>
+    <script src="/assets/auth.js?v=20260629-role-login"></script>
+    <script src="/assets/app.js?v=20260629-role-login"></script>
   </body>
 </html>

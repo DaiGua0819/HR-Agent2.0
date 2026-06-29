@@ -1,42 +1,19 @@
-const state = {
-  view: "dashboard",
-  user: null,
-  dashboard: null,
-  resumes: [],
-  selectedId: "",
-  context: null,
-  tab: "all",
-  interviewSelection: null,
-};
-const tabs = [
-  ["all", "全部"],
-  ["unread", "未看"],
-  ["viewed", "已看"],
-  ["undecided", "待判断"],
-  ["suitable", "合适"],
-  ["unsuitable", "不合适"],
-  ["needs_more_info", "待补充"],
-  ["queue", "待我处理"],
-];
+const state = { view: "dashboard", user: null, dashboard: null, resumes: [], selectedId: "", context: null, tab: "all", interviewSelection: null };
+const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["undecided", "待判断"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const $ = (id) => document.getElementById(id);
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`${response.status} ${text}`);
+    const error = new Error(`${response.status} ${text}`);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
 function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 const platformName = (value) => ({ boss: "BOSS", job51: "51job", zhilian: "智联", all: "全部" }[value] || value || "未知");
 const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适", needs_more_info: "待补充", undecided: "待判断" }[value || "undecided"]);
@@ -45,7 +22,12 @@ const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.par
 const resumeJob = (resume) => resume?.job_type || resume?.jobType || resume?.applied_position || resume?.appliedPosition || "";
 const resumeOwner = (resume) => resume?.linkedOwner || resume?.linked_owner || resume?.source_owner || resume?.sourceOwner || "";
 const resumePlatform = (resume) => resume?.linkedPlatform || resume?.linked_platform || resume?.source_platform || resume?.sourcePlatform || "";
+const uiAccess = () => state.user?.uiAccess || { defaultView: "resumes", views: ["resumes"], actions: [] };
+const canView = (view) => hrAuth.canView(state.user, view);
+const canAction = (action) => hrAuth.canAction(state.user, action);
+const setAllowedNavigation = () => hrAuth.setAllowedNavigation(state.user);
 function setView(view) {
+  if (state.user && !canView(view)) view = uiAccess().defaultView;
   state.view = view;
   document.querySelectorAll("[data-page]").forEach((node) => {
     node.classList.toggle("active", node.dataset.page === view);
@@ -65,8 +47,8 @@ function setView(view) {
 async function loadUser() {
   const data = await api("/api/auth/me");
   state.user = data;
-  $("userName").textContent = data.user.name;
-  $("userScope").textContent = `可见：${data.resumeScope.owners.join("、")} / ${data.resumeScope.platforms.join("、")}`;
+  hrAuth.updateUserCard(data);
+  return data;
 }
 async function loadDashboard() {
   const payload = await api("/api/dashboard/overview");
@@ -111,7 +93,10 @@ function renderServices(items) {
     : `<div class="empty-inline">还没有 worker 状态，启动 worker 后这里会显示服务卡片。</div>`;
 }
 function renderQuickFilters(items) {
-  $("quickFilters").innerHTML = items.map((item) => `<button class="quick-card" data-quick-view="${escapeHtml(item.view)}" data-quick-tab="${escapeHtml(item.tab || "")}">${escapeHtml(item.label)}</button>`).join("");
+  $("quickFilters").innerHTML = items
+    .filter((item) => canView(item.view))
+    .map((item) => `<button class="quick-card" data-quick-view="${escapeHtml(item.view)}" data-quick-tab="${escapeHtml(item.tab || "")}">${escapeHtml(item.label)}</button>`)
+    .join("");
   document.querySelectorAll("[data-quick-view]").forEach((button) => {
     button.onclick = () => {
       if (button.dataset.quickTab) state.tab = button.dataset.quickTab;
@@ -285,7 +270,7 @@ async function setDecision(id, decision) {
   if (next) await openResume(next.id);
 }
 async function requestInterview() {
-  if (!state.selectedId || !state.context) return;
+  if (!state.selectedId || !state.context || !canAction("interview:invite")) return;
   const payload = await api("/api/interview/invite", {
     method: "POST",
     body: JSON.stringify({ resumeId: state.selectedId, dryRun: true }),
@@ -317,6 +302,10 @@ function renderInterviewDetail() {
   `;
 }
 function renderAutomationControls() {
+  if (!canAction("automation:run")) {
+    $("automationControls").innerHTML = `<div class="empty-inline">当前账号没有自动化控制权限。</div>`;
+    return;
+  }
   const owners = state.user?.resumeScope?.owners || ["宋峰峰", "和新红"];
   const platforms = state.user?.resumeScope?.platforms || ["boss", "job51", "zhilian"];
   $("automationControls").innerHTML = `
@@ -353,6 +342,7 @@ function move(offset) {
   if (next) openResume(next.id);
 }
 function bindPageActions() {
+  hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -369,18 +359,31 @@ function bindPageActions() {
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("moreInfoBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "needs_more_info");
   $("interviewBtn").onclick = requestInterview;
+  $("logoutBtn").onclick = logout;
   $("prevBtn").onclick = () => move(-1);
   $("nextBtn").onclick = () => move(1);
   ["generateQuestionsBtn", "syncFeishuBtn", "renderImageBtn", "backfillBtn"].forEach((id) => {
     $(id).onclick = () => ($("interviewStatus").textContent = "当前首版界面已保留入口，真实调用继续复用后端面试中心接口。");
   });
 }
+async function afterLogin(user) {
+  state.user = user; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setView(uiAccess().defaultView);
+  if (canView("resumes")) await loadResumes();
+}
+async function logout() {
+  await api("/api/auth/logout", { method: "POST" });
+  state.user = null; state.selectedId = ""; state.context = null;
+  hrAuth.showLogin();
+}
 async function init() {
   bindPageActions();
   buildTabs();
-  await loadUser();
-  await loadDashboard();
-  await loadResumes();
+  try {
+    await afterLogin(await loadUser());
+  } catch (error) {
+    if (error.status === 401) return hrAuth.showLogin();
+    throw error;
+  }
 }
 init().catch((error) => {
   $("pageTitle").textContent = "加载失败";
