@@ -18,6 +18,7 @@ function escapeHtml(value) {
 const platformName = (value) => ({ boss: "BOSS", job51: "51job", zhilian: "智联", all: "全部" }[value] || value || "未知");
 const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适", needs_more_info: "待补充", undecided: "待判断" }[value || "undecided"]);
 const decisionClass = (value) => ({ suitable: "success", unsuitable: "danger", needs_more_info: "warning" }[value] || "");
+const multiFilterKeys = new Set(["school_level", "graduation_year", "decision"]);
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
 const resumeJob = (resume) => resume?.job_type || resume?.jobType || resume?.applied_position || resume?.appliedPosition || "";
 const resumeOwner = (resume) => resume?.linkedOwner || resume?.linked_owner || resume?.source_owner || resume?.sourceOwner || "";
@@ -137,10 +138,14 @@ function buildTabs() {
 function queryFromFilters() {
   const data = new FormData($("filters"));
   const params = new URLSearchParams({ page_size: "100" });
-  for (const [key, value] of data.entries()) if (value) params.set(key, value);
+  for (const [key, value] of data.entries()) {
+    const cleaned = String(value || "").trim();
+    if (!cleaned) continue;
+    params[multiFilterKeys.has(key) ? "append" : "set"](key, cleaned);
+  }
   if (state.tab === "unread") params.set("read_status", "unread");
   if (state.tab === "viewed") params.set("read_status", "viewed");
-  if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) params.set("decision", state.tab);
+  if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) { params.delete("decision"); params.append("decision", state.tab); }
   return params.toString();
 }
 async function loadResumes() {
@@ -348,6 +353,7 @@ function bindPageActions() {
     event.preventDefault();
     loadResumes();
   });
+  $("filters").addEventListener("reset", () => setTimeout(loadResumes, 0));
   $("refreshDashboardBtn").onclick = loadDashboard;
   $("globalSearch").addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;

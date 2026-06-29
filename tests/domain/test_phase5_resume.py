@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.domain.resume.dedup import deduplicate_by_phone, find_duplicate_resumes
 from app.domain.resume.models import Resume, ResumeRecord
 from app.domain.resume.normalize import (
@@ -74,6 +76,63 @@ def test_resume_service_filters_sorts_and_paginates_in_memory_records() -> None:
     assert repository.count() == 3
 
 
+def test_resume_service_replicates_legacy_library_filters() -> None:
+    """旧站简历库的学校层次、届别、复核、结论和分数筛选应在后端生效。"""
+
+    repository = ResumeRepository.in_memory(
+        [
+            _record(
+                "1",
+                name="王五",
+                job="销售管培生",
+                score=86,
+                updated_at="2026-06-26",
+                school_level="985 / 211 / 双一流",
+                graduation="2027届毕业",
+                manual_review=True,
+            ),
+            _record(
+                "2",
+                name="赵六",
+                job="电气工程师",
+                score=72,
+                updated_at="2026-06-24",
+                school_level="二本",
+                graduation="2026届",
+            ),
+            _record(
+                "3",
+                name="钱七",
+                job="应用技术",
+                score=92,
+                updated_at="2026-06-25",
+                school_level="海外院校",
+                graduation="2028年应届",
+                manual_review=True,
+            ),
+        ]
+    )
+    review_states = {
+        "1": SimpleNamespace(read_status="unread", decision="suitable"),
+        "2": SimpleNamespace(read_status="viewed", decision="unsuitable"),
+        "3": SimpleNamespace(read_status="unread", decision="needs_more_info"),
+    }
+    service = ResumeService(repository)
+
+    page = service.list_resumes(
+        school_level=["985 / 211 / 双一流", "海外院校"],
+        graduation_year=["27", "28"],
+        decision=["suitable", "needs_more_info"],
+        score_min=80,
+        score_max=95,
+        manual_review=True,
+        review_states=review_states,
+        sort="created-asc",
+    )
+
+    assert [resume.id for resume in page.items] == ["3", "1"]
+
+
 def _record(
     record_id: str,
     *,
@@ -82,13 +141,20 @@ def _record(
     job: str = "销售管培生",
     score: int = 60,
     updated_at: str = "2026-01-01",
+    school_level: str = "",
+    graduation: str = "",
+    manual_review: bool = False,
 ) -> ResumeRecord:
+    parse_quality = {"needsManualReview": manual_review}
     return ResumeRecord(
         id=record_id,
         payload={
             "name": name,
             "phone": phone,
             "education": "本科",
+            "schoolLevel": school_level,
+            "graduation": graduation,
+            "parseQuality": parse_quality,
             "applied_position": job,
             "rawText": f"{name} {phone} 本科 {job}",
         },

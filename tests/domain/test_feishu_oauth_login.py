@@ -166,7 +166,7 @@ def test_feishu_callback_maps_member_to_resume_library(monkeypatch) -> None:
 def test_feishu_callback_writes_login_diagnostics(tmp_path, monkeypatch) -> None:
     """A successful Feishu login leaves a safe identity snapshot for bootstrap setup."""
 
-    monkeypatch.delenv("FEISHU_ALLOWED_TENANT_KEYS", raising=False)
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "")
     load_settings.cache_clear()
     app = _app_with_feishu(
         FeishuProfile(open_id="ou_first", tenant_key="tenant-first", name="Admin One"),

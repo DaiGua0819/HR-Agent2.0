@@ -309,3 +309,34 @@
 - 风险 / 待确认：
   - BOSS 简历文件不会进入本地 `resume_artifacts`；如果后续要做 BOSS 简历入库，需要另接邮箱或 BOSS 平台导出来源。
   - 51job 仍保持“符合条件后下载到本地”；智联目前只识别附件/求附件，平台规则不受本次 BOSS 调整影响。
+
+---
+
+### 快照 0029：复刻旧站简历库筛选条件
+- 修改时间：2026-06-29 16:27:30 +08:00
+- 修改原因：
+  - 新版简历库只保留了关键词、负责人、平台、岗位、学历和最低分，筛选条件少于旧站，无法按学校层次、筛选结论、毕业届别、分数区间、复核状态和入库时间快速定位简历。
+  - 用户要求按之前网站的简历库筛选能力复刻，保持本地新 UI 的权限分流和固定预览布局不变。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `app/api/routes/resumes.py`
+  - `app/domain/resume/service.py`
+  - `tests/domain/test_phase5_resume.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - 前端简历库筛选表单补齐旧站核心字段：学校层次多选、筛选结论多选、毕业届别多选、最高分、入库开始/结束日期、排序、只看需复核、重置。
+  - `queryFromFilters()` 支持多选 query 参数，不再用 `set()` 覆盖同名字段；状态 Tab 进入“合适/不合适/待补充/待判断”时以 Tab 为准。
+  - 刷新 `styles.css` / `app.js` 资源版本号，避免浏览器继续使用飞书登录阶段的旧缓存。
+  - `GET /api/resumes` 增加 `school_level / graduation_year / decision[] / manual_review / date_from / date_to` 参数。
+  - `ResumeService` 增加旧站筛选语义：学校层次匹配、26/27/28 届识别、`pending` 到 `undecided` 的兼容、人工复核标记、日期范围和旧排序值 `score / created-desc / created-asc`。
+  - 新增回归测试覆盖旧站筛选字段组合，确保后端筛选不是只有前端控件。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_phase5_resume.py -q`：4 passed。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_phase5_resume.py tests\domain\test_auth_login_access.py tests\domain\test_resume_review_workbench.py -q`：13 passed。
+  - `.venv312\Scripts\python.exe -m pytest tests -q`：102 passed，1 warning。
+  - `.venv312\Scripts\python.exe -m ruff check .`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app scripts run_control_plane.py run_worker.py`：通过。
+- 风险 / 待确认：
+  - 当前先用原生多选控件承接旧站多选能力；如果你希望完全复刻旧站的下拉复选交互，可以在下一步只改前端控件样式，不需要再改后端筛选语义。

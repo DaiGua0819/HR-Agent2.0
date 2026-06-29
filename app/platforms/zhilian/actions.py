@@ -34,6 +34,7 @@ from app.platforms.zhilian.dom_scripts import (
     UNREAD_FILTER_STATE_JS,
     ZHILIAN_RESUME_STATE_JS,
 )
+from app.platforms.zhilian.resume_files import save_zhilian_resume_bytes
 
 SYSTEM_SKIP_TERMS = ("平台推荐", "系统提示", "广告", "职位助手", "智联小助手")
 
@@ -239,7 +240,8 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
 
     state = await inspect_resume_request_state(page)
     if state.has_resume_attachment:
-        return {"requested": False, "resumeReceived": True, "state": state}
+        download = await _download_attachment_resume(page)
+        return {"requested": False, "resumeReceived": True, "state": state, **download}
     if state.already_requested:
         return {"requested": False, "skipped": True, "reason": "already_requested", "state": state}
     button = await _find_button_by_text(
@@ -251,7 +253,7 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
         page,
         button,
         label="智联要附件简历",
-        verify=lambda: _confirm_button_visible(page),
+        verify=lambda: _request_resume_progress_visible(page),
     )
     if not click.get("ok") and not _click_attempted(click):
         return {
@@ -261,9 +263,32 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
             "state": state,
             "click": click,
         }
+    await asyncio.sleep(1)
+    after = await inspect_resume_request_state(page)
+    if after.has_resume_attachment:
+        download = await _download_attachment_resume(page)
+        return {
+            "requested": True,
+            "resumeReceived": True,
+            "confirmed": bool(after.already_requested),
+            "verifyReason": "" if download.get("ok") else str(download.get("reason") or ""),
+            "state": after,
+            **download,
+        }
     confirm = await _click_request_resume_confirm(page)
     await asyncio.sleep(1)
     after = await inspect_resume_request_state(page)
+    if after.has_resume_attachment:
+        download = await _download_attachment_resume(page)
+        return {
+            "requested": True,
+            "resumeReceived": True,
+            "confirmed": bool(confirm.get("clicked") or after.already_requested),
+            "verifyReason": "" if download.get("ok") else str(download.get("reason") or ""),
+            "state": after,
+            "confirm": confirm,
+            **download,
+        }
     confirmed = bool(confirm.get("clicked") and after.already_requested)
     if after.already_requested and not confirm.get("blocked"):
         confirmed = True
@@ -393,6 +418,47 @@ async def _legacy_click_request_resume_confirm(page: BrowserPage) -> bool:
     return bool(result.get("ok"))
 
 
+async def _download_attachment_resume(page: BrowserPage) -> dict[str, object]:
+    context = await _safe_eval_dict(page, "zhilian.read_chat_context")
+    if not context:
+        context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+    candidate_name = str(context.get("name") or context.get("candidate_name") or "")
+    applied_position = str(context.get("position") or context.get("appliedPosition") or "")
+    try:
+        download = await page.click_and_download(
+            _CLICK_VIEW_ATTACHMENT_RESUME_DOWNLOAD_JS,
+            timeout_ms=30000,
+        )
+    except Exception as error:
+        return {
+            "ok": False,
+            "downloaded": False,
+            "blocked": True,
+            "reason": "download_api_unavailable",
+            "error": str(error),
+            "sourceKind": "attachment",
+        }
+    content = download.get("bytes") if isinstance(download, dict) else None
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+    if not isinstance(content, bytes):
+        return {
+            "ok": False,
+            "downloaded": False,
+            "blocked": True,
+            "reason": str(download.get("reason") or "attachment_download_missing"),
+            "download": download,
+            "sourceKind": "attachment",
+        }
+    result = save_zhilian_resume_bytes(
+        content,
+        candidate_name=candidate_name,
+        applied_position=applied_position,
+        filename=str(download.get("filename") or ""),
+    )
+    return {**result, "sourceKind": "attachment", "download": download}
+
+
 async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
     return {"verified": await page.wait_for(selectors.CHAT_READY, timeout_ms=6500)}
 
@@ -506,6 +572,21 @@ async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
         if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
             return {"verified": True}
     return {"verified": False, "reason": "confirm_not_visible"}
+
+
+async def _request_resume_progress_visible(page: BrowserPage) -> dict[str, object]:
+    confirm = await _confirm_button_visible(page)
+    if confirm.get("verified"):
+        return {**confirm, "source": confirm.get("source") or "confirm_visible"}
+    state = await inspect_resume_request_state(page)
+    if state.has_resume_attachment:
+        return {"verified": True, "source": "attachment_visible"}
+    if state.already_requested:
+        return {"verified": True, "source": "already_requested"}
+    return {
+        "verified": False,
+        "reason": str(confirm.get("reason") or "request_resume_progress_not_visible"),
+    }
 
 
 async def _safe_eval_dict(
@@ -720,5 +801,32 @@ _CLICK_VISIBLE_CONFIRM_JS = r"""
     }
   }
   return { clicked: false, blocked: true, reason: "confirm_button_not_visible" };
+}
+"""
+
+
+_CLICK_VIEW_ATTACHMENT_RESUME_DOWNLOAD_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const detail = document.querySelector("#im-session-detail, .im-session-detail") || document;
+  const candidates = Array.from(detail.querySelectorAll("button, a, [role='button'], span, div"))
+    .filter(visible)
+    .filter((item) => text(item).replace(/\s+/g, "").includes("查看附件简历"));
+  const target = candidates.find((item) => {
+    const value = text(item).replace(/\s+/g, "");
+    return value === "查看附件简历";
+  }) || candidates[0];
+  if (!target) {
+    return { clicked: false, reason: "view_attachment_button_not_found" };
+  }
+  target.click();
+  return { clicked: true, label: text(target), source: "zhilian_view_attachment_resume_download" };
 }
 """

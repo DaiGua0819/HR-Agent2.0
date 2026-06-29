@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-feishu-login" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260629-resume-filters" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260629-feishu-login" />
   </head>
   <body>
@@ -132,7 +132,7 @@
           <div class="library-panel">
             <div class="tabs" id="statusTabs"></div>
             <form class="filters" id="filters">
-              <label><span>关键词</span><input name="q" placeholder="姓名 / 手机 / 学校 / 技能" /></label>
+              <label class="wide"><span>关键词</span><input name="q" placeholder="姓名 / 手机 / 专业 / 学校 / 技能" /></label>
               <label><span>负责人</span><input name="owner" placeholder="宋峰峰 / 和新红" /></label>
               <label>
                 <span>平台</span>
@@ -145,8 +145,57 @@
               </label>
               <label><span>岗位</span><input name="job_type" placeholder="岗位" /></label>
               <label><span>学历</span><input name="education" placeholder="本科 / 硕士" /></label>
-              <label><span>最低分</span><input name="score_min" type="number" min="0" max="100" /></label>
-              <button type="submit">筛选</button>
+              <label>
+                <span>学校层次</span>
+                <select name="school_level" multiple>
+                  <option value="985 / 211 / 双一流">985 / 211 / 双一流</option>
+                  <option value="211 / 双一流">211 / 双一流</option>
+                  <option value="双一流">双一流</option>
+                  <option value="一本">一本</option>
+                  <option value="二本">二本</option>
+                  <option value="大专">大专</option>
+                  <option value="海外院校">海外院校</option>
+                  <option value="待确认">待确认</option>
+                </select>
+              </label>
+              <label>
+                <span>筛选结论</span>
+                <select name="decision" multiple>
+                  <option value="undecided">待判断</option>
+                  <option value="suitable">合适</option>
+                  <option value="needs_more_info">待补充</option>
+                  <option value="unsuitable">不合适</option>
+                </select>
+              </label>
+              <label>
+                <span>毕业届别</span>
+                <select name="graduation_year" multiple>
+                  <option value="26">26届</option>
+                  <option value="27">27届</option>
+                  <option value="28">28届</option>
+                </select>
+              </label>
+              <label><span>最低分</span><input name="score_min" type="number" min="0" max="100" placeholder="0" /></label>
+              <label><span>最高分</span><input name="score_max" type="number" min="0" max="100" placeholder="100" /></label>
+              <label><span>入库开始</span><input name="date_from" type="date" /></label>
+              <label><span>入库结束</span><input name="date_to" type="date" /></label>
+              <label>
+                <span>排序</span>
+                <select name="sort">
+                  <option value="score">匹配度优先</option>
+                  <option value="created-desc">最新入库</option>
+                  <option value="created-asc">最早入库</option>
+                  <option value="name">姓名</option>
+                </select>
+              </label>
+              <label class="check-filter">
+                <input name="manual_review" type="checkbox" value="true" />
+                <span>只看需复核</span>
+              </label>
+              <div class="filter-actions">
+                <button type="submit">筛选</button>
+                <button class="secondary" type="reset">重置</button>
+              </div>
             </form>
             <div class="table-wrap">
               <table>
@@ -253,6 +302,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260629-feishu-login"></script>
+    <script src="/assets/app.js?v=20260629-resume-filters"></script>
   </body>
 </html>

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import gettempdir
@@ -104,6 +106,10 @@ class PlaywrightCDPPage:
         try:
             if "#sensor_imresume_download" in script or "sensor_imresume_download" in script:
                 return await self._click_job51_online_resume_download(timeout_ms=timeout_ms)
+            if "zhilian_view_attachment_resume_download" in script:
+                return await self._click_zhilian_attachment_resume_download(
+                    timeout_ms=timeout_ms
+                )
             async with self.page.expect_download(timeout=timeout_ms) as download_info:
                 clicked = await self.eval_js(script, arg)
             download = await download_info.value
@@ -127,6 +133,147 @@ class PlaywrightCDPPage:
                 "reason": "download_not_captured",
                 "error": str(error),
             }
+
+    async def _click_zhilian_attachment_resume_download(self, timeout_ms: int) -> dict[str, Any]:
+        """Click Zhilian attachment card and capture opened PDF bytes."""
+
+        clicked: dict[str, Any] = {}
+        target_page = self.page
+        try:
+            view = self.page.get_by_text("查看附件简历").last
+            if not await view.count():
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "view_attachment_button_not_found",
+                }
+            page_task = asyncio.create_task(
+                self.page.context.wait_for_event("page", timeout=5000)
+            )
+            await view.click(timeout=5000)
+            clicked = {"clicked": True, "source": "zhilian_view_attachment_click"}
+            try:
+                target_page = await page_task
+                clicked["openedPage"] = True
+            except Exception:
+                clicked["openedPage"] = False
+            try:
+                await target_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            await target_page.wait_for_timeout(1000)
+            fetched = await self._fetch_current_page_bytes(target_page)
+            if fetched.get("ok") and fetched.get("bytes"):
+                return {
+                    "ok": True,
+                    "clicked": clicked,
+                    "filename": fetched.get("filename") or "zhilian_resume.pdf",
+                    "bytes": fetched["bytes"],
+                    "path": "",
+                    "source": "opened_pdf_url",
+                }
+            download = await self._click_pdf_viewer_download(target_page, timeout_ms)
+            if download.get("ok"):
+                return {"clicked": clicked, **download}
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "reason": download.get("reason")
+                or fetched.get("reason")
+                or "download_not_captured",
+                "fetch": fetched,
+                "download": download,
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "reason": "download_not_captured",
+                "error": str(error),
+            }
+
+    async def _fetch_current_page_bytes(self, page: Any) -> dict[str, Any]:
+        try:
+            payload = await page.evaluate(
+                """
+                async () => {
+                  const url = location.href;
+                  if (!/^https?:/i.test(url)) return { ok: false, reason: "non_http_url", url };
+                  const response = await fetch(url, { credentials: "include" });
+                  const buffer = await response.arrayBuffer();
+                  const bytes = new Uint8Array(buffer);
+                  let binary = "";
+                  const chunk = 0x8000;
+                  for (let index = 0; index < bytes.length; index += chunk) {
+                    binary += String.fromCharCode(...bytes.slice(index, index + chunk));
+                  }
+                  const disposition = response.headers.get("content-disposition") || "";
+                  const match = disposition.match(/filename\\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+                  return {
+                    ok: response.ok,
+                    status: response.status,
+                    contentType: response.headers.get("content-type") || "",
+                    filename: match ? decodeURIComponent(match[1]) : "",
+                    bytesBase64: btoa(binary),
+                    url,
+                  };
+                }
+                """
+            )
+        except Exception as error:
+            return {"ok": False, "reason": "fetch_pdf_url_failed", "error": str(error)}
+        encoded = str(payload.get("bytesBase64") or "") if isinstance(payload, dict) else ""
+        if not encoded:
+            return {"ok": False, "reason": "fetch_pdf_url_empty", "payload": payload}
+        try:
+            content = base64.b64decode(encoded)
+        except ValueError:
+            return {"ok": False, "reason": "fetch_pdf_url_bad_base64", "payload": payload}
+        return {
+            "ok": bool(payload.get("ok")),
+            "filename": str(payload.get("filename") or ""),
+            "contentType": str(payload.get("contentType") or ""),
+            "bytes": content,
+            "url": str(payload.get("url") or ""),
+        }
+
+    async def _click_pdf_viewer_download(
+        self,
+        page: Any,
+        timeout_ms: int,
+    ) -> dict[str, Any]:
+        selectors = (
+            "viewer-toolbar #downloads",
+            "viewer-download-controls #download",
+            "cr-icon-button#download",
+            "#download",
+            "[title*='下载']",
+            "[aria-label*='下载']",
+        )
+        for selector in selectors:
+            locator = page.locator(selector).first
+            try:
+                if not await locator.count():
+                    continue
+                async with page.expect_download(timeout=timeout_ms) as download_info:
+                    await locator.click(timeout=5000)
+                download = await download_info.value
+                path = await download.path()
+                filename = str(download.suggested_filename or "")
+                if path is None:
+                    target = Path(gettempdir()) / (filename or "zhilian_resume_download")
+                    await download.save_as(str(target))
+                    path = str(target)
+                return {
+                    "ok": True,
+                    "filename": filename,
+                    "bytes": Path(path).read_bytes(),
+                    "path": str(path),
+                    "source": f"pdf_viewer_download:{selector}",
+                }
+            except Exception:
+                continue
+        return {"ok": False, "reason": "pdf_viewer_download_button_not_found"}
 
     async def _click_job51_online_resume_download(self, timeout_ms: int) -> dict[str, Any]:
         """51job 在线简历保存必须使用可信点击并确认弹窗。"""

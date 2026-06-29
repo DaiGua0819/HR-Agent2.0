@@ -189,12 +189,14 @@ h3 { font-size: 15px; }
 }
 .filters {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 90px auto;
+  grid-template-columns: repeat(6, minmax(124px, 1fr));
+  align-items: end;
   gap: 8px;
   padding: 8px 12px 12px;
   border-bottom: 1px solid var(--line);
 }
 .filters label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; }
+.filters label.wide { grid-column: span 2; }
 .filters input, .filters select {
   min-width: 0;
   border: 1px solid var(--line);
@@ -203,11 +205,37 @@ h3 { font-size: 15px; }
   background: #fff;
   color: var(--ink);
 }
-.filters button {
+.filters select[multiple] {
+  min-height: 72px;
+  padding: 6px 8px;
+}
+.check-filter {
+  display: flex !important;
+  align-items: center;
+  grid-template-columns: auto 1fr;
+  gap: 8px !important;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.check-filter input { width: auto; }
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  align-self: end;
+}
+.filter-actions button {
   align-self: end;
   color: #fff;
   background: var(--primary);
   border-color: var(--primary);
+}
+.filter-actions button.secondary {
+  color: var(--ink);
+  background: #fff;
+  border-color: var(--line);
 }
 .table-wrap {
   position: relative;

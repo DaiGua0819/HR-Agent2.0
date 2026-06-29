@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import LOCAL_USER
@@ -48,10 +48,15 @@ async def list_resumes(
     owner: str = "",
     platform: str = "",
     education: str = "",
+    school_level: Annotated[list[str] | None, Query()] = None,
+    graduation_year: Annotated[list[str] | None, Query()] = None,
     read_status: str = "",
-    decision: str = "",
+    decision: Annotated[list[str] | None, Query()] = None,
     score_min: int | None = None,
     score_max: int | None = None,
+    manual_review: bool = False,
+    date_from: str = "",
+    date_to: str = "",
     sort: str = "updated_at",
     desc: bool = True,
 ) -> dict[str, object]:
@@ -67,10 +72,15 @@ async def list_resumes(
         source_platform=platform or source_platform,
         owner=owner,
         education=education,
+        school_level=school_level or [],
+        graduation_year=graduation_year or [],
         score_min=score_min,
         score_max=score_max,
         read_status=read_status,
-        decision=decision,
+        decision=decision or [],
+        manual_review=manual_review,
+        date_from=date_from,
+        date_to=date_to,
         review_states=review_states,
         sort=sort,
         descending=desc,

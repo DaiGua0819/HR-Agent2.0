@@ -239,6 +239,32 @@ def test_zhilian_request_resume_ignores_hidden_confirm_button() -> None:
     assert page.current_conversation().get("resume_request_confirmed") is not True
 
 
+def test_zhilian_request_resume_downloads_attachment_after_request() -> None:
+    """点击要附件简历后出现“查看附件简历”时，应继续下载附件简历。"""
+
+    page = ZhilianAttachmentAfterRequestPage(
+        conversations=[
+            {
+                **conversation(
+                    "企业内容运营负责人（B2B/短视频方向）",
+                    [{"sender": "other", "text": "你好"}],
+                ),
+                "visible_request_resume_confirm": False,
+                "zhilian_attachment_bytes": b"%PDF-1.7\nbody\n%%EOF",
+                "zhilian_attachment_filename": "李江春_企业内容运营负责人.pdf",
+            }
+        ]
+    )
+
+    result = asyncio.run(request_resume(page))
+
+    assert result["requested"] is True
+    assert result["resumeReceived"] is True
+    assert result["downloaded"] is True
+    assert result["sourceKind"] == "attachment"
+    assert page.current_conversation()["zhilian_view_attachment_clicked"] is True
+
+
 def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> None:
     """The request button is not evidence that an attachment was received."""
 
@@ -340,6 +366,36 @@ def run_case(convo: dict[str, object], llm: FakeLLM | None = None):
     state = asyncio.run(runner.run_current())
     assert sink.events
     return state, page
+
+
+class ZhilianAttachmentAfterRequestPage(FakePage):
+    """Fake 智联页：点击要附件后生成可下载的查看附件简历卡片。"""
+
+    async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
+        await super().handle_element_click(element)
+        if "要附件简历" in element.text_value:
+            convo = self.current_conversation()
+            convo["has_resume_attachment"] = True
+            convo["resume_requested"] = True
+
+    async def click_and_download(
+        self,
+        script: str,
+        arg: object | None = None,
+        timeout_ms: int = 15000,
+    ) -> dict[str, object]:
+        _ = arg, timeout_ms
+        if "zhilian_view_attachment_resume_download" not in script:
+            return await super().click_and_download(script, arg, timeout_ms)
+        convo = self.current_conversation()
+        convo["zhilian_view_attachment_clicked"] = True
+        return {
+            "ok": True,
+            "clicked": {"clicked": True, "source": "fake_zhilian_attachment"},
+            "filename": convo.get("zhilian_attachment_filename", "zhilian_resume.pdf"),
+            "bytes": convo.get("zhilian_attachment_bytes"),
+            "path": "",
+        }
 
 
 def conversation(position: str, messages: list[dict[str, str]]) -> dict[str, object]:
