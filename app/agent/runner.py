@@ -92,7 +92,14 @@ class ConversationRunner:
         if answer:
             screening = rule_screening(rule)
             if is_direct_resume_rule(rule):
-                await self._send_knowledge_answer(state, answer)
+                failed = await self._send_or_fail(
+                    state,
+                    answer,
+                    action="answer_question",
+                    failure_reason="knowledge_answer_send_failed",
+                )
+                if failed:
+                    return failed
                 return await self._handle_direct_resume(
                     state,
                     conversation,
@@ -106,7 +113,14 @@ class ConversationRunner:
                     llm=self.llm,
                 )
                 if analysis.get("status") == "accept":
-                    await self._send_knowledge_answer(state, answer)
+                    failed = await self._send_or_fail(
+                        state,
+                        answer,
+                        action="answer_question",
+                        failure_reason="knowledge_answer_send_failed",
+                    )
+                    if failed:
+                        return failed
                     return await self._handle_screening(
                         state,
                         conversation,
@@ -114,9 +128,19 @@ class ConversationRunner:
                         analysis=analysis,
                         knowledge_answer=answer,
                     )
-            await self._send_knowledge_answer(state, answer)
+            failed = await self._send_or_fail(
+                state,
+                answer,
+                action="answer_question",
+                failure_reason="knowledge_answer_send_failed",
+            )
+            if failed:
+                return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
+        if is_direct_resume_rule(rule) and self._should_escalate_direct_question(last.text):
+            state["pending_question"] = last.text
+            return self._finish(state, "escalate", "unknown_question", evidence=last.text)
         if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)
         if looks_like_question(last.text):
@@ -135,32 +159,13 @@ class ConversationRunner:
         *,
         knowledge_answer: str = "",
     ) -> GraphState:
-        if self.persistence.has_resume_completion():
-            return self._finish(
-                state,
-                "wait",
-                "resume_already_completed",
-                knowledgeAnswer=knowledge_answer,
-                result={"skipped": True, "reason": "persisted_resume_completed"},
-            )
-        request_state = await self.adapter.inspect_resume_request_state()
+        handled, request_state = await self._preflight_resume_request(
+            state,
+            knowledgeAnswer=knowledge_answer,
+        )
+        if handled:
+            return handled
         position = conversation.candidate.applied_position
-        if request_state.has_resume_attachment:
-            return self._finish(
-                state,
-                "wait",
-                "resume_attachment_received",
-                knowledgeAnswer=knowledge_answer,
-                result={"skipped": True, "reason": "resume_attachment_received"},
-            )
-        if request_state.already_requested:
-            return self._finish(
-                state,
-                "wait",
-                "resume_already_requested",
-                knowledgeAnswer=knowledge_answer,
-                result={"skipped": True, "reason": "already_requested"},
-            )
         if request_state.pending_resume_consent:
             result = await self.adapter.request_resume()
             state["resume_requested"] = bool(
@@ -177,8 +182,14 @@ class ConversationRunner:
         if candidates and not any(message_sent(conversation, item) for item in candidates):
             prompt = prephrase_text(conversation.platform, position, rule)
             if prompt:
-                await self.adapter.send_message(prompt)
-                append_sent(state, prompt)
+                failed = await self._send_or_fail(
+                    state,
+                    prompt,
+                    action="request_resume",
+                    failure_reason="direct_resume_prompt_send_failed",
+                )
+                if failed:
+                    return failed
         result = await self.adapter.request_resume()
         state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
         return self._finish(
@@ -199,28 +210,9 @@ class ConversationRunner:
         phrase = initial_common_phrase(rule)
         if phrase and not message_sent(conversation, phrase):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
-        if self.persistence.has_resume_completion():
-            return self._finish(
-                state,
-                "wait",
-                "resume_already_completed",
-                result={"skipped": True, "reason": "persisted_resume_completed"},
-            )
-        request_state = await self.adapter.inspect_resume_request_state()
-        if request_state.has_resume_attachment:
-            return self._finish(
-                state,
-                "wait",
-                "resume_attachment_received",
-                result={"skipped": True, "reason": "resume_attachment_received"},
-            )
-        if request_state.already_requested:
-            return self._finish(
-                state,
-                "wait",
-                "resume_already_requested",
-                result={"skipped": True, "reason": "already_requested"},
-            )
+        handled, _ = await self._preflight_resume_request(state)
+        if handled:
+            return handled
         judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
         if judgement.status == "accept":
             result = await self.adapter.request_resume()
@@ -249,9 +241,20 @@ class ConversationRunner:
             return self._finish(state, "wait", "basic_phrase_missing")
         position = conversation.candidate.applied_position
         if should_use_company_info(conversation.platform, position, rule):
-            await self.adapter.send_company_info(phrase=phrase, phrase_key="basic_conditions")
+            result = await self.adapter.send_company_info(
+                phrase=phrase,
+                phrase_key="basic_conditions",
+            )
         else:
-            await self.adapter.send_message(phrase)
+            result = await self.adapter.send_message(phrase)
+        if not self._send_result_ok(result):
+            return self._finish(
+                state,
+                "send_failed",
+                "basic_phrase_send_failed",
+                reply=phrase,
+                sendResult=asdict(result),
+            )
         append_sent(state, phrase)
         return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
 
@@ -286,8 +289,14 @@ class ConversationRunner:
             next_question = select_position_screening_question_text(question)
             if not next_question:
                 return self._finish(state, "wait", "no_screening_question_text", screening=analysis)
-            await self.adapter.send_message(next_question)
-            append_sent(state, next_question)
+            failed = await self._send_or_fail(
+                state,
+                next_question,
+                action="ask_screening",
+                failure_reason="screening_question_send_failed",
+            )
+            if failed:
+                return failed
             return self._finish(
                 state,
                 "ask_screening",
@@ -296,15 +305,13 @@ class ConversationRunner:
                 screening=analysis,
             )
         if status == "accept":
-            if self.persistence.has_resume_completion():
-                return self._finish(
-                    state,
-                    "wait",
-                    "resume_already_completed",
-                    knowledgeAnswer=knowledge_answer,
-                    screening=analysis,
-                    result={"skipped": True, "reason": "persisted_resume_completed"},
-                )
+            handled, _ = await self._preflight_resume_request(
+                state,
+                knowledgeAnswer=knowledge_answer,
+                screening=analysis,
+            )
+            if handled:
+                return handled
             result = await self.adapter.request_resume()
             state["resume_requested"] = bool(
                 result.get("requested") or result.get("resumeReceived")
@@ -334,6 +341,109 @@ class ConversationRunner:
             screening=analysis,
         )
 
+    async def _preflight_resume_request(
+        self,
+        state: GraphState,
+        **extra: Any,
+    ) -> tuple[GraphState | None, Any]:
+        """Handle persisted and page-observed resume states before requesting."""
+
+        if self.persistence.has_resume_downloaded():
+            return (
+                self._finish(
+                    state,
+                    "wait",
+                    "resume_already_downloaded",
+                    **extra,
+                    result={"skipped": True, "reason": "persisted_resume_downloaded"},
+                ),
+                None,
+            )
+        request_state = await self.adapter.inspect_resume_request_state()
+        if request_state.has_resume_attachment:
+            result = await self.adapter.request_resume()
+            if result.get("downloaded") and result.get("filePath"):
+                return (
+                    self._finish(
+                        state,
+                        "request_resume",
+                        "resume_attachment_downloaded",
+                        **extra,
+                        result=result,
+                    ),
+                    request_state,
+                )
+            reason = (
+                "resume_attachment_download_blocked"
+                if result.get("blocked")
+                else "resume_attachment_received"
+            )
+            return (
+                self._finish(
+                    state,
+                    "wait",
+                    reason,
+                    **extra,
+                    result=result or {"skipped": True, "reason": "resume_attachment_received"},
+                ),
+                request_state,
+            )
+        if request_state.pending_resume_consent:
+            result = await self.adapter.request_resume()
+            reason = (
+                "resume_attachment_downloaded"
+                if result.get("downloaded") and result.get("filePath")
+                else "resume_consent_requested"
+            )
+            return (
+                self._finish(
+                    state,
+                    "request_resume",
+                    reason,
+                    **extra,
+                    result=result,
+                ),
+                request_state,
+            )
+        if self.persistence.has_resume_request_pending() or request_state.already_requested:
+            return (
+                self._finish(
+                    state,
+                    "wait",
+                    "resume_already_requested",
+                    **extra,
+                    result={"skipped": True, "reason": "already_requested"},
+                ),
+                request_state,
+            )
+        return None, request_state
+
+    async def _send_or_fail(
+        self,
+        state: GraphState,
+        text: str,
+        *,
+        action: str,
+        failure_reason: str,
+    ) -> GraphState | None:
+        result = await self.adapter.send_message(text)
+        if self._send_result_ok(result):
+            append_sent(state, text)
+            return None
+        return self._finish(
+            state,
+            "send_failed",
+            failure_reason,
+            attemptedAction=action,
+            reply=text,
+            sendResult=asdict(result),
+        )
+
+    def _send_result_ok(self, result: Any) -> bool:
+        if bool(getattr(self.adapter, "dry_run", False)):
+            return True
+        return bool(getattr(result, "sent", False) and getattr(result, "verified", False))
+
     def _knowledge_answer(self, text: str, conversation: Conversation) -> str | None:
         return find_knowledge_answer(
             text,
@@ -352,6 +462,32 @@ class ConversationRunner:
             and is_ai_basic_rule(conversation.candidate.applied_position, rule)
             and not message_sent(conversation, phrase)
         )
+
+    @staticmethod
+    def _should_escalate_direct_question(text: str) -> bool:
+        if not looks_like_question(text):
+            return False
+        compact = "".join(text.lower().split())
+        detail_terms = (
+            "detail",
+            "details",
+            "requirement",
+            "requirements",
+            "scope",
+            "salary",
+            "location",
+            "岗位",
+            "职责",
+            "要求",
+            "薪资",
+            "工资",
+            "地点",
+            "工作内容",
+            "待遇",
+            "加班",
+            "住宿",
+        )
+        return any(term in compact for term in detail_terms)
 
     def _state_from_conversation(self, conversation: Conversation) -> GraphState:
         return {
@@ -386,10 +522,5 @@ class ConversationRunner:
         )
         self.persistence.finish(state, action=action, reason=reason, extra=extra)
         return state
-
-    async def _send_knowledge_answer(self, state: GraphState, answer: str) -> None:
-        await self.adapter.send_message(answer)
-        append_sent(state, answer)
-
 
 ZhilianConversationRunner = ConversationRunner

@@ -48,7 +48,14 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
                 "click": click,
             }
     if state.has_resume_attachment:
-        return {"requested": False, "resumeReceived": True, "state": state}
+        return {
+            "requested": False,
+            "resumeReceived": True,
+            "downloaded": False,
+            "skipped": True,
+            "reason": "boss_attachment_present_no_local_download",
+            "state": state,
+        }
     if state.already_requested:
         return {"requested": False, "skipped": True, "reason": "already_requested", "state": state}
     if (await _confirm_prompt_visible(page)).get("verified"):
@@ -286,3 +293,4 @@ _CLICK_CONFIRM_BY_PROMPT_POSITION_JS = r"""
 
 def _compact(value: Any) -> str:
     return "".join(str(value or "").split())
+

@@ -24,6 +24,7 @@ from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
 from app.platforms.job51 import actions_chat as job51_chat
 from app.platforms.job51 import selectors as job51_selectors
+from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.zhilian import actions as zhilian_actions
 from app.platforms.zhilian import selectors as zhilian_selectors
@@ -138,10 +139,10 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     if not unread.get("selected"):
         missing.append(f"unread filter not active: {unread}")
     if platform == Platform.JOB51:
-        required = {
-            "thread list": job51_selectors.THREAD_ITEM,
-            "chat input": job51_selectors.CHAT_INPUT,
-            "send button": job51_selectors.SEND_BUTTON,
+        required = {"thread list": job51_selectors.THREAD_ITEM}
+        conditional = {
+            "chat input after opening candidate": job51_selectors.CHAT_INPUT,
+            "send button when sending": job51_selectors.SEND_BUTTON,
         }
     else:
         required = {
@@ -151,9 +152,12 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
         }
     for name, selector in required.items():
         count = len(await page.query_all(selector))
-        print(f"preflight {name}: count={count} selector={selector}")
-        if count == 0 and name == "thread list":
+        print(f"preflight required {name}: count={count} selector={selector}", flush=True)
+        if count == 0:
             missing.append(f"{name}: {selector}")
+    for name, selector in locals().get("conditional", {}).items():
+        count = len(await page.query_all(selector))
+        print(f"preflight conditional {name}: count={count} selector={selector}", flush=True)
     return missing
 
 
@@ -178,14 +182,18 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             if len(summaries) >= max_items:
                 break
             label = str(row_state.get("label") or "").strip()
-            row_key = str(row_state.get("id") or label or row_state.get("index") or "")
-            if row_key in seen or _skip_label(platform, label):
+            row_keys = _seen_keys_for_row(row_state)
+            if seen.intersection(row_keys) or _skip_label(platform, label):
                 continue
+            if platform == Platform.JOB51:
+                await cleanup_resume_overlays(adapter.page)
             row = await _find_candidate_row(adapter, platform, row_state)
             if row is None:
                 continue
             label = (await row.text()).strip()
-            if label in seen or _skip_label(platform, label):
+            if seen.intersection(_seen_keys_for_row({**row_state, "label": label})) or _skip_label(
+                platform, label
+            ):
                 continue
             before_actions = len(getattr(adapter.page, "reliable_actions", []))
             click = await reliable_click_element(
@@ -201,13 +209,14 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 conversation_repository=conversation_repository,
                 artifact_store=artifact_store,
             ).run_current()
-            conversation_id = str(state.get("conversation_id") or label)
-            seen.update({row_key, label, conversation_id})
             summary = _summary_from_state(state)
             summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[
                 before_actions:
             ]
+            if platform == Platform.JOB51:
+                summary["cleanup"] = await cleanup_resume_overlays(adapter.page)
             summaries.append(summary)
+            seen.update(_seen_keys_for_processed_item(row_state, summary))
             progressed = True
         if len(summaries) >= max_items:
             break
@@ -336,10 +345,55 @@ def _safe_int(value: object) -> int:
         return 0
 
 
+def _seen_keys_for_row(row_state: dict[str, object]) -> set[str]:
+    keys: set[str] = set()
+    row_id = str(row_state.get("id") or "").strip()
+    label = str(row_state.get("label") or "").strip()
+    index = str(row_state.get("index") or "").strip()
+    if row_id:
+        keys.add(f"row:{row_id.lstrip('_')}")
+    if label:
+        keys.add(f"label:{_compact(label)}")
+    if index:
+        keys.add(f"index:{index}")
+    return keys
+
+
+def _seen_keys_for_processed_item(
+    row_state: dict[str, object],
+    summary: dict[str, Any],
+) -> set[str]:
+    keys = _seen_keys_for_row(row_state)
+    conversation_id = str(summary.get("conversationId") or "").strip()
+    session_id = str(summary.get("sessionId") or "").strip()
+    if conversation_id:
+        keys.add(f"conversation:{conversation_id}")
+    if session_id:
+        keys.add(f"session:{session_id}")
+    candidate = summary.get("candidate") if isinstance(summary.get("candidate"), dict) else {}
+    name = str(candidate.get("name") or candidate.get("label") or "").strip()
+    job = str(summary.get("job") or candidate.get("applied_position") or "").strip()
+    fingerprint = str(summary.get("recentMessagesFingerprint") or "").strip()
+    if name and job and fingerprint:
+        keys.add(f"fingerprint:{_compact(name)}|{_compact(job)}|{fingerprint}")
+    return keys
+
+
+def _compact(value: str) -> str:
+    return "".join(str(value or "").split()).lower()
+
+
 def _summary_from_state(state: dict[str, Any]) -> dict[str, Any]:
     messages = state.get("messages") if isinstance(state.get("messages"), list) else []
+    decision = state.get("decision") if isinstance(state.get("decision"), dict) else {}
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+    candidate_status = (
+        state.get("candidate_status") if isinstance(state.get("candidate_status"), dict) else {}
+    )
     return {
+        "sessionId": state.get("session_id") or "",
         "conversationId": state.get("conversation_id") or "",
+        "recentMessagesFingerprint": state.get("recent_messages_fingerprint") or "",
         "candidate": state.get("candidate") if isinstance(state.get("candidate"), dict) else {},
         "job": state.get("applied_position") or "",
         "lastMessage": messages[-1] if messages else {},
@@ -347,18 +401,28 @@ def _summary_from_state(state: dict[str, Any]) -> dict[str, Any]:
         "stage": state.get("stage") or "",
         "ruleSource": state.get("rule_source") or "",
         "sentMessages": state.get("sent_messages") or [],
-        "decision": state.get("decision") if isinstance(state.get("decision"), dict) else {},
+        "artifactWritten": bool(result.get("downloaded") and result.get("filePath")),
+        "candidateStatusWritten": bool(candidate_status),
+        "candidateStatus": candidate_status,
+        "decision": decision,
     }
 
 
 def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: bool) -> None:
     mode = "LIVE" if live else "dry-run"
+    failed = sum(1 for item in items if item.get("action") == "send_failed")
+    skipped = sum(1 for item in items if item.get("action") == "skip")
+    processed = max(0, len(items) - failed - skipped)
     print(f"\n===== {platform.value} {mode} summary =====")
-    print(f"processed conversations: {len(items)}")
+    print(
+        f"processed={processed} skipped={skipped} failed={failed} total={len(items)}",
+        flush=True,
+    )
     for index, item in enumerate(items, start=1):
         candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
         decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
         print(f"\n[{index}] conversation: {item.get('conversationId')}")
+        print(f"session: {item.get('sessionId') or ''}")
         print(f"candidate: {candidate.get('name') or candidate.get('label') or ''}")
         print(f"job: {item.get('job') or candidate.get('applied_position') or ''}")
         print(f"rule source: {item.get('ruleSource') or 'not matched'}")
@@ -372,6 +436,8 @@ def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: boo
                 "reliable actions: "
                 f"{json.dumps(_jsonable(item['reliableActions']), ensure_ascii=False)}"
             )
+        print(f"artifact written: {bool(item.get('artifactWritten'))}")
+        print(f"candidate status written: {bool(item.get('candidateStatusWritten'))}")
         print(f"decision: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
 
 
@@ -402,9 +468,9 @@ async def _close_runtime_resources() -> None:
 
 
 def _print_step(message: str) -> None:
-    print(f"[ok] {message}")
+    print(f"[ok] {message}", flush=True)
 
 
 def _fail(message: str) -> None:
-    print(f"[error] {message}")
+    print(f"[error] {message}", flush=True)
     raise SystemExit(2)

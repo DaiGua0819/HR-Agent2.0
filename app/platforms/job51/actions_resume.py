@@ -12,7 +12,7 @@ import base64
 from app.browser.base import BrowserPage
 from app.browser.reliable_actions import reliable_click_element
 from app.platforms.job51 import selectors
-from app.platforms.job51.actions_resume_close import close_resume_preview
+from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.dom_scripts import (
     ANNEX_DOWNLOAD_PAYLOAD_JS,
     CLICK_ONLINE_RESUME_JS,
@@ -176,7 +176,7 @@ async def _download_attachment_resume(
             memory=memory,
         ), "attachment")
     finally:
-        await close_resume_preview(page)
+        await cleanup_resume_overlays(page)
 
 
 async def _download_online_resume(
@@ -218,7 +218,7 @@ async def _download_online_resume(
             memory=memory,
         ), "online_resume")
     finally:
-        await close_resume_preview(page)
+        await cleanup_resume_overlays(page)
 
 
 async def _generic_attachment_bytes(

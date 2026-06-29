@@ -11,14 +11,19 @@ def print_summary(items: list[dict[str, Any]], *, live: bool) -> None:
     """打印 BOSS 单次处理的人类可读小结。"""
 
     mode_name = "LIVE" if live else "dry-run"
+    failed = sum(1 for item in items if item.get("action") == "send_failed")
+    skipped = sum(1 for item in items if item.get("action") == "skip")
+    processed = max(0, len(items) - failed - skipped)
     print(f"\n===== BOSS {mode_name} 小结 =====")
     print(f"处理会话数: {len(items)}")
+    print(f"processed={processed} skipped={skipped} failed={failed} total={len(items)}")
     if not items:
         print("没有处理到候选人会话。可能没有未读，或会话列表选择器未返回候选人行。")
         return
     for index, item in enumerate(items, start=1):
         candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
         decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
+        print(f"session: {item.get('sessionId') or ''}")
         print(f"\n[{index}] 会话: {item.get('conversationId')}")
         print(f"候选人: {candidate.get('name') or ''}")
         print(f"识别岗位: {item.get('job') or candidate.get('applied_position') or '未识别'}")
@@ -39,6 +44,8 @@ def print_summary(items: list[dict[str, Any]], *, live: bool) -> None:
                 f"{screening.get('status') or ''} / {screening.get('reason') or ''}"
             )
         reliable_actions = item.get("reliableActions")
+        print(f"artifact written: {bool(item.get('artifactWritten'))}")
+        print(f"candidate status written: {bool(item.get('candidateStatusWritten'))}")
         if isinstance(reliable_actions, list) and reliable_actions:
             print(f"可靠动作: {json.dumps(jsonable(reliable_actions), ensure_ascii=False)}")
         print(f"决策详情: {json.dumps(jsonable(decision), ensure_ascii=False)}")

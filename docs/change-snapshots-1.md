@@ -4,6 +4,44 @@
 
 ---
 
+### 快照 0026：三平台真实处理缺陷修复
+- 修改时间：2026-06-29 10:15:00 +08:00
+- 修改原因：
+  - 真实页面验证暴露出三类缺陷：已求简历被误当成已完成、智联确认/未读/发送验证不可靠、51job 弹窗残留导致重复处理。
+  - BOSS 已检测到候选人发送 PDF 时只等待，没有尝试下载和写入 resume artifact。
+  - live 脚本输出缺少 session、artifact、candidate_status 和失败根因，不利于复盘。
+- 修改文件：
+  - `app/agent/persistence.py`
+  - `app/agent/runner.py`
+  - `app/platforms/types.py`
+  - `app/platforms/zhilian/actions.py`
+  - `app/platforms/boss/actions_resume.py`
+  - `app/platforms/job51/actions_resume.py`
+  - `app/platforms/job51/actions_resume_close.py`
+  - `app/browser/fake_page.py`
+  - `scripts/platform_once_common.py`
+  - `scripts/run_boss_once.py`
+  - `scripts/boss_once_support.py`
+  - `tests/domain/test_conversation_state_bridge.py`
+  - `tests/agent/test_boss_phase2.py`
+  - `tests/agent/test_zhilian_phase1.py`
+  - `tests/agent/test_job51_phase3.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - `resume_requested` 不再是完成态；只有 `resume_downloaded=True` 才跳过后续下载。
+  - Runner 在看到页面当前已有附件/在线简历入口时，会优先调用平台动作下载或同意接收，不被历史已求简历状态阻断。
+  - 直求简历岗位遇到未知岗位细节类问题时先进入 `unknown_question`，不绕过知识库直接求简历。
+  - 智联未读行过滤排除 `[已读]` / `[送达]` 和系统类 label；求附件确认只匹配当前可见弹窗按钮；发送结果带 fill/trigger/verify 链，发送验证失败不写已问问题。
+  - 51job 增加统一 `cleanup_resume_overlays()`，每个候选人处理前后关闭在线简历、附件预览、导出弹窗并 Escape 兜底。
+  - BOSS 已有附件简历会尝试抓取真实 bytes/href，保存到 `data/downloads/boss/`，成功后可写 `resume_artifacts`；拿不到真实字节时返回 blocked reason，不伪造文件。
+  - live summary 增加 `sessionId / artifactWritten / candidateStatusWritten / processed/skipped/failed`，BOSS live limit 放宽到 1-10。
+- 验证结果：
+  - 新增回归测试 8 个，针对状态语义、BOSS 附件下载、智联未读/确认/发送、51job 去重/清理，已全部通过。
+- 风险 / 待确认：
+  - BOSS 真实附件下载依赖页面暴露真实链接或可 fetch 的 blob；若真实页面只允许预览但不暴露字节，会返回 `boss_attachment_download_unavailable`。
+  - 智联仍未实现真实附件 PDF 落盘，只修复“要附件简历”确认和状态语义。
+  - 51job 的导出弹窗清理已接入，但真实页面如新增遮挡层，还需要根据采样继续补 selector。
+
 ### 快照 0019：51job 未读筛选改为状态感知刷新
 
 - 修改时间：2026-06-27 14:55:58 +08:00
@@ -222,3 +260,52 @@
 - 风险 / 待确认：
   - BOSS/智联真实 PDF 下载能力尚未新增；后续实现时必须复用 `ResumeArtifactStore.record_download()`。
   - artifact 解析目前是轻量文本/PDF 文本提取，复杂简历解析与字段清洗仍应由后续简历入库解析流程承接。
+
+---
+
+### 快照 0027：BOSS 已有附件简历预览下载补全
+- 修改时间：2026-06-29 10:31:02 +08:00
+- 修改原因：
+  - 重新处理 BOSS 王岩时，系统已识别到“点击预览附件简历”，但直接 DOM 中没有可抓取的下载 href/bytes，导致 `boss_attachment_download_unavailable`。
+  - BOSS 真实页面可能需要先点击附件预览，再从预览层触发下载或读取 blob/href，不能只扫描聊天消息里的 `a[href]`。
+- 修改文件：
+  - `app/platforms/boss/actions_resume.py`
+  - `tests/agent/test_boss_phase2.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - BOSS 附件下载流程改为三段：先取直接 payload；失败则点击附件预览并等待 1 秒；再从预览层抓取 href/blob 或触发浏览器下载。
+  - 新增真实 href fetch 兜底，使用页面登录态 `credentials: include` 拉取同源/可访问文件字节。
+  - 下载成功后仍走统一校验与保存，不伪造 PDF，不拿到真实字节就不标记 `resume_downloaded`。
+  - 新增回归测试覆盖“直接 payload 不存在，但预览下载能捕获真实 PDF 字节”的场景。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_boss_phase2.py::test_boss_existing_attachment_downloads_after_preview_click -q`：1 passed。
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_boss_phase2.py -q`：16 passed。
+- 风险 / 待确认：
+  - BOSS 预览层若使用非浏览器下载事件、且不暴露 href/blob，脚本仍会返回 blocked reason，不会假装已下载。
+  - 仍需用真实 CB 浏览器重新处理王岩这类已发附件候选人，确认页面是否能触发下载事件。
+
+---
+
+### 快照 0028：BOSS 简历处理改为只求简历不本地下载
+- 修改时间：2026-06-29 10:41:31 +08:00
+- 修改原因：
+  - 用户确认：BOSS 平台只需要执行“求简历/同意接收简历”，不需要把附件简历下载到本地。
+  - 王岩会话已经出现“王岩的简历.pdf / 点击预览附件简历”，此时应视为 BOSS 已收到简历，而不是下载失败。
+- 修改文件：
+  - `app/platforms/boss/actions_resume.py`
+  - `app/agent/persistence.py`
+  - `tests/agent/test_boss_phase2.py`
+  - `tests/domain/test_conversation_state_bridge.py`
+  - `docs/change-snapshots-1.md`
+- 修改结果：
+  - BOSS `request_resume()` 遇到 `has_resume_attachment=True` 时直接返回 `resumeReceived=True / downloaded=False / reason=boss_attachment_present_no_local_download`。
+  - 删除 BOSS 本地下载 helper 和预览下载 JS，避免后续误触发本地下载。
+  - 持久化层改为：真实处理结果里只要 `resumeReceived=True` 就记录 `candidate_status.resume_received=True`；只有真实文件落盘并带 `filePath/fileHash` 才记录 `resume_downloaded=True` 和 artifact。
+  - 重新处理王岩：阶段变为 `resume_attachment_received`，不再是 `resume_attachment_download_blocked`，没有写本地 artifact。
+- 验证结果：
+  - `.venv312\Scripts\python.exe -m pytest tests\agent\test_boss_phase2.py tests\domain\test_conversation_state_bridge.py -q`：25 passed。
+  - `.venv312\Scripts\python.exe -m ruff check app\platforms\boss\actions_resume.py app\agent\persistence.py tests\agent\test_boss_phase2.py tests\domain\test_conversation_state_bridge.py`：All checks passed。
+  - 真实 CB / BOSS targeted live：`scripts\run_boss_once.py --conversation-id 84959880-0 --limit 1 --live --confirm-live` 返回 `resume_attachment_received`。
+- 风险 / 待确认：
+  - BOSS 简历文件不会进入本地 `resume_artifacts`；如果后续要做 BOSS 简历入库，需要另接邮箱或 BOSS 平台导出来源。
+  - 51job 仍保持“符合条件后下载到本地”；智联目前只识别附件/求附件，平台规则不受本次 BOSS 调整影响。

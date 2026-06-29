@@ -92,6 +92,34 @@ async def close_resume_preview(page: BrowserPage) -> dict[str, object]:
     return online if online.get("reason") != "not_online_resume_view" else attachment
 
 
+async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
+    """Close stale resume/export overlays before or after handling a candidate."""
+
+    actions: list[dict[str, object]] = []
+    closed = 0
+    preview = await close_resume_preview(page)
+    actions.append({"name": "resume_preview", **preview})
+    if preview.get("closed"):
+        closed += 1
+    export = await _close_export_dialog(page)
+    actions.append({"name": "export_dialog", **export})
+    if export.get("closed"):
+        closed += 1
+    try:
+        pressed = await page.press("body", "Escape", timeout_ms=1000)
+    except Exception as error:
+        escape: dict[str, object] = {
+            "closed": False,
+            "reason": "escape_error",
+            "error": str(error),
+        }
+    else:
+        await asyncio.sleep(1)
+        escape = {"closed": bool(pressed), "source": "escape"}
+    actions.append({"name": "escape", **escape})
+    return {"closed": closed, "actions": actions}
+
+
 async def _close_attachment_preview(page: BrowserPage) -> dict[str, object]:
     for element in await page.query_all(selectors.ANNEX_CLOSE):
         result = await reliable_click_element(page, element, label="51job关闭附件预览")
@@ -105,5 +133,14 @@ async def _close_online_resume(page: BrowserPage) -> dict[str, object]:
         result = await page.eval_js(CLOSE_ONLINE_RESUME_JS)
     except Exception as error:
         return {"closed": False, "reason": "online_resume_close_error", "error": str(error)}
+    await asyncio.sleep(1)
+    return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
+
+
+async def _close_export_dialog(page: BrowserPage) -> dict[str, object]:
+    try:
+        result = await page.eval_js("job51.close_export_dialog")
+    except Exception as error:
+        return {"closed": False, "reason": "export_close_error", "error": str(error)}
     await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}

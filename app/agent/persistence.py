@@ -53,11 +53,19 @@ class ConversationPersistence:
     def has_resume_completion(self) -> bool:
         """Return whether a real resume action has already been persisted."""
 
+        return self.has_resume_downloaded()
+
+    def has_resume_downloaded(self) -> bool:
+        """Return whether a real resume file has already been persisted."""
+
         status = self.candidate_status
-        return bool(
-            status
-            and (status.resume_requested or status.resume_received or status.resume_downloaded)
-        )
+        return bool(status and status.resume_downloaded)
+
+    def has_resume_request_pending(self) -> bool:
+        """Return whether a prior real resume request is waiting for the candidate."""
+
+        status = self.candidate_status
+        return bool(status and status.resume_requested and not status.resume_downloaded)
 
     def finish(
         self,
@@ -104,11 +112,12 @@ class ConversationPersistence:
         resume_received = status.resume_received
         resume_downloaded = status.resume_downloaded
         resume_path = status.resume_path
+        if result.get("resumeReceived") and not dry_run:
+            resume_received = True
         if action == "request_resume" and not dry_run:
             resume_requested = resume_requested or bool(
                 result.get("requested") or result.get("confirmed")
             )
-            resume_received = resume_received or bool(result.get("resumeReceived"))
             resume_downloaded = resume_downloaded or bool(
                 result.get("downloaded") and result.get("filePath")
             )

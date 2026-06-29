@@ -154,13 +154,16 @@ async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
     fallback: list[dict[str, object]] = []
     for index, row in enumerate(await page.query_all(selectors.SESSION_ITEM)):
         unread_count = _safe_int(await row.attr("unread"))
+        label = await row.text()
         if unread_count <= 0:
+            continue
+        if _should_skip_label(label):
             continue
         fallback.append(
             {
                 "index": index,
                 "id": await row.attr("id") or "",
-                "label": await row.text(),
+                "label": label,
                 "position": await row.attr("position") or "",
                 "unread_count": unread_count,
             }
@@ -206,11 +209,12 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     if not fill.get("ok"):
         return SendResult(sent=False, blocked=True, message="智联没有找到聊天输入框")
     click = await _click_send(page, text)
-    sent = bool(click.get("ok"))
+    sent = bool(click.get("ok") and click.get("verified", True))
     return SendResult(
         sent=sent,
         verified=sent,
         blocked=not sent,
+        details={"fill": fill, "trigger": click},
         message="智联已发送消息" if sent else "智联发送按钮点击失败",
     )
 
@@ -249,7 +253,7 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
         label="智联要附件简历",
         verify=lambda: _confirm_button_visible(page),
     )
-    if not click.get("ok"):
+    if not click.get("ok") and not _click_attempted(click):
         return {
             "requested": False,
             "blocked": True,
@@ -257,8 +261,19 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
             "state": state,
             "click": click,
         }
-    confirmed = await _click_request_resume_confirm(page)
-    return {"requested": True, "confirmed": confirmed, "state": state}
+    confirm = await _click_request_resume_confirm(page)
+    await asyncio.sleep(1)
+    after = await inspect_resume_request_state(page)
+    confirmed = bool(confirm.get("clicked") and after.already_requested)
+    if after.already_requested and not confirm.get("blocked"):
+        confirmed = True
+    return {
+        "requested": True,
+        "confirmed": confirmed,
+        "verifyReason": "" if confirmed else str(confirm.get("reason") or "confirm_not_verified"),
+        "state": after,
+        "confirm": confirm,
+    }
 
 
 async def open_recommend_page(page: BrowserPage) -> None:
@@ -347,7 +362,28 @@ async def _find_button_by_text(
     return None
 
 
-async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+async def _click_request_resume_confirm(page: BrowserPage) -> dict[str, object]:
+    result = await _safe_eval_dict(page, "zhilian.click_visible_request_resume_confirm")
+    if result:
+        if result.get("clicked") or result.get("blocked"):
+            return result
+        if result.get("reason") == "confirm_button_not_visible":
+            return {**result, "blocked": True}
+    result = await _safe_eval_dict(page, _CLICK_VISIBLE_CONFIRM_JS)
+    if result:
+        if result.get("clicked") or result.get("blocked"):
+            return result
+        if result.get("reason") == "confirm_button_not_visible":
+            return {**result, "blocked": True}
+    legacy_clicked = await _legacy_click_request_resume_confirm(page)
+    return {
+        "clicked": bool(legacy_clicked),
+        "reason": "" if legacy_clicked else "confirm_button_not_found",
+        "source": "legacy_selector_fallback",
+    }
+
+
+async def _legacy_click_request_resume_confirm(page: BrowserPage) -> bool:
     result = await reliable_confirm(
         page,
         selectors.REQUEST_RESUME_CONFIRM_BUTTON,
@@ -451,6 +487,20 @@ async def _verify_recent_mine_message(
 
 
 async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
+    result = await _safe_eval_dict(page, "zhilian.visible_request_resume_confirm_state")
+    if result:
+        return {
+            "verified": bool(result.get("visible")),
+            "reason": "" if result.get("visible") else str(result.get("reason") or ""),
+            "source": result.get("source") or "script",
+        }
+    result = await _safe_eval_dict(page, _VISIBLE_CONFIRM_STATE_JS)
+    if result:
+        return {
+            "verified": bool(result.get("visible")),
+            "reason": "" if result.get("visible") else str(result.get("reason") or ""),
+            "source": result.get("source") or "script",
+        }
     for element in await page.query_all(selectors.REQUEST_RESUME_CONFIRM_BUTTON):
         label = await element.text()
         if any(text in label for text in selectors.REQUEST_RESUME_CONFIRM_TEXTS):
@@ -552,9 +602,25 @@ def _state_matches_context(state: dict[str, object], context: dict[str, object])
     return False
 
 
+def _click_attempted(result: dict[str, object]) -> bool:
+    attempts = result.get("attempts")
+    if not isinstance(attempts, list):
+        return False
+    return any(isinstance(item, dict) and item.get("clicked") for item in attempts)
+
+
 def _should_skip_label(label: str) -> bool:
     compact = "".join(str(label or "").split())
-    return not compact or any(term in compact for term in SYSTEM_SKIP_TERMS)
+    return (
+        not compact
+        or _is_read_label(compact)
+        or any(term in compact for term in SYSTEM_SKIP_TERMS)
+    )
+
+
+def _is_read_label(label: str) -> bool:
+    compact = "".join(str(label or "").split())
+    return "[已读]" in compact or "[送达]" in compact
 
 
 def _position_matches(actual: str, expected: str) -> bool:
@@ -578,15 +644,81 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
         if not isinstance(item, dict):
             continue
         unread_count = _safe_int(item.get("unread_count") or item.get("unreadCount"))
+        label = str(item.get("label") or "")
         if unread_count <= 0:
+            continue
+        if _should_skip_label(label):
             continue
         rows.append(
             {
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
-                "label": str(item.get("label") or ""),
+                "label": label,
                 "position": str(item.get("position") or ""),
                 "unread_count": unread_count,
             }
         )
     return rows
+
+
+_VISIBLE_CONFIRM_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const dialogs = Array.from(document.querySelectorAll(
+    ".km-modal--open, .km-dialog, .im-dialog, .el-dialog, .el-message-box, [role='dialog']"
+  )).filter(visible);
+  const confirmTexts = ["确定", "确认", "发送", "要附件简历"];
+  for (const dialog of dialogs) {
+    const buttons = Array.from(dialog.querySelectorAll(
+      "button, .el-button, [role='button'], span, div"
+    )).filter(visible);
+    const button = buttons.find((item) => {
+      const value = text(item).replace(/\s+/g, "");
+      return confirmTexts.some((label) => value === label || value.includes(label));
+    });
+    if (button) {
+      return { visible: true, label: text(button), source: "visible_dialog" };
+    }
+  }
+  return { visible: false, reason: "confirm_button_not_visible" };
+}
+"""
+
+
+_CLICK_VISIBLE_CONFIRM_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const dialogs = Array.from(document.querySelectorAll(
+    ".km-modal--open, .km-dialog, .im-dialog, .el-dialog, .el-message-box, [role='dialog']"
+  )).filter(visible);
+  const confirmTexts = ["确定", "确认", "发送", "要附件简历"];
+  for (const dialog of dialogs) {
+    const buttons = Array.from(dialog.querySelectorAll(
+      "button, .el-button, [role='button'], span, div"
+    )).filter(visible);
+    const button = buttons.find((item) => {
+      const value = text(item).replace(/\s+/g, "");
+      return confirmTexts.some((label) => value === label || value.includes(label));
+    });
+    if (button) {
+      button.click();
+      return { clicked: true, label: text(button), source: "visible_dialog" };
+    }
+  }
+  return { clicked: false, blocked: true, reason: "confirm_button_not_visible" };
+}
+"""

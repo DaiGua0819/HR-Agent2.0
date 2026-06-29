@@ -44,6 +44,20 @@ class TextOnlyPage:
         return self.body
 
 
+class BossPreviewDownloadPage(FakePage):
+    """Fake BOSS page where bytes appear only after clicking the preview download."""
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "boss.resume_attachment_payload" or "boss_attachment_link" in script:
+            return {"found": False}
+        if "boss_attachment_preview" in script:
+            self.current_conversation()["preview_opened"] = True
+            return {"clicked": True, "source": "fake_boss_preview"}
+        if "boss_attachment_download" in script:
+            return {"clicked": True, "source": "fake_boss_preview_download"}
+        return await super().eval_js(script, arg)
+
+
 def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
     """同一张图和同一个 runner 类可分别注入智联/BOSS adapter。"""
 
@@ -110,6 +124,20 @@ def test_boss_direct_resume_position_question_still_requests_resume() -> None:
     assert page.resume_requests == 1
 
 
+def test_boss_direct_resume_unknown_job_detail_question_escalates() -> None:
+    """Direct-resume jobs do not bypass unknown job-detail questions."""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation("DirectRole", [{"sender": "other", "text": "What are the job details?"}]),
+    )
+
+    assert state["next_action"] == "escalate"
+    assert state["stage"] == "unknown_question"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
 def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
     """BOSS AI 应用开发岗位：先走公司基本情况常用语，接受后求简历。"""
 
@@ -151,7 +179,7 @@ def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
     assert page.sent_messages == ["基础条件确认话术"]
 
 
-def test_boss_ai_intern_attachment_after_basic_phrase_waits() -> None:
+def test_boss_ai_intern_attachment_after_basic_phrase_is_received() -> None:
     """BOSS AI 应用开发：基础条件已发后收到附件简历，直接等待不再判不明确。"""
 
     convo = conversation(
@@ -167,6 +195,7 @@ def test_boss_ai_intern_attachment_after_basic_phrase_waits() -> None:
 
     assert state["next_action"] == "wait"
     assert state["stage"] == "resume_attachment_received"
+    assert state["decision"]["result"]["reason"] == "boss_attachment_present_no_local_download"
     assert page.resume_requests == 0
 
 
@@ -185,6 +214,61 @@ def test_boss_resume_state_detects_chat_file_attachment() -> None:
     page = TextOnlyPage("聊天消息 09:30 张三简历.pdf 预览 下载")
     state = asyncio.run(boss_actions.inspect_resume_request_state(page))  # type: ignore[arg-type]
     assert state.has_resume_attachment
+
+
+def test_boss_existing_attachment_does_not_download_locally() -> None:
+    """BOSS existing attachments are not downloaded locally."""
+
+    page = FakePage(
+        conversations=[
+            {
+                "id": "boss-attachment",
+                "name": "Candidate",
+                "position": "DirectRole",
+                "label": "Candidate DirectRole",
+                "latest_message": "resume.pdf",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "resume.pdf"}],
+                "has_resume_attachment": True,
+                "resume_bytes": b"%PDF-1.7\nboss\n%%EOF",
+                "resume_filename": "candidate.pdf",
+            }
+        ]
+    )
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["resumeReceived"] is True
+    assert result["downloaded"] is False
+    assert result["reason"] == "boss_attachment_present_no_local_download"
+
+
+def test_boss_existing_attachment_does_not_open_preview_download() -> None:
+    """BOSS should not click preview/download for existing attachments."""
+
+    page = BossPreviewDownloadPage(
+        conversations=[
+            {
+                "id": "boss-preview-attachment",
+                "name": "Preview Candidate",
+                "position": "DirectRole",
+                "label": "Preview Candidate DirectRole",
+                "latest_message": "点击预览附件简历",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "点击预览附件简历"}],
+                "has_resume_attachment": True,
+                "resume_bytes": b"%PDF-1.7\nboss preview\n%%EOF",
+                "resume_filename": "preview-candidate.pdf",
+            }
+        ]
+    )
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["resumeReceived"] is True
+    assert result["downloaded"] is False
+    assert result["reason"] == "boss_attachment_present_no_local_download"
+    assert "preview_opened" not in page.current_conversation()
 
 
 def test_boss_resume_state_detects_request_sent_system_message() -> None:
@@ -359,6 +443,12 @@ def sample_rules() -> dict[str, object]:
                 "directResume": True,
                 "resumeJobType": "投资交易策略研究员",
                 "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+            },
+            "DirectRole": {
+                "category": "direct",
+                "directResume": True,
+                "resumeJobType": "DirectRole",
+                "resumeRequestPrompt": "please send resume",
             },
         },
         "companyKnowledgeBase": {},

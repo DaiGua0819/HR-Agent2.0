@@ -6,14 +6,18 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from app.agent.runner import ZhilianConversationRunner
 from app.browser.fake_page import FakePage
+from app.domain.conversation.repository import ConversationRepository
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.actions import (
+    find_next_unread_thread,
     inspect_resume_request_state,
     read_unread_conversations,
+    read_unread_row_states,
     request_resume,
     select_unread_filter,
     send_message,
@@ -145,6 +149,40 @@ def test_zhilian_unread_filter_and_refs_use_shared_pattern() -> None:
     assert [item.conversation_id for item in refs] == ["conv-电气工程师"]
 
 
+def test_zhilian_unread_rows_exclude_read_and_system_labels() -> None:
+    """Only rows with a real unread badge and no read/system label are actionable."""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "id": "read-row",
+                "label": "Alice [已读] SalesRole",
+                "unread_count": 2,
+            },
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "id": "system-row",
+                "label": "平台推荐 SalesRole",
+                "unread_count": 1,
+            },
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "id": "real-unread",
+                "label": "Bob SalesRole",
+                "unread_count": 1,
+            },
+        ]
+    )
+
+    rows = asyncio.run(read_unread_row_states(page))
+    ref = asyncio.run(find_next_unread_thread(page, owner="owner"))
+
+    assert [row["id"] for row in rows] == ["real-unread"]
+    assert ref is not None
+    assert ref.conversation_id == "real-unread"
+
+
 def test_zhilian_request_resume_state_and_confirm() -> None:
     """智联求附件简历：已收/已求跳过，未求过则点击并确认。"""
 
@@ -179,6 +217,26 @@ def test_zhilian_request_resume_state_and_confirm() -> None:
     assert result["requested"] is True
     assert result["confirmed"] is True
     assert page.resume_requests == 1
+
+
+def test_zhilian_request_resume_ignores_hidden_confirm_button() -> None:
+    """Hidden confirm buttons must not be treated as a successful request."""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "visible_request_resume_confirm": False,
+            }
+        ]
+    )
+
+    result = asyncio.run(request_resume(page))
+
+    assert result["requested"] is True
+    assert result["confirmed"] is False
+    assert result["verifyReason"] == "confirm_button_not_visible"
+    assert page.current_conversation().get("resume_request_confirmed") is not True
 
 
 def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> None:
@@ -235,6 +293,41 @@ def test_send_message_verification_uses_recent_mine_message_selector() -> None:
     assert result.sent is True
     assert result.verified is True
     assert page.sent_messages == ["收到"]
+
+
+def test_send_failure_does_not_persist_asked_question(tmp_path: Path) -> None:
+    """If fill succeeds but send verification fails, do not persist asked_questions."""
+
+    repository = ConversationRepository(tmp_path / "send-failed.sqlite")
+    page = FakePage(
+        conversations=[
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "send_fails": True,
+            }
+        ]
+    )
+    adapter = ZhilianAdapter(page, owner="owner", dry_run=False)
+    runner = ZhilianConversationRunner(
+        adapter,
+        rules={
+            "positionReplies": {
+                "SalesRole": {
+                    "category": "sales",
+                    "screeningQuestions": ["Do you accept travel?"],
+                }
+            },
+            "companyKnowledgeBase": {},
+        },
+        conversation_repository=repository,
+    )
+
+    state = asyncio.run(runner.run_current())
+    status = repository.get_status(str(state["session_id"]))
+
+    assert state["next_action"] == "send_failed"
+    assert state["stage"] == "screening_question_send_failed"
+    assert status.asked_questions == []
 
 
 def run_case(convo: dict[str, object], llm: FakeLLM | None = None):

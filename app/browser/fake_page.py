@@ -172,6 +172,8 @@ class FakePage:
     ) -> bool:
         _ = selector, timeout_ms
         if key == "Enter" and self.input_text:
+            if self.current_conversation().get("send_fails"):
+                return True
             self.append_sent_message(self.input_text)
             self.input_text = ""
             return True
@@ -244,6 +246,25 @@ class FakePage:
                 "summary": convo.get("resume_summary", ""),
                 "source": "fake_page",
             }
+        if script == "zhilian.visible_request_resume_confirm_state":
+            visible = self.current_conversation().get("visible_request_resume_confirm", True)
+            return {
+                "visible": bool(visible),
+                "reason": "" if visible else "confirm_button_not_visible",
+                "source": "fake_page",
+            }
+        if script == "zhilian.click_visible_request_resume_confirm":
+            visible = self.current_conversation().get("visible_request_resume_confirm", True)
+            if not visible:
+                return {
+                    "clicked": False,
+                    "blocked": True,
+                    "reason": "confirm_button_not_visible",
+                    "source": "fake_page",
+                }
+            self.current_conversation()["resume_request_confirmed"] = True
+            self.current_conversation()["resume_requested"] = True
+            return {"clicked": True, "source": "fake_page"}
         if script == "boss.inspect_resume_request_state":
             convo = self.current_conversation()
             return {
@@ -252,6 +273,19 @@ class FakePage:
                 "summary": convo.get("resume_summary", ""),
                 "source": "fake_page",
             }
+        if script == "boss.resume_attachment_payload":
+            convo = self.current_conversation()
+            return {
+                "bytes": convo.get("resume_bytes"),
+                "href": convo.get("resume_href"),
+                "filename": convo.get("resume_filename", ""),
+                "source": "fake_page",
+            }
+        if script == "boss.fetch_attachment_href":
+            convo = self.current_conversation()
+            if arg and str(arg) == str(convo.get("resume_href") or ""):
+                return {"ok": True, "bytes": convo.get("resume_href_bytes")}
+            return {"ok": False, "reason": "href_not_found"}
         if script == "job51.inspect_resume_request_state":
             convo = self.current_conversation()
             return {
@@ -326,6 +360,12 @@ class FakePage:
                 self.resume_preview_closes += 1
                 return {"closed": True, "source": "fake_online_resume_close"}
             return {"closed": False, "reason": "not_online_resume_view"}
+        if script == "job51.close_export_dialog":
+            convo = self.current_conversation()
+            if convo.get("export_dialog_open"):
+                convo["export_dialog_open"] = False
+                return {"closed": True, "source": "fake_export_dialog"}
+            return {"closed": False, "reason": "export_dialog_not_found"}
         if script == "boss.recommend_summary":
             return {"selectedPosition": self.selected_recommend_position}
         if script == "boss.select_recommend_position":
@@ -450,6 +490,8 @@ class FakePage:
             or "new-send-button" in element.selector
             or "class*='send'" in element.selector
         ) and self.input_text:
+            if self.current_conversation().get("send_fails"):
+                return
             self.append_sent_message(self.input_text)
         elif (
             "要附件简历" in element.text_value
@@ -457,7 +499,8 @@ class FakePage:
             or "im-ask-for-wx" in element.selector
         ):
             self.resume_requests += 1
-            self.current_conversation()["resume_requested"] = True
+            if self.current_conversation().get("visible_request_resume_confirm", True):
+                self.current_conversation()["resume_requested"] = True
         elif "确定" in element.text_value or "确认" in element.text_value:
             self.current_conversation()["resume_request_confirmed"] = True
         elif "打招呼" in element.text_value or "立即Hi聊" in element.text_value:

@@ -132,7 +132,7 @@ def _resolve_mode(args: argparse.Namespace) -> bool:
             _fail("live 模式必须同时传 --confirm-live，避免误触真实发送。")
         if args.owner != "宋峰峰":
             _fail("本次 live 只允许处理 owner=宋峰峰。")
-        if args.limit < 1 or args.limit > 3:
+        if args.limit < 1 or args.limit > 10:
             _fail("live 模式 limit 必须在 1 到 3 之间。")
         os.environ["DRY_RUN"] = "false"
         load_settings.cache_clear()
@@ -267,8 +267,14 @@ async def _process_boss(
         messages = state.get("messages") if isinstance(state.get("messages"), list) else []
         last_message = messages[-1] if messages else _last_message_from_context(context)
         candidate = state.get("candidate") if isinstance(state.get("candidate"), dict) else {}
+        decision = state.get("decision") if isinstance(state.get("decision"), dict) else {}
+        result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
+        candidate_status = (
+            state.get("candidate_status") if isinstance(state.get("candidate_status"), dict) else {}
+        )
         summaries.append(
             {
+                "sessionId": state.get("session_id") or "",
                 "conversationId": conversation_id,
                 "candidate": candidate or {"name": context.candidate.name},
                 "job": state.get("applied_position") or context.candidate.applied_position,
@@ -277,7 +283,10 @@ async def _process_boss(
                 "stage": state.get("stage") or "",
                 "ruleSource": state.get("rule_source") or "",
                 "sentMessages": state.get("sent_messages") or [],
-                "decision": state.get("decision") or {},
+                "artifactWritten": bool(result.get("downloaded") and result.get("filePath")),
+                "candidateStatusWritten": bool(candidate_status),
+                "candidateStatus": candidate_status,
+                "decision": decision,
                 "reliableActions": reliable_actions_since(adapter.page, before_actions),
             }
         )
@@ -359,11 +368,11 @@ async def _close_runtime_resources() -> None:
 
 
 def _print_step(message: str) -> None:
-    print(f"[OK] {message}")
+    print(f"[OK] {message}", flush=True)
 
 
 def _fail(message: str) -> None:
-    print(f"[ERROR] {message}", file=sys.stderr)
+    print(f"[ERROR] {message}", file=sys.stderr, flush=True)
     raise SystemExit(2)
 
 

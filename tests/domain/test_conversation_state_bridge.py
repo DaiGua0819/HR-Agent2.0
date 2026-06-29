@@ -10,11 +10,13 @@ from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.db.engine import connect, run_migrations
 from app.domain.conversation.identity import resolve_or_create_session
+from app.domain.conversation.models import CandidateStatus
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.artifacts import ResumeArtifactStore, parse_pending_artifacts
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.service import InterviewCenterService
+from app.platforms.boss.adapter import BossAdapter
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.types import Candidate, ChatMessage, Conversation, MessageSender
 
@@ -168,7 +170,7 @@ def test_runner_persists_status_and_writes_artifact_after_live_download(tmp_path
     artifacts = artifact_store.list_pending()
     assert state["next_action"] == "request_resume"
     assert session is not None
-    assert session.current_stage == "screening_accept"
+    assert session.current_stage == "resume_attachment_downloaded"
     assert status.resume_downloaded is True
     assert status.resume_path
     assert len(artifacts) == 1
@@ -210,6 +212,117 @@ def test_runner_dry_run_does_not_mark_resume_completed(tmp_path: Path) -> None:
     status = conversation_repo.get_status(str(state["session_id"]))
     assert status.resume_requested is False
     assert status.resume_downloaded is False
+
+
+def test_resume_requested_does_not_block_later_attachment_download(tmp_path: Path) -> None:
+    """A prior resume request is not a completion state once a real file appears."""
+
+    database = tmp_path / "requested-then-download.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    platform_conversation_id = "job51-requested"
+    bootstrap = Conversation(
+        id=platform_conversation_id,
+        platform=Platform.JOB51,
+        owner="owner",
+        candidate=Candidate(name="Candidate", applied_position="DirectRole"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="hello")],
+        should_reply=True,
+    )
+    session = resolve_or_create_session(conversation_repo, bootstrap).session
+    conversation_repo.save_status(
+        CandidateStatus(session_id=session.id, resume_requested=True)
+    )
+    page = FakePage(
+        conversations=[
+            {
+                "id": platform_conversation_id,
+                "name": "Candidate",
+                "position": "DirectRole",
+                "label": "Candidate DirectRole",
+                "latest_message": "sent",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "sent"}],
+                "online_resume_bytes": b"%PDF-1.7\ncandidate\n%%EOF",
+                "online_resume_filename": "candidate.pdf",
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="owner", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    "DirectRole": {
+                        "directResume": True,
+                        "resumeRequestPrompt": "please send resume",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    status = conversation_repo.get_status(str(state["session_id"]))
+    artifacts = artifact_store.list_pending()
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] != "resume_already_completed"
+    assert state["decision"]["result"]["downloaded"] is True
+    assert status.resume_requested is True
+    assert status.resume_downloaded is True
+    assert len(artifacts) == 1
+
+
+def test_boss_existing_attachment_marks_received_without_download(tmp_path: Path) -> None:
+    """BOSS existing attachments are received state, not local download artifacts."""
+
+    database = tmp_path / "boss-received.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    page = FakePage(
+        conversations=[
+            {
+                "id": "boss-received",
+                "name": "Candidate",
+                "position": "DirectRole",
+                "label": "Candidate DirectRole",
+                "latest_message": "resume.pdf",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "resume.pdf"}],
+                "has_resume_attachment": True,
+                "resume_bytes": b"%PDF-1.7\nboss\n%%EOF",
+            }
+        ]
+    )
+    adapter = BossAdapter(page, owner="owner", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    "DirectRole": {
+                        "directResume": True,
+                        "resumeRequestPrompt": "please send resume",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    status = conversation_repo.get_status(str(state["session_id"]))
+    assert state["stage"] == "resume_attachment_received"
+    assert state["decision"]["result"]["downloaded"] is False
+    assert status.resume_received is True
+    assert status.resume_downloaded is False
+    assert artifact_store.list_pending() == []
 
 
 def test_interview_locator_prefers_hard_linked_session(tmp_path: Path) -> None:

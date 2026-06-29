@@ -25,7 +25,9 @@ from app.platforms.job51.actions_resume import (
     save_resume_bytes,
     validate_resume_bytes,
 )
+from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
+from scripts.platform_once_common import _seen_keys_for_processed_item
 
 
 def test_job51_reuses_shared_graph_and_runner() -> None:
@@ -136,6 +138,54 @@ def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
     )
     assert page.sent_messages == ["你好，方便发一份简历过来吗"]
     assert page.resume_requests == 1
+
+
+def test_job51_seen_keys_survive_label_changes() -> None:
+    """A candidate already processed in this run is deduped beyond volatile row labels."""
+
+    first = _seen_keys_for_processed_item(
+        {"id": "row-1", "label": "Candidate 09:30 已投"},
+        {
+            "conversationId": "conv-1",
+            "sessionId": "session-1",
+            "candidate": {"name": "Candidate", "applied_position": "DirectRole"},
+            "job": "DirectRole",
+            "recentMessagesFingerprint": "fp-1",
+        },
+    )
+    second = _seen_keys_for_processed_item(
+        {"id": "row-1", "label": "Candidate 09:31 新招呼"},
+        {
+            "conversationId": "conv-1",
+            "sessionId": "session-1",
+            "candidate": {"name": "Candidate", "applied_position": "DirectRole"},
+            "job": "DirectRole",
+            "recentMessagesFingerprint": "fp-1",
+        },
+    )
+
+    assert first & second
+    assert "session:session-1" in first
+
+
+def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
+    """The page cleanup closes stale preview/export overlays before the next row click."""
+
+    page = FakePage(
+        conversations=[
+            {
+                **conversation("SalesRole", [{"sender": "other", "text": "hello"}]),
+                "online_resume_opened": True,
+                "export_dialog_open": True,
+            }
+        ]
+    )
+
+    result = asyncio.run(cleanup_resume_overlays(page))
+
+    assert result["closed"] >= 1
+    assert page.current_conversation().get("online_resume_opened") is False
+    assert page.current_conversation().get("export_dialog_open") is False
 
 
 def test_job51_resume_validation_and_memory_guard() -> None:
