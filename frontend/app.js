@@ -154,11 +154,15 @@ function resumeSchoolTierBadge(resume) {
 }
 function resumeEducationLine(resume) {
   const degree = resumePayloadValue(resume, ["education", "degree"]);
-  const school = resumeSchool(resume);
-  const level = resumeSchoolLevel(resume);
-  const schoolPart = school && level ? `${school}（${level}）` : school || level;
-  const parts = [degree, schoolPart].filter(Boolean);
-  return parts.join(" · ") || "待提取";
+  return degree || "待提取";
+}
+function resumeImportTime(resume) {
+  const payload = resume.payload || {};
+  const value = resume.updated_at || resume.updatedAt || payload.createdAt || payload.created_at || payload.downloadedAt || "";
+  if (!value) return "待提取";
+  const normalized = String(value).replace(/\//g, "-");
+  const match = normalized.match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value).slice(0, 10);
 }
 const uiAccess = () => state.user?.uiAccess || { defaultView: "resumes", views: ["resumes"], actions: [] };
 const canView = (view) => hrAuth.canView(state.user, view);
@@ -509,7 +513,7 @@ function renderContext() {
     <div class="summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
       <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}</p>
-      <p>学校：${escapeHtml(resumeSchool(resume) || "待提取")}</p></div>
+      <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p></div>
     <div class="summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
     <div class="summary-card"><h3>来源</h3>

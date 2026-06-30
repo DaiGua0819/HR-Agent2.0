@@ -419,3 +419,21 @@
   - 目标库备份：`C:\RecruitAgent2Preview\hr-agent\data\backups\resumes_before_legacy_sync_20260630_162903.sqlite`。
   - 导入 manifest：`C:\RecruitAgent2Preview\hr-agent\data\backups\legacy_sync_manifest_20260630_162903.json`。
   - 独立只读检查确认：新库 `resumes` 行数 2207，`data/uploads/legacy` PDF 数 2207，抽样 `payload.pdfPath` 文件存在且保留 `legacyPdfPath`。
+
+---
+
+### 快照 0058：右侧候选人摘要学校改为入库时间
+- 修改时间：2026-06-30 16:55:51 +08:00
+- 修改原因：
+  - 用户希望右侧候选人摘要里“学历”只保留学历本身，不再把学校和层级拼到学历行。
+  - 原“学校”一行对当前审核场景帮助较小，需要改成“入库时间”，方便判断简历进入库的时间。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - `resumeEducationLine()` 改为只返回学历字段，缺失时显示“待提取”。
+  - 新增 `resumeImportTime()`，优先读取 `updated_at/updatedAt`，再兜底读取 payload 的 `createdAt/created_at/downloadedAt`。
+  - 右侧“候选人”摘要把“学校”行替换为“入库时间”行。
+  - 前端资源版本更新为 `20260630-import-time-summary`，避免浏览器继续使用旧缓存。

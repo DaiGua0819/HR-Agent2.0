@@ -69,7 +69,7 @@ def test_resume_filters_have_enough_space_for_admin_fields() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
 
-    assert "20260630-school-tier-badge" in html
+    assert "20260630-import-time-summary" in html
     assert "grid-template-rows: minmax(540px, 58vh) minmax(560px, auto)" in page_block
     assert "grid-template-columns: repeat(8, minmax(112px, 1fr))" in filters_block
     assert "padding: 10px 12px 14px" in filters_block
@@ -181,20 +181,21 @@ def test_review_actions_advance_to_next_resume() -> None:
     assert "markViewedAndAdvance(state.selectedId)" in script
 
 
-def test_resume_summary_uses_school_and_tier_display_line() -> None:
-    """The right summary should show degree, school and school tier together."""
+def test_resume_summary_shows_degree_and_import_time() -> None:
+    """The right summary should keep degree and show import time instead of school."""
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
     assert "function resumeSchool(resume)" in script
     assert "function resumeSchoolLevel(resume)" in script
     assert "function resumeEducationLine(resume)" in script
+    assert "function resumeImportTime(resume)" in script
     assert "extractSchoolFromResumeText(resume)" in script
     assert "extractSchoolLevelFromResumeText(resume)" in script
-    assert "return parts.join(\" · \") || \"待提取\"" in script
+    assert 'return degree || "待提取"' in script
     assert "学历：${resumeEducationLine(resume)}" in script
     assert '<p>学历：${escapeHtml(resumeEducationLine(resume))}</p>' in script
-    assert '<p>学校：${escapeHtml(resumeSchool(resume) || "待提取")}</p>' in script
+    assert '<p>入库时间：${escapeHtml(resumeImportTime(resume))}</p>' in script
 
 
 def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
@@ -204,7 +205,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260630-school-tier-badge" in html
+    assert "20260630-import-time-summary" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
