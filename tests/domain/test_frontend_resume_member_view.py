@@ -69,10 +69,30 @@ def test_resume_filters_have_enough_space_for_admin_fields() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
 
-    assert "20260630-resume-prefetch" in html
+    assert "20260630-tdesign-refresh" in html
     assert "grid-template-rows: minmax(540px, 58vh) minmax(560px, auto)" in page_block
     assert "grid-template-columns: repeat(8, minmax(112px, 1fr))" in filters_block
     assert "padding: 10px 12px 14px" in filters_block
+
+
+def test_tdesign_theme_adapter_is_loaded_without_replacing_native_controls() -> None:
+    """The first TDesign pass should be a native-control-safe theme adapter."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "20260630-tdesign-refresh" in html
+    assert "TDesign theme adapter" in styles
+    for token in [
+        "--td-brand-color",
+        "--td-radius-medium",
+        "--td-component-stroke",
+        "--td-shadow-2",
+    ]:
+        assert token in styles
+    assert "button, input, select { font: inherit; }" in styles
+    assert '<select name="education">' in html
+    assert '<input name="manual_review" type="checkbox" value="true" />' in html
 
 
 def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
@@ -231,7 +251,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260630-resume-prefetch" in html
+    assert "20260630-tdesign-refresh" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script

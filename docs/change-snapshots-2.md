@@ -478,3 +478,21 @@
   - 新增 `resumeContextCache`，只预热预加载页的第一个候选人详情，避免一次性请求 20 个详情造成后端压力。
   - 状态切换、岗位切换、筛选、重置、搜索、登录/退出、已看/合适/不合适等动作都会清理预加载缓存，避免复用旧状态。
   - 前端资源版本更新为 `20260630-resume-prefetch`，避免浏览器继续使用旧缓存。
+
+---
+
+### 快照 0061：TDesign 视觉底座阶段一
+- 修改时间：2026-06-30 18:30:28 +08:00
+- 修改原因：
+  - 用户希望把管理台逐步替换为 TDesign 风格组件，同时保留现有静态前端与业务交互稳定性。
+  - 第一阶段先引入视觉 token 和基础控件质感，不替换原生控件，避免影响筛选、分页、左右键和预加载。
+- 修改文件：
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 新增 `TDesign theme adapter` token，统一品牌色、圆角、边框、阴影和字体变量。
+  - 调整全局按钮、输入框、卡片、表格、状态标签的基础视觉，使其接近 TDesign 企业后台风格。
+  - 保留原生 `button/input/select/table/form`，不引入 TDesign 全量运行时。
+  - 前端资源版本刷新为 `20260630-tdesign-refresh`。
