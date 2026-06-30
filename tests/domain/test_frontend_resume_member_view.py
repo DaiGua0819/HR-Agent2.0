@@ -69,7 +69,7 @@ def test_resume_filters_have_enough_space_for_admin_fields() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
 
-    assert "20260630-import-time-summary" in html
+    assert "20260630-resume-prefetch" in html
     assert "grid-template-rows: minmax(540px, 58vh) minmax(560px, auto)" in page_block
     assert "grid-template-columns: repeat(8, minmax(112px, 1fr))" in filters_block
     assert "padding: 10px 12px 14px" in filters_block
@@ -166,6 +166,32 @@ def test_resume_keyboard_navigation_crosses_page_boundaries() -> None:
     assert "INPUT" in script and "TEXTAREA" in script and "SELECT" in script
 
 
+def test_resume_library_prefetches_next_two_pages() -> None:
+    """Resume browsing should preload two following list pages for fast next-page moves."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "resumePageCache" in script
+    assert "resumeContextCache" in script
+    assert "function resumeListCacheKey(page)" in script
+    assert "function prefetchNextResumePages()" in script
+    assert "for (const page of [state.page + 1, state.page + 2])" in script
+    assert "state.resumePageCache.set(cacheKey, data)" in script
+    assert "prefetchFirstResumeContext(data)" in script
+    assert "loadResumes({ preferCache: true })" in script
+
+
+def test_resume_prefetch_cache_is_invalidated_after_filters_and_review_actions() -> None:
+    """Changing filters or saving review state must not reuse stale preloaded pages."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function clearResumePrefetchCache()" in script
+    assert "clearResumePrefetchCache();" in script
+    assert "await clearResumePrefetchCacheAfterMutation()" in script
+    assert "function clearResumePrefetchCacheAfterMutation()" in script
+
+
 def test_review_actions_advance_to_next_resume() -> None:
     """Review buttons should save the action and then open the next resume."""
 
@@ -205,7 +231,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260630-import-time-summary" in html
+    assert "20260630-resume-prefetch" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
