@@ -95,6 +95,33 @@ def test_tdesign_theme_adapter_is_loaded_without_replacing_native_controls() -> 
     assert '<input name="manual_review" type="checkbox" value="true" />' in html
 
 
+def test_tdesign_low_risk_component_layer_styles_dynamic_controls() -> None:
+    """Dynamic buttons, tags, segments, and pagination should share TDesign classes."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for helper in [
+        "function tdButtonClass",
+        "function tdTagClass",
+        "function tdSegmentClass",
+    ]:
+        assert helper in script
+    for class_name in [
+        ".td-btn",
+        ".td-btn--primary",
+        ".td-tag",
+        ".td-tag--success",
+        ".td-segment-button",
+        ".td-pagination",
+    ]:
+        assert class_name in styles
+    assert "tdButtonClass(\"primary\")" in script
+    assert "tdTagClass(review.decision)" in script
+    assert "tdSegmentClass(state.tab === key)" in script
+    assert "td-pagination" in script
+
+
 def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
     """Admins should see the old full resume-library job list with legacy labels."""
 

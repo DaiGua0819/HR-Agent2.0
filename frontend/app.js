@@ -64,6 +64,24 @@ function escapeHtml(value) {
 const platformName = (value) => ({ boss: "BOSS", job51: "51job", zhilian: "智联", all: "全部" }[value] || value || "未知");
 const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适", needs_more_info: "待补充", undecided: "待判断" }[value || "undecided"]);
 const decisionClass = (value) => ({ suitable: "success", unsuitable: "danger", needs_more_info: "warning" }[value] || "");
+function tdButtonClass(tone = "default", extra = "") {
+  const tones = {
+    default: "td-btn",
+    primary: "td-btn td-btn--primary",
+    success: "td-btn td-btn--success",
+    danger: "td-btn td-btn--danger",
+    warning: "td-btn td-btn--warning",
+    text: "td-btn td-btn--text",
+  };
+  return [tones[tone] || tones.default, extra].filter(Boolean).join(" ");
+}
+function tdTagClass(value = "default") {
+  const tone = decisionClass(value) || (value === "viewed" ? "success" : value === "unread" ? "warning" : "default");
+  return ["td-tag", tone !== "default" ? `td-tag--${tone}` : ""].filter(Boolean).join(" ");
+}
+function tdSegmentClass(active) {
+  return `td-segment-button${active ? " active" : ""}`;
+}
 const multiFilterKeys = new Set(["school_level", "graduation_year", "decision"]);
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
 function canonicalResumeJobType(value) {
@@ -285,7 +303,7 @@ function renderDailyRows(items) {
 function buildTabs() {
   if (!visibleStatusTabs().some(([key]) => key === state.tab)) state.tab = "all";
   $("statusTabs").innerHTML = visibleStatusTabs()
-    .map(([key, label]) => `<button data-tab="${key}" class="${state.tab === key ? "active" : ""}">${label}</button>`)
+    .map(([key, label]) => `<button data-tab="${key}" class="${tdSegmentClass(state.tab === key)}">${label}</button>`)
     .join("");
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.onclick = () => {
@@ -318,7 +336,7 @@ function buildJobTabs() {
     jobs.map((job) => [job, `${displayResumeJobType(job)} (${counts.get(canonicalResumeJobType(job)) || 0})`]),
   );
   list.innerHTML = buttons
-    .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="${state.jobType === job ? "active" : ""}">${escapeHtml(label)}</button>`)
+    .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="${tdSegmentClass(state.jobType === job)}">${escapeHtml(label)}</button>`)
     .join("");
   list.querySelectorAll("[data-job-tab]").forEach((button) => {
     button.onclick = () => {
@@ -429,10 +447,10 @@ function renderRows() {
           <td>${escapeHtml(platformName(resumePlatform(resume)))}</td>
           <td>${escapeHtml(resumeOwner(resume))}</td>
           <td>${escapeHtml(resume.match_score ?? resume.matchScore ?? "")}</td>
-          <td><span class="badge">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
-              <span class="badge ${decisionClass(review.decision)}">${labelDecision(review.decision)}</span></td>
+          <td><span class="${tdTagClass(review.readStatus === "viewed" ? "viewed" : "unread")}">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
+              <span class="${tdTagClass(review.decision)}">${labelDecision(review.decision)}</span></td>
           <td>${escapeHtml((resume.updated_at || resume.updatedAt || "").slice(0, 10))}</td>
-          <td><button data-open="${resume.id}">查看</button> <button data-decision="${resume.id}:suitable">合适</button></td>
+          <td><button class="${tdButtonClass("text")}" data-open="${resume.id}">查看</button> <button class="${tdButtonClass("success")}" data-decision="${resume.id}:suitable">合适</button></td>
         </tr>
       `;
     })
@@ -464,9 +482,9 @@ function renderPagination() {
   const current = Math.min(Math.max(1, state.page || 1), pages);
   node.innerHTML = `
     <span>第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
-    <div>
-      <button data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
-      <button data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
+    <div class="td-pagination">
+      <button class="${tdButtonClass("default")}" data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
+      <button class="${tdButtonClass("primary")}" data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
     </div>
   `;
   node.querySelectorAll("[data-page-move]").forEach((button) => {
@@ -488,7 +506,7 @@ function renderQueue(items) {
               <strong>${escapeHtml(resumeName(resume))}</strong>
               <span>${escapeHtml(resumeJob(resume))}</span>
               <p>${escapeHtml(item.assignment?.note || "合适待复核")}</p>
-              <button data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
+              <button class="${tdButtonClass("primary")}" data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
             </article>
           `;
         })
@@ -726,7 +744,7 @@ function renderInterviewPreflight(selected) {
     <p>候选人：${escapeHtml(contact.displayName || "")}</p>
     <p>核对岗位：${escapeHtml(contact.appliedPosition || "")}</p>
     <p>换微信按钮：${ready ? "已定位" : escapeHtml(preflight.reason || preflight.workerResult?.reason || "未定位")}</p>
-    ${ready ? `<button class="primary wide" data-confirm-interview>确认发起约面试</button>` : ""}
+    ${ready ? `<button class="${tdButtonClass("primary", "wide")}" data-confirm-interview>确认发起约面试</button>` : ""}
   `;
 }
 function renderAutomationControls() {
@@ -737,7 +755,7 @@ function renderAutomationControls() {
   const owners = state.user?.resumeScope?.owners || ["宋峰峰", "和新红"];
   const platforms = state.user?.resumeScope?.platforms || ["boss", "job51", "zhilian"];
   $("automationControls").innerHTML = `
-    <button class="control-card primary" data-process-all>按配置处理全部</button>
+    <button class="control-card primary td-btn td-btn--primary" data-process-all>按配置处理全部</button>
     ${owners
       .flatMap((owner) =>
         platforms.map(

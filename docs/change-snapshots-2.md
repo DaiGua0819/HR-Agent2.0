@@ -496,3 +496,20 @@
   - 调整全局按钮、输入框、卡片、表格、状态标签的基础视觉，使其接近 TDesign 企业后台风格。
   - 保留原生 `button/input/select/table/form`，不引入 TDesign 全量运行时。
   - 前端资源版本刷新为 `20260630-tdesign-refresh`。
+
+---
+
+### 快照 0062：TDesign 低风险组件层阶段二
+- 修改时间：2026-06-30 18:35:51 +08:00
+- 修改原因：
+  - 动态生成的按钮、状态标签、岗位入口、状态入口和分页仍然使用零散样式，需要统一到一层可回退的 TDesign 风格组件 class。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 新增 `tdButtonClass()`、`tdTagClass()`、`tdSegmentClass()`，动态模板统一输出 TDesign 风格按钮、标签和分段入口。
+  - 状态 tabs、岗位 tabs、分页按钮、列表操作按钮、约面试确认按钮复用统一 class。
+  - 静态按钮补齐 `td-btn` 系列 class，但仍保留原生按钮和现有 `data-*` 事件绑定。
