@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.api.routes.resumes import _resume_payload
 from app.domain.resume.dedup import deduplicate_by_phone, find_duplicate_resumes
 from app.domain.resume.models import Resume, ResumeRecord
 from app.domain.resume.normalize import (
@@ -131,6 +132,34 @@ def test_resume_service_replicates_legacy_library_filters() -> None:
     )
 
     assert [resume.id for resume in page.items] == ["3", "1"]
+
+
+def test_resume_api_payload_exposes_school_tier_and_education_display() -> None:
+    """简历 API 应给前端一个可直接展示的学历、学校和层次组合。"""
+
+    resume = Resume.from_record(
+        ResumeRecord(
+            id="school",
+            payload={
+                "name": "罗靖",
+                "education": "本科",
+                "school": "重庆科技大学",
+                "schoolLevel": "一本",
+                "applied_position": "运营A",
+                "rawText": "罗靖 本科 重庆科技大学 一本",
+            },
+            phone_key=None,
+            job_type="运营A",
+            match_score=80,
+            updated_at="2026-06-30",
+        )
+    )
+
+    payload = _resume_payload(resume)
+
+    assert payload["school"] == "重庆科技大学"
+    assert payload["schoolLevel"] == "一本"
+    assert payload["educationDisplay"] == "本科 · 重庆科技大学（一本）"
 
 
 def _record(

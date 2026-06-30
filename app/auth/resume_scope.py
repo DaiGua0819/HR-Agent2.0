@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from app.core.text import clean_text
+from app.domain.resume.job_types import any_job_type_matches, canonical_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume_review.models import LocalUser
 from app.settings import PROJECT_ROOT
@@ -62,7 +63,7 @@ def job_type_allowed(job_type: str, allowed_values: object) -> bool:
     job = clean_text(job_type)
     if not job:
         return False
-    return any(item == job or item in job or job in item for item in allowed)
+    return any_job_type_matches(job, allowed)
 
 
 def allowed_job_types(payload: dict[str, object]) -> list[str]:
@@ -98,7 +99,7 @@ def _configured_member_scope(
         matched_job_types.extend(_list(rule.get("jobTypes")))
     return {
         "jobGroups": _unique(matched_group_keys),
-        "jobTypes": _unique([clean_text(item) for item in matched_job_types]),
+        "jobTypes": _unique_job_types(matched_job_types),
     }
 
 
@@ -160,4 +161,18 @@ def _unique(values: object) -> list[str]:
         if text and text not in seen:
             seen.add(text)
             result.append(text)
+    return result
+
+
+def _unique_job_types(values: object) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in _list(values):
+        text = clean_text(value)
+        if not text:
+            continue
+        canonical = "*" if text == "*" else canonical_resume_job_type(text)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
     return result

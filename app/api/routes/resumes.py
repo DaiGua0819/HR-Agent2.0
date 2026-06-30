@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field
 
 from app.api.routes.auth import current_user_id, require_session_payload
 from app.auth.resume_scope import allowed_job_types, resume_visible_to_payload
+from app.core.text import clean_text
 from app.domain.resume.files import preview_file_path, preview_media_type, render_preview_image
+from app.domain.resume.job_types import display_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
 from app.domain.resume_review.service import ResumeReviewService
@@ -188,9 +190,15 @@ def _assert_resume_visible(request: Request, resume: Resume | None) -> None:
 def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[str, object]:
     payload = resume.model_dump()
     file_path = preview_file_path(resume)
+    school = _resume_school(resume)
+    school_level = _resume_school_level(resume)
     payload.update(
         {
             "parsedName": resume.parsed_name,
+            "school": school,
+            "schoolLevel": school_level,
+            "educationDisplay": _education_display(resume, school, school_level),
+            "displayJobType": display_resume_job_type(resume.job_type or resume.applied_position),
             "linkedSessionId": resume.linked_session_id,
             "linkedPlatform": resume.linked_platform,
             "linkedOwner": resume.linked_owner,
@@ -203,6 +211,29 @@ def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[
         }
     )
     return payload
+
+
+def _payload_value(resume: Resume, *keys: str) -> str:
+    for key in keys:
+        value = resume.payload.get(key)
+        if value not in (None, ""):
+            return clean_text(value)
+    return ""
+
+
+def _resume_school(resume: Resume) -> str:
+    return _payload_value(resume, "school", "college", "university")
+
+
+def _resume_school_level(resume: Resume) -> str:
+    return _payload_value(resume, "schoolLevel", "school_level", "schoolTier", "school_tier")
+
+
+def _education_display(resume: Resume, school: str, school_level: str) -> str:
+    degree = clean_text(resume.education)
+    school_part = f"{school}（{school_level}）" if school and school_level else school
+    parts = [part for part in [degree, school_part or school_level] if part]
+    return " · ".join(parts)
 
 
 def _review_state_payload(state: object | None) -> dict[str, object]:

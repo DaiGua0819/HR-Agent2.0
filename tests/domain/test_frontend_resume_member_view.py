@@ -55,6 +55,63 @@ def test_member_resume_library_has_large_job_tabs_above_status_tabs() -> None:
     assert ".job-tabs-panel" in styles
     assert ".job-tabs button" in styles
     assert "min-height: 48px" in styles
+    job_tabs_block = styles.split(".job-tabs {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: repeat(8, minmax(0, 1fr))" in job_tabs_block
+    assert "max-height: 118px" in job_tabs_block
+    assert "overflow-x: hidden" in job_tabs_block
+
+
+def test_resume_filters_have_enough_space_for_admin_fields() -> None:
+    """Admin resume filters should not be clipped by the upper library panel."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
+    filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
+
+    assert "20260630-school-tier-badge" in html
+    assert "grid-template-rows: minmax(540px, 58vh) minmax(560px, auto)" in page_block
+    assert "grid-template-columns: repeat(8, minmax(112px, 1fr))" in filters_block
+    assert "padding: 10px 12px 14px" in filters_block
+
+
+def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
+    """Admins should see the old full resume-library job list with legacy labels."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "const RESUME_LIBRARY_JOB_TYPES = [" in script
+    for job_type in [
+        "AI应用开发实习生",
+        "应用技术经理（工业涂料领域）",
+        "膨润土销售人员",
+        "销售管培生",
+        "HRBP",
+        "人力资源管培生",
+        "国际业务管培生",
+        "销售工程师（石油钻井泥浆膨润土）_湖州",
+        "电气工程师",
+        "运营A",
+        "运营B",
+        "外部财务产品顾问",
+        "投资交易策略研究员（量化与市场情绪方向）",
+        "AI智能体解决方案负责人",
+    ]:
+        assert f'"{job_type}"' in script
+    for label in [
+        "AI实习生",
+        "应用技术",
+        "人资管培",
+        "石油销售",
+        "财务顾问",
+        "投资策略研究",
+        "AI方案负责人",
+    ]:
+        assert f'"{label}"' in script
+    assert "if (values.includes(\"*\")) return uniqueJobTypes(RESUME_LIBRARY_JOB_TYPES)" in script
+    assert "function canonicalResumeJobType(value)" in script
+    assert "function uniqueJobTypes(values)" in script
+    assert "counts.set(job, Math.max" in script
 
 
 def test_member_resume_library_hides_more_info_action() -> None:
@@ -65,6 +122,21 @@ def test_member_resume_library_hides_more_info_action() -> None:
     assert ".member-resume-mode #moreInfoBtn" in styles
     block = styles.split(".member-resume-mode #moreInfoBtn", 1)[1].split("}", 1)[0]
     assert "display: none" in block
+
+
+def test_member_filters_hide_duplicate_job_and_use_education_select() -> None:
+    """Member filters should rely on job tabs and offer fixed education choices."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'class="job-filter-field"' in html
+    assert ".member-resume-mode .job-filter-field" in styles
+    assert '<select name="education">' in html
+    for degree in ["大专", "本科", "硕士", "博士"]:
+        assert f'<option value="{degree}">{degree}</option>' in html
+    assert 'class="date-filter-start"' in html
+    assert 'class="date-filter-end"' in html
 
 
 def test_resume_image_preview_has_single_scroll_container() -> None:
@@ -107,6 +179,39 @@ def test_review_actions_advance_to_next_resume() -> None:
     assert 'setDecision(state.selectedId, "unsuitable")' in script
     assert 'setDecision(state.selectedId, "needs_more_info")' in script
     assert "markViewedAndAdvance(state.selectedId)" in script
+
+
+def test_resume_summary_uses_school_and_tier_display_line() -> None:
+    """The right summary should show degree, school and school tier together."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function resumeSchool(resume)" in script
+    assert "function resumeSchoolLevel(resume)" in script
+    assert "function resumeEducationLine(resume)" in script
+    assert "extractSchoolFromResumeText(resume)" in script
+    assert "extractSchoolLevelFromResumeText(resume)" in script
+    assert "return parts.join(\" · \") || \"待提取\"" in script
+    assert "学历：${resumeEducationLine(resume)}" in script
+    assert '<p>学历：${escapeHtml(resumeEducationLine(resume))}</p>' in script
+    assert '<p>学校：${escapeHtml(resumeSchool(resume) || "待提取")}</p>' in script
+
+
+def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
+    """The left candidate list should show a compact school-tier badge beside names."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "20260630-school-tier-badge" in html
+    assert "function resumeSchoolTierBadge(resume)" in script
+    assert 'if (level.includes("985")) return "985"' in script
+    assert 'if (level.includes("211")) return "211"' in script
+    assert 'class="mini-heading"' in script
+    assert 'class="school-tier-badge"' in script
+    assert ".mini-heading" in styles
+    assert ".school-tier-badge" in styles
 
 
 def test_workbench_is_tall_enough_for_ten_member_results() -> None:

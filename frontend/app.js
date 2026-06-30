@@ -16,6 +16,33 @@ const state = {
 };
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["undecided", "待判断"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
+const RESUME_LIBRARY_JOB_TYPES = [
+  "AI应用开发实习生",
+  "应用技术经理（工业涂料领域）",
+  "膨润土销售人员",
+  "销售管培生",
+  "HRBP",
+  "人力资源管培生",
+  "国际业务管培生",
+  "销售工程师（石油钻井泥浆膨润土）_湖州",
+  "电气工程师",
+  "运营A",
+  "运营B",
+  "外部财务产品顾问",
+  "投资交易策略研究员（量化与市场情绪方向）",
+  "AI智能体解决方案负责人",
+];
+const RESUME_JOB_DISPLAY_LABELS = {
+  "AI应用开发实习生": "AI实习生",
+  "应用技术经理（工业涂料领域）": "应用技术",
+  "人力资源管培生": "人资管培",
+  "销售工程师（石油钻井泥浆膨润土）_湖州": "石油销售",
+  "运营A": "运营A",
+  "运营B": "运营B",
+  "外部财务产品顾问": "财务顾问",
+  "投资交易策略研究员（量化与市场情绪方向）": "投资策略研究",
+  "AI智能体解决方案负责人": "AI方案负责人",
+};
 const $ = (id) => document.getElementById(id);
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
@@ -35,9 +62,104 @@ const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适",
 const decisionClass = (value) => ({ suitable: "success", unsuitable: "danger", needs_more_info: "warning" }[value] || "");
 const multiFilterKeys = new Set(["school_level", "graduation_year", "decision"]);
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
-const resumeJob = (resume) => resume?.job_type || resume?.jobType || resume?.applied_position || resume?.appliedPosition || "";
+function canonicalResumeJobType(value) {
+  const text = String(value || "").trim();
+  const compact = text.replace(/\s+/g, "").toLowerCase();
+  if (!text) return "";
+  if (/运营a/i.test(compact) || text.includes("企业内容运营负责人") || (/b2b/i.test(compact) && text.includes("短视频")) || (text.includes("内容运营负责人") && text.includes("短视频"))) return "运营A";
+  if (/运营b/i.test(compact) || compact.includes("b端社交媒体运营") || text.includes("社交媒体运营") || (compact.includes("b端") && text.includes("运营"))) return "运营B";
+  if (
+    text.includes("投资策略研究") ||
+    text.includes("投资交易策略研究员") ||
+    text.includes("交易策略研究员") ||
+    text.includes("量化交易策略研究员") ||
+    text.includes("量化策略研究员") ||
+    text.includes("市场情绪研究员") ||
+    text.includes("量化与市场情绪方向")
+  ) return "投资交易策略研究员（量化与市场情绪方向）";
+  return text.replace("(", "（").replace(")", "）");
+}
+function uniqueJobTypes(values) {
+  const seen = new Set();
+  const result = [];
+  (values || []).forEach((value) => {
+    const canonical = canonicalResumeJobType(value);
+    if (!canonical || seen.has(canonical)) return;
+    seen.add(canonical);
+    result.push(canonical);
+  });
+  return result;
+}
+function displayResumeJobType(value) {
+  const canonical = canonicalResumeJobType(value);
+  if (!canonical) return "";
+  return RESUME_JOB_DISPLAY_LABELS[canonical] || canonical;
+}
+const resumeJob = (resume) => resume?.displayJobType || displayResumeJobType(resume?.job_type || resume?.jobType || resume?.applied_position || resume?.appliedPosition || "");
 const resumeOwner = (resume) => resume?.linkedOwner || resume?.linked_owner || resume?.source_owner || resume?.sourceOwner || "";
 const resumePlatform = (resume) => resume?.linkedPlatform || resume?.linked_platform || resume?.source_platform || resume?.sourcePlatform || "";
+function resumePayloadValue(resume, keys) {
+  const payload = resume?.payload || {};
+  for (const key of keys) {
+    const value = resume?.[key] ?? payload[key];
+    if (value === undefined || value === null || typeof value === "object") continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+function resumeRawText(resume) {
+  return resumePayloadValue(resume, ["rawText", "text", "summary", "content"]);
+}
+function cleanSchoolCandidate(value) {
+  let text = String(value || "").replace(/[：:，,。；;\s]+$/g, "").trim();
+  text = text.replace(/^.*?(?:毕业院校|毕业学校|院校|学校|毕业于|就读于|教育经历)[：:\s]*/g, "");
+  text = text.replace(/^(?:全日制|统招|最高学历|本科|硕士|博士|大专|专科)+[：:\s]*/g, "");
+  return text.length <= 24 ? text : "";
+}
+function extractSchoolFromResumeText(resume) {
+  const text = resumeRawText(resume);
+  const matches = text.matchAll(/[\u4e00-\u9fa5A-Za-z0-9·]{2,40}(?:大学|职业技术学院|技术学院|高等专科学校|专科学校|学院)/g);
+  for (const match of matches) {
+    const candidate = cleanSchoolCandidate(match[0]);
+    if (candidate) return candidate;
+  }
+  return "";
+}
+function extractSchoolLevelFromResumeText(resume) {
+  const text = resumeRawText(resume);
+  if (/985|九八五/.test(text)) return "985";
+  if (/211|二一一/.test(text)) return "211";
+  if (/双一流/.test(text)) return "双一流";
+  if (/一本|第一批本科/.test(text)) return "一本";
+  if (/二本|第二批本科/.test(text)) return "二本";
+  if (/大专|专科/.test(text)) return "大专";
+  if (/海外院校|海外高校|国外高校|海外学历/.test(text)) return "海外院校";
+  return "";
+}
+function resumeSchool(resume) {
+  return resumePayloadValue(resume, ["school", "college", "university"]) || extractSchoolFromResumeText(resume);
+}
+function resumeSchoolLevel(resume) {
+  return resumePayloadValue(resume, ["schoolLevel", "school_level", "schoolTier", "school_tier"]) || extractSchoolLevelFromResumeText(resume);
+}
+function resumeSchoolTierBadge(resume) {
+  const level = resumeSchoolLevel(resume);
+  if (level.includes("985")) return "985";
+  if (level.includes("211")) return "211";
+  if (level.includes("双一流")) return "双一流";
+  if (level.includes("一本")) return "一本";
+  if (level.includes("二本")) return "二本";
+  return "";
+}
+function resumeEducationLine(resume) {
+  const degree = resumePayloadValue(resume, ["education", "degree"]);
+  const school = resumeSchool(resume);
+  const level = resumeSchoolLevel(resume);
+  const schoolPart = school && level ? `${school}（${level}）` : school || level;
+  const parts = [degree, schoolPart].filter(Boolean);
+  return parts.join(" · ") || "待提取";
+}
 const uiAccess = () => state.user?.uiAccess || { defaultView: "resumes", views: ["resumes"], actions: [] };
 const canView = (view) => hrAuth.canView(state.user, view);
 const canAction = (action) => hrAuth.canAction(state.user, action);
@@ -49,8 +171,9 @@ function visibleStatusTabs() {
 }
 function visibleJobTypes() {
   const values = state.user?.resumeScope?.jobTypes || [];
-  if (!Array.isArray(values) || values.includes("*")) return [];
-  return values.filter(Boolean);
+  if (!Array.isArray(values)) return [];
+  if (values.includes("*")) return uniqueJobTypes(RESUME_LIBRARY_JOB_TYPES);
+  return uniqueJobTypes(values);
 }
 function setResumeMemberMode() {
   document.body.classList.toggle("member-resume-mode", isMemberUser());
@@ -175,10 +298,15 @@ function buildJobTabs() {
     list.innerHTML = "";
     return;
   }
-  const counts = new Map((state.jobFacets || []).map((item) => [item.jobType, item.count || 0]));
-  const allCount = state.jobFacets.reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const counts = new Map();
+  (state.jobFacets || []).forEach((item) => {
+    const job = canonicalResumeJobType(item.jobType);
+    if (!job) return;
+    counts.set(job, Math.max(counts.get(job) || 0, Number(item.count || 0)));
+  });
+  const allCount = [...counts.values()].reduce((sum, count) => sum + Number(count || 0), 0);
   const buttons = [["", `全部简历 (${allCount})`]].concat(
-    jobs.map((job) => [job, `${job} (${counts.get(job) || 0})`]),
+    jobs.map((job) => [job, `${displayResumeJobType(job)} (${counts.get(canonicalResumeJobType(job)) || 0})`]),
   );
   list.innerHTML = buttons
     .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="${state.jobType === job ? "active" : ""}">${escapeHtml(label)}</button>`)
@@ -259,7 +387,18 @@ function renderRows() {
 }
 function renderMiniList() {
   $("miniList").innerHTML = state.resumes
-    .map((resume) => `<button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}"><strong>${escapeHtml(resumeName(resume))}</strong><small>${escapeHtml(resumeJob(resume))}</small></button>`)
+    .map((resume) => {
+      const tier = resumeSchoolTierBadge(resume);
+      return `
+        <button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}">
+          <span class="mini-heading">
+            <strong>${escapeHtml(resumeName(resume))}</strong>
+            ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : ""}
+          </span>
+          <small>${escapeHtml(resumeJob(resume))}</small>
+        </button>
+      `;
+    })
     .join("");
   bindRowActions();
 }
@@ -335,7 +474,7 @@ function resumeText(resume) {
   return [
     `候选人：${resumeName(resume)}`,
     `岗位：${resumeJob(resume)}`,
-    `学历：${resume.education || ""}`,
+    `学历：${resumeEducationLine(resume)}`,
     `专业：${resume.major || ""}`,
     `电话：${resume.phone || ""}`,
     "",
@@ -369,7 +508,8 @@ function renderContext() {
   $("summaryContent").innerHTML = `
     <div class="summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
-      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resume.education || "")}</p></div>
+      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}</p>
+      <p>学校：${escapeHtml(resumeSchool(resume) || "待提取")}</p></div>
     <div class="summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
     <div class="summary-card"><h3>来源</h3>

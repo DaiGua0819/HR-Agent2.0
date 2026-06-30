@@ -48,6 +48,7 @@ def test_operation_member_only_reads_operation_ab_resumes(monkeypatch) -> None:
     assert forbidden.status_code == 403
     assert forbidden.json()["detail"] == "resume_forbidden"
     assert listed.json()["jobFacets"][0]["jobType"] == "运营A"
+    assert listed.json()["items"][0]["displayJobType"] == "运营A"
 
 
 def test_operation_member_alias_xinping_gets_same_scope(monkeypatch) -> None:
@@ -64,7 +65,7 @@ def test_operation_member_alias_xinping_gets_same_scope(monkeypatch) -> None:
 
     load_settings.cache_clear()
     assert me.status_code == 200
-    assert "运营A" in me.json()["resumeScope"]["jobTypes"]
+    assert me.json()["resumeScope"]["jobTypes"] == ["运营A", "运营B"]
     assert [item["id"] for item in listed.json()["items"]] == ["resume-operation"]
 
 
@@ -128,16 +129,22 @@ def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
 
     load_settings.cache_clear()
     assert me.status_code == 200
-    assert set(me.json()["resumeScope"]["jobTypes"]) >= {
+    assert me.json()["resumeScope"]["jobTypes"] == [
         "AI智能体解决方案负责人",
         "外部财务产品顾问",
-        "投资交易策略研究员",
-    }
+        "投资交易策略研究员（量化与市场情绪方向）",
+    ]
     assert {item["id"] for item in listed.json()["items"]} == {
         "resume-ai",
         "resume-finance",
         "resume-investment",
+        "resume-investment-short",
     }
+    assert [
+        item
+        for item in listed.json()["jobFacets"]
+        if item["jobType"] == "投资交易策略研究员（量化与市场情绪方向）"
+    ] == [{"jobType": "投资交易策略研究员（量化与市场情绪方向）", "count": 2}]
 
 
 def _app_for_member(open_id: str, name: str):
@@ -147,10 +154,11 @@ def _app_for_member(open_id: str, name: str):
     )
     repository = ResumeRepository.in_memory(
         [
-            _record("resume-operation", "运营A"),
+            _record("resume-operation", "企业内容运营负责人（B2B/短视频方向）"),
             _record("resume-ai", "AI智能体解决方案负责人"),
             _record("resume-finance", "外部财务产品顾问"),
             _record("resume-investment", "投资交易策略研究员（量化与市场情绪方向）"),
+            _record("resume-investment-short", "投资交易策略研究员"),
         ]
     )
     app.state.resume_repository = repository

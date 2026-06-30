@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260630-member-job-tabs" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260630-school-tier-badge" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260629-feishu-login" />
   </head>
   <body>
@@ -148,8 +148,17 @@
                   <option value="zhilian">智联</option>
                 </select>
               </label>
-              <label><span>岗位</span><input name="job_type" placeholder="岗位" /></label>
-              <label><span>学历</span><input name="education" placeholder="本科 / 硕士" /></label>
+              <label class="job-filter-field"><span>岗位</span><input name="job_type" placeholder="岗位" /></label>
+              <label>
+                <span>学历</span>
+                <select name="education">
+                  <option value="">全部学历</option>
+                  <option value="大专">大专</option>
+                  <option value="本科">本科</option>
+                  <option value="硕士">硕士</option>
+                  <option value="博士">博士</option>
+                </select>
+              </label>
               <label>
                 <span>学校层次</span>
                 <select name="school_level" multiple>
@@ -182,8 +191,8 @@
               </label>
               <label><span>最低分</span><input name="score_min" type="number" min="0" max="100" placeholder="0" /></label>
               <label><span>最高分</span><input name="score_max" type="number" min="0" max="100" placeholder="100" /></label>
-              <label><span>入库开始</span><input name="date_from" type="date" /></label>
-              <label><span>入库结束</span><input name="date_to" type="date" /></label>
+              <label class="date-filter-start"><span>入库开始</span><input name="date_from" type="date" /></label>
+              <label class="date-filter-end"><span>入库结束</span><input name="date_to" type="date" /></label>
               <label>
                 <span>排序</span>
                 <select name="sort">
@@ -308,6 +317,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260630-member-job-tabs"></script>
+    <script src="/assets/app.js?v=20260630-school-tier-badge"></script>
   </body>
 </html>

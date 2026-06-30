@@ -233,3 +233,152 @@
 - 风险 / 待确认：
   - 姓名别名仍只是临时兜底，等成员都登录成功后应把飞书 `open_id/user_id/union_id` 写入权限配置。
   - 服务器 `18080` 需要更新并重启新服务后，同事端才能看到新 UI 和权限修复；旧 `8080` 服务不动。
+
+---
+
+### 快照 0049：运营成员岗位显示归一为运营A/B
+- 修改时间：2026-06-30 13:46:00 +08:00
+- 修改原因：
+  - 旧版简历库把“企业内容运营负责人（B2B/短视频方向）”显示为“运营A”，把“B端社交媒体运营”显示为“运营B”。
+  - 新版成员岗位入口直接暴露了详细岗位名，佘欣平和杨梅的页面不符合旧服务展示口径。
+- 修改文件：
+  - `config/resume_scopes.yaml`
+  - `app/domain/resume/job_types.py`
+  - `app/auth/resume_scope.py`
+  - `app/domain/resume/service.py`
+  - `app/api/routes/resumes.py`
+  - `frontend/app.js`
+  - `frontend/auth.js`
+  - `frontend/index.html`
+  - `tests/domain/test_resume_scope_permissions.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 运营成员的可见岗位只暴露 `运营A` 和 `运营B`，不再把详细岗位名作为岗位入口展示。
+  - 后端权限、列表筛选、岗位计数均按旧版别名规则归一匹配，长岗位名仍能被正确归入运营 A/B。
+  - 简历接口新增 `displayJobType`，前端成员视图优先展示归一后的岗位名。
+  - 已同步部署到新服务 `18080`，旧服务 `8080` 未修改。
+
+---
+
+### 快照 0050：成员简历库筛选区精简
+- 修改时间：2026-06-30 14:08:00 +08:00
+- 修改原因：
+  - 成员端已经通过上方岗位入口选择 `运营A / 运营B`，筛选区里的“岗位”输入框重复且容易误解。
+  - 学历筛选需要改为固定选项，避免成员手输导致筛选口径不一致。
+  - 入库开始和入库结束日期需要相邻显示，减少横向查找成本。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - member 模式隐藏筛选区里的岗位输入框，管理员页面仍保留岗位筛选。
+  - 学历筛选改为下拉框，选项为 `大专 / 本科 / 硕士 / 博士`。
+  - 入库开始和入库结束字段增加相邻布局标识。
+  - 更新前端缓存版本为 `20260630-member-filter-polish`。
+
+---
+
+### 快照 0051：管理员简历库显示旧版全量岗位入口
+- 修改时间：2026-06-30 14:18:00 +08:00
+- 修改原因：
+  - 管理员进入简历库时需要看到所有岗位入口，而不是只按成员权限显示或隐藏岗位按钮。
+  - 岗位名称需要沿用旧版简历库显示口径，例如 `AI实习生 / 应用技术 / 人资管培 / 石油销售 / 财务顾问 / AI方案负责人`。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 前端新增旧版 `RESUME_LIBRARY_JOB_TYPES` 全量岗位列表。
+  - 管理员 `resumeScope.jobTypes=["*"]` 时展示全部旧版岗位入口。
+  - 岗位按钮和简历行展示复用旧版短名称映射，成员端仍只显示授权岗位。
+  - 更新前端缓存版本为 `20260630-admin-job-tabs`。
+
+---
+
+### 快照 0052：投资岗位入口归一去重
+- 修改时间：2026-06-30 14:35:23 +08:00
+- 修改原因：
+  - 张怀滨成员页同时显示 `投资交易策略研究员` 和 `投资交易策略研究员（量化与市场情绪方向）` 两个入口。
+  - 旧版把这类岗位统一归到正式长名，并在简历库入口中用短标签展示，不能在成员页拆成两个岗位。
+- 修改文件：
+  - `config/resume_scopes.yaml`
+  - `app/domain/resume/job_types.py`
+  - `app/auth/resume_scope.py`
+  - `app/domain/resume/service.py`
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `tests/domain/test_resume_scope_permissions.py`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 张怀滨岗位权限只保留正式岗位 `投资交易策略研究员（量化与市场情绪方向）`。
+  - 后端把投资短名、长名和旧版短标签 `投资策略研究` 统一归一，权限匹配和 facet 计数都合并。
+  - 前端岗位入口按 canonical 去重，页面只显示一个 `投资策略研究` 按钮，避免旧 session 或重复 facet 再次造成重复入口。
+  - 更新前端缓存版本为 `20260630-investment-job-dedupe`。
+
+---
+
+### 快照 0053：简历库岗位入口换行与筛选区防裁切
+- 修改时间：2026-06-30 15:22:42 +08:00
+- 修改原因：
+  - 管理员简历库岗位入口按钮单行横向滚动，右侧岗位在常见屏宽下不可见。
+  - 简历库上半块使用 `42vh` 限高，筛选条件第二行/底部字段会被 `overflow: hidden` 裁掉。
+- 修改文件：
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 岗位入口改为桌面 8 列网格，15 个入口按 8 + 7 两行展示，取消横向滚动裁切。
+  - 简历页上半块高度提升为 `minmax(540px, 58vh)`，筛选区改为宽屏 8 列，日期、排序、复核和按钮能完整显示。
+  - 更新前端缓存版本为 `20260630-filter-layout-fix`。
+
+---
+
+### 快照 0054：候选人摘要补充学校与院校层级
+- 修改时间：2026-06-30 15:36:22 +08:00
+- 修改原因：
+  - 右侧审阅摘要里的 `学历` 只显示学历等级，用户需要同时看到学校名称，并在学校后标注 `985 / 211 / 一本 / 二本` 等院校层级。
+  - 部分旧数据没有结构化学校字段，需要前端从简历文本中做保守兜底提取。
+- 修改文件：
+  - `app/api/routes/resumes.py`
+  - `frontend/app.js`
+  - `frontend/index.html`
+  - `tests/domain/test_phase5_resume.py`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 简历 API 增加 `school / schoolLevel / educationDisplay`，例如 `本科 · 重庆科技大学（一本）`。
+  - 前端新增 `resumeSchool()`、`resumeSchoolLevel()`、`resumeEducationLine()`，优先用结构化字段，缺失时从简历文本提取常见学校名和院校层级。
+  - 右侧候选人摘要显示 `学历：本科 · 学校（层级）`，并单独显示 `学校：学校名`。
+  - 更新 `app.js` 缓存版本为 `20260630-education-summary`。
+- 验证结果：
+  - 先补前后端契约测试并确认红灯。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py::test_resume_summary_uses_school_and_tier_display_line tests\domain\test_phase5_resume.py::test_resume_api_payload_exposes_school_tier_and_education_display -q`：2 passed。
+  - `node --check frontend/app.js`：通过。
+
+---
+
+### 快照 0055：当前结果姓名旁增加学校层级标签
+- 修改时间：2026-06-30 15:42:51 +08:00
+- 修改原因：
+  - 用户希望在左侧“当前结果”候选人姓名旁增加小标签，快速看到学校层次，例如 `985 / 211 / 一本 / 二本`。
+  - 学校层级不应挤占岗位第二行，适合放成姓名同行的短 badge。
+- 修改文件：
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 新增 `resumeSchoolTierBadge()`，将组合层级压缩为短标签：`985 / 211 / 双一流` 优先显示 `985`，`211 / 双一流` 显示 `211`。
+  - 左侧当前结果列表姓名行改为 `mini-heading`，姓名右侧显示 `school-tier-badge`；无层级时不显示标签。
+  - `school-tier-badge` 使用小胶囊样式，避免长姓名溢出并保持列表紧凑。
+  - 更新前端缓存版本为 `20260630-school-tier-badge`。
+- 验证结果：
+  - 先补前端契约测试并确认红灯。
+  - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：14 passed。
+  - `node --check frontend/app.js`：通过。
+  - `.venv312\Scripts\python.exe -m ruff check tests\domain\test_frontend_resume_member_view.py`：All checks passed。

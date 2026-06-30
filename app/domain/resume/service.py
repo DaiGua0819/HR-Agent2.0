@@ -14,6 +14,11 @@ from math import ceil
 from typing import Any
 
 from app.core.text import clean_text
+from app.domain.resume.job_types import (
+    canonical_resume_job_type,
+    display_resume_job_type,
+    job_type_matches_scope,
+)
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.scoring.service import ScoringService, build_scoring_service
@@ -190,7 +195,8 @@ def _filter_resumes(
             allowed_jobs,
         ):
             continue
-        if job and job not in (resume.job_type or resume.applied_position or ""):
+        resume_job = resume.job_type or resume.applied_position or ""
+        if job and not job_type_matches_scope(resume_job, job):
             continue
         if platform and platform not in _platform_values(resume):
             continue
@@ -280,7 +286,7 @@ def _matches_filter_value(value: str, selected: Iterable[str]) -> bool:
 
 def _matches_job_scope(resume: Resume, allowed_jobs: Iterable[str]) -> bool:
     job = clean_text(resume.job_type or resume.applied_position)
-    return bool(job) and any(item == job or item in job or job in item for item in allowed_jobs)
+    return bool(job) and any(job_type_matches_scope(job, item) for item in allowed_jobs)
 
 
 def _job_facets(
@@ -289,10 +295,10 @@ def _job_facets(
 ) -> list[dict[str, object]]:
     counts: dict[str, int] = {}
     for resume in resumes:
-        job = clean_text(resume.job_type or resume.applied_position)
+        job = display_resume_job_type(resume.job_type or resume.applied_position)
         if job:
             counts[job] = counts.get(job, 0) + 1
-    allowed = None if allowed_job_types is None else _filter_values(allowed_job_types)
+    allowed = None if allowed_job_types is None else _canonical_job_values(allowed_job_types)
     if allowed and "*" not in allowed:
         return [
             {
@@ -300,7 +306,7 @@ def _job_facets(
                 "count": sum(
                     count
                     for actual, count in counts.items()
-                    if actual == job or actual in job or job in actual
+                    if job_type_matches_scope(actual, job)
                 ),
             }
             for job in allowed
@@ -309,6 +315,17 @@ def _job_facets(
         {"jobType": job, "count": count}
         for job, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+def _canonical_job_values(value: str | Iterable[str] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in _filter_values(value):
+        canonical = "*" if item == "*" else canonical_resume_job_type(item)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return result
 
 
 def _payload_value(resume: Resume, *keys: str) -> str:
