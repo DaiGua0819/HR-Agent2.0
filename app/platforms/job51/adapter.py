@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from app.browser.base import BrowserPage
+from app.core.constants import Platform
 from app.core.dry_run import is_dry_run, record_dry_run_intent
+from app.features.interview_invite.platform_actions import invite_to_interview
 from app.platforms.job51 import actions_chat, actions_recommend, actions_resume
 from app.platforms.types import Conversation, ConversationRef, ResumeRequestState, SendResult
 
@@ -73,6 +75,16 @@ class Job51Adapter:
             record_dry_run_intent("job51.request_resume", owner=self.owner, platform="job51")
             return {"requested": False, "downloaded": False, "dryRun": True}
         return await actions_resume.request_or_download_resume(self.page)
+
+    async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:
+        return await invite_to_interview(
+            self.page,
+            platform=Platform.JOB51,
+            owner=self.owner,
+            payload=dict(payload),
+            send_message=self.send_message,
+            dry_run=self.dry_run or bool(payload.get("dryRun")),
+        )
 
     async def open_recommend_page(self) -> None:
         await actions_recommend.open_recommend_page(self.page)

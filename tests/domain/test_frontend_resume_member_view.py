@@ -88,3 +88,18 @@ def test_workbench_is_tall_enough_for_ten_member_results() -> None:
     workbench_block = styles.split("grid-template-columns: 220px", 1)[1].split("}", 1)[0]
 
     assert "min-height: 704px" in workbench_block
+
+
+def test_interview_button_uses_preflight_then_live_confirmation() -> None:
+    """Interview invite should be a two-step preflight/live confirmation flow."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "async function confirmInterviewInvite()" in script
+    assert "async function selectInterviewSession(sessionId)" in script
+    assert "renderInterviewPreflight" in script
+    assert '"confirmLive": true' in script
+    assert '"dryRun": false' in script
+    assert '"selectedSessionId": sessionId' in script
+    assert "data-select-interview-session" in script
+    assert "确认发起约面试" in script

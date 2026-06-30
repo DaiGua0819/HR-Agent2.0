@@ -51,6 +51,9 @@ class PlatformAdapter(Protocol):
     async def request_resume(self) -> dict[str, object]:
         """点击或触发要附件简历。"""
 
+    async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:
+        """从简历库回平台发起约面试换微信动作。"""
+
     async def open_recommend_page(self) -> None:
         """打开推荐人才页。"""
 

@@ -25,6 +25,9 @@ class WorkerClientProtocol(Protocol):
     ) -> dict[str, Any]:
         """主动联系。"""
 
+    async def interview_invite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """约面试。"""
+
     async def pause(self, platform: Platform) -> dict[str, Any]:
         """暂停平台。"""
 
@@ -59,6 +62,12 @@ class WorkerClient:
             response.raise_for_status()
             return response.json()
 
+    async def interview_invite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async with self._client() as client:
+            response = await client.post("/interview-invite", json=payload)
+            response.raise_for_status()
+            return response.json()
+
     async def pause(self, platform: Platform) -> dict[str, Any]:
         async with self._client() as client:
             response = await client.post(f"/automation/{platform.value}/pause")
@@ -90,6 +99,9 @@ class InProcessWorkerClient:
             target_position=str(payload.get("targetPosition") or ""),
             dry_run=bool(payload.get("dryRun")),
         )
+
+    async def interview_invite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self.runtime.interview_invite(payload)
 
     async def pause(self, platform: Platform) -> dict[str, Any]:
         return await self.runtime.pause(platform)

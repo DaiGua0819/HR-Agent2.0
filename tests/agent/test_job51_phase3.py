@@ -144,8 +144,16 @@ def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
 
     page = FakePage(
         conversations=[
-            conversation("销售管培生", [{"sender": "other", "text": "你好"}], label="候选人A"),
-            conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}], label="候选人B"),
+            conversation(
+                "销售管培生",
+                [{"sender": "other", "text": "你好"}],
+                label="候选人A",
+            ),
+            conversation(
+                "AI应用开发实习生",
+                [{"sender": "other", "text": "你好"}],
+                label="候选人B",
+            ),
         ]
     )
 
@@ -412,15 +420,15 @@ def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:
 
 
 class RowAdapter:
-    def __init__(self, rows: list["SlowRow"]) -> None:
+    def __init__(self, rows: list[SlowRow]) -> None:
         self.page = RowPage(rows)
 
 
 class RowPage:
-    def __init__(self, rows: list["SlowRow"]) -> None:
+    def __init__(self, rows: list[SlowRow]) -> None:
         self.rows = rows
 
-    async def query_all(self, selector: str) -> list["SlowRow"]:
+    async def query_all(self, selector: str) -> list[SlowRow]:
         _ = selector
         return self.rows
 

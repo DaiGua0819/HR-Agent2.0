@@ -11,7 +11,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.domain.conversation.repository import ConversationRepository
+from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.service import InterviewCenterService
+from app.features.interview_invite.service import InterviewInviteError, InterviewInviteService
+from app.settings import load_settings
 
 router = APIRouter(tags=["interview-center"])
 
@@ -21,6 +25,8 @@ class InterviewInviteRequest(BaseModel):
 
     resume_id: str = Field(alias="resumeId")
     dry_run: bool = Field(default=True, alias="dryRun")
+    confirm_live: bool = Field(default=False, alias="confirmLive")
+    selected_session_id: str = Field(default="", alias="selectedSessionId")
 
 
 class InterviewSessionCreateRequest(BaseModel):
@@ -47,23 +53,45 @@ def _service(request: Request) -> InterviewCenterService:
     return service
 
 
+def _invite_service(request: Request) -> InterviewInviteService:
+    service = getattr(request.app.state, "interview_invite_service", None)
+    if service is not None:
+        return service
+    settings = load_settings()
+    resume_repository = getattr(request.app.state, "resume_repository", None)
+    if resume_repository is None:
+        resume_repository = ResumeRepository.from_settings(settings)
+        request.app.state.resume_repository = resume_repository
+    conversation_repository = getattr(request.app.state, "conversation_repository", None)
+    if conversation_repository is None:
+        conversation_repository = ConversationRepository.from_settings(settings)
+        request.app.state.conversation_repository = conversation_repository
+    service = InterviewInviteService(
+        resume_repository=resume_repository,
+        conversation_repository=conversation_repository,
+        dispatcher=request.app.state.dispatcher,
+    )
+    request.app.state.interview_invite_service = service
+    return service
+
+
 @router.post("/api/interview/invite")
 async def send_interview_invite(
     payload: InterviewInviteRequest,
     request: Request,
 ) -> dict[str, object]:
-    """简历的“约面试”入口；dry-run 不触发 worker 或真实外部调用。"""
+    """简历的“约面试”入口，默认先做平台预检。"""
 
     try:
-        if payload.dry_run:
-            return {
-                "accepted": True,
-                "dryRun": True,
-                **_service(request).locate_resume_conversation(payload.resume_id),
-            }
-        return await _service(request).create_session_from_resume(payload.resume_id, dry_run=False)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return await _invite_service(request).invite(
+            payload.resume_id,
+            dry_run=payload.dry_run,
+            confirm_live=payload.confirm_live,
+            selected_session_id=payload.selected_session_id,
+        )
+    except InterviewInviteError as exc:
+        status = 404 if exc.reason == "resume_not_found" else 400
+        raise HTTPException(status_code=status, detail=exc.reason) from exc
 
 
 @router.post("/api/interview-center/sessions")

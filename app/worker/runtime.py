@@ -123,9 +123,24 @@ class WorkerRuntime:
         return {"paused": True, "owner": self.owner, "platform": platform.value}
 
     async def interview_invite(self, payload: dict[str, Any] | None = None) -> dict[str, object]:
-        """面试邀约 worker 入口仍保持 dry-run。"""
+        """执行简历库约面试的平台动作。"""
 
-        return {"accepted": True, "dryRun": True, "owner": self.owner, "payload": payload or {}}
+        async with self._lock:
+            self.agent_busy = True
+            try:
+                await self.start()
+                data = payload or {}
+                platform = Platform(str(data.get("platform") or ""))
+                adapter = self._adapter(platform)
+                await adapter.open_chat_page()
+                result = await adapter.invite_to_interview(data)
+                return {
+                    "owner": self.owner,
+                    "platform": platform.value,
+                    **result,
+                }
+            finally:
+                self.agent_busy = False
 
     async def status_payload(self) -> dict[str, object]:
         """返回 `/status` 响应。"""

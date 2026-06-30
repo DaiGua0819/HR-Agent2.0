@@ -385,10 +385,44 @@ async function requestInterview() {
   if (!state.selectedId || !state.context || !canAction("interview:invite")) return;
   const payload = await api("/api/interview/invite", {
     method: "POST",
-    body: JSON.stringify({ resumeId: state.selectedId, dryRun: true }),
+    body: JSON.stringify({ "resumeId": state.selectedId, "dryRun": true }),
   });
-  state.interviewSelection = { resume: state.context.resume, payload };
+  state.interviewSelection = { resume: state.context.resume, preflight: payload, live: null };
   setView("interviews");
+  renderInterviewDetail();
+}
+async function confirmInterviewInvite() {
+  const selected = state.interviewSelection;
+  const resume = selected?.resume || {};
+  const preflight = selected?.preflight || {};
+  const resumeId = resume.id || state.selectedId;
+  if (!resumeId || !canAction("interview:invite")) return;
+  const payload = await api("/api/interview/invite", {
+    method: "POST",
+    body: JSON.stringify({
+      "resumeId": resumeId,
+      "dryRun": false,
+      "confirmLive": true,
+      "selectedSessionId": preflight.sourceSessionId || "",
+    }),
+  });
+  state.interviewSelection = { resume, preflight, live: payload };
+  renderInterviewDetail();
+}
+async function selectInterviewSession(sessionId) {
+  const selected = state.interviewSelection;
+  const resume = selected?.resume || {};
+  const resumeId = resume.id || state.selectedId;
+  if (!resumeId || !sessionId || !canAction("interview:invite")) return;
+  const payload = await api("/api/interview/invite", {
+    method: "POST",
+    body: JSON.stringify({
+      "resumeId": resumeId,
+      "dryRun": true,
+      "selectedSessionId": sessionId,
+    }),
+  });
+  state.interviewSelection = { resume, preflight: payload, live: null };
   renderInterviewDetail();
 }
 async function loadInterviewSessions() {
@@ -410,7 +444,44 @@ function renderInterviewDetail() {
     <h3>${escapeHtml(resumeName(resume))}</h3>
     <p>岗位：${escapeHtml(resumeJob(resume))}</p>
     <p>来源：${escapeHtml(platformName(resumePlatform(resume)))} / ${escapeHtml(resumeOwner(resume))}</p>
-    <p>入口状态：${selected.payload?.accepted ? "已定位，等待真实约面流程" : "待确认"}</p>
+    ${renderInterviewPreflight(selected)}
+  `;
+  document.querySelector("[data-confirm-interview]")?.addEventListener("click", confirmInterviewInvite);
+  document.querySelectorAll("[data-select-interview-session]").forEach((button) => {
+    button.addEventListener("click", () => selectInterviewSession(button.dataset.selectInterviewSession || ""));
+  });
+}
+function renderInterviewPreflight(selected) {
+  const preflight = selected.preflight || {};
+  const live = selected.live || null;
+  const contact = preflight.platformContact || {};
+  const ready = Boolean(preflight.readyToExchange || preflight.workerResult?.readyToExchange);
+  if (live) {
+    return `
+      <p>入口状态：${live.accepted ? "约面试已发起" : "约面试失败"}</p>
+      <p>结果：${escapeHtml(live.reason || live.workerResult?.reason || "已发送加我微信沟通")}</p>
+    `;
+  }
+  if (preflight.requiresConfirmation) {
+    const candidates = preflight.candidates || [];
+    const buttons = candidates.map((item) => `
+      <button class="mini-item" data-select-interview-session="${escapeHtml(item.id || "")}">
+        <strong>${escapeHtml(item.candidateName || "候选会话")}</strong>
+        <span>${escapeHtml(item.position || "")}</span>
+      </button>
+    `).join("");
+    return `
+      <p>入口状态：需要人工确认候选会话</p>
+      <div class="mini-list">${buttons || `<div class="empty-inline">无候选会话</div>`}</div>
+    `;
+  }
+  return `
+    <p>入口状态：${ready ? "预检通过，可以确认发起约面试" : "预检未通过"}</p>
+    <p>平台：${escapeHtml(platformName(preflight.platform))} / ${escapeHtml(preflight.owner || "")}</p>
+    <p>候选人：${escapeHtml(contact.displayName || "")}</p>
+    <p>核对岗位：${escapeHtml(contact.appliedPosition || "")}</p>
+    <p>换微信按钮：${ready ? "已定位" : escapeHtml(preflight.reason || preflight.workerResult?.reason || "未定位")}</p>
+    ${ready ? `<button class="primary wide" data-confirm-interview>确认发起约面试</button>` : ""}
   `;
 }
 function renderAutomationControls() {

@@ -72,6 +72,14 @@ class Dispatcher:
         result = await self.client_for_owner(owner).proactive_contact(platform, payload)
         return DispatchResult(owner=owner, platform=platform, result=result)
 
+    async def interview_invite(self, owner: str, payload: dict[str, Any]) -> DispatchResult:
+        """派发简历库约面试动作到负责人 worker。"""
+
+        platform = Platform(str(payload.get("platform") or ""))
+        self.account_manager.route_for_account(owner, platform)
+        result = await self.client_for_owner(owner).interview_invite(payload)
+        return DispatchResult(owner=owner, platform=platform, result=result)
+
     async def pause(self, owner: str, platform: Platform) -> DispatchResult:
         """派发暂停任务。"""
 

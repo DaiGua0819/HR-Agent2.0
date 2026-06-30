@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from app.browser.base import BrowserPage
+from app.core.constants import Platform
 from app.core.dry_run import is_dry_run, record_dry_run_intent
+from app.features.interview_invite.platform_actions import invite_to_interview
 from app.platforms.types import Conversation, ConversationRef, ResumeRequestState, SendResult
 from app.platforms.zhilian import actions
 
@@ -81,6 +83,16 @@ class ZhilianAdapter:
             record_dry_run_intent("zhilian.request_resume", owner=self.owner, platform="zhilian")
             return {"requested": False, "dryRun": True}
         return await actions.request_resume(self.page)
+
+    async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:
+        return await invite_to_interview(
+            self.page,
+            platform=Platform.ZHILIAN,
+            owner=self.owner,
+            payload=dict(payload),
+            send_message=self.send_message,
+            dry_run=self.dry_run or bool(payload.get("dryRun")),
+        )
 
     async def open_recommend_page(self) -> None:
         await actions.open_recommend_page(self.page)

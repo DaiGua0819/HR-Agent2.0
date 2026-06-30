@@ -154,6 +154,7 @@ def test_interview_center_api_routes_are_wired(tmp_path: Path) -> None:
     )
     app = create_app()
     app.state.interview_center_service = service
+    app.state.interview_invite_service = FakeInterviewInviteService()
     with TestClient(app) as client:
         invite = client.post("/api/interview/invite", json={"resumeId": "resume-1", "dryRun": True})
         assert invite.json()["accepted"] is True
@@ -212,6 +213,21 @@ class FakeLLM:
                 }
             ]
         }
+
+
+class FakeInterviewInviteService:
+    """测试用约面试入口，避免路由测试触发真实 worker 派发。"""
+
+    async def invite(
+        self,
+        resume_id: str,
+        *,
+        dry_run: bool = True,
+        confirm_live: bool = False,
+        selected_session_id: str = "",
+    ) -> dict[str, object]:
+        _ = confirm_live, selected_session_id
+        return {"accepted": True, "resumeId": resume_id, "dryRun": dry_run}
 
 
 def _resume_record() -> ResumeRecord:

@@ -241,6 +241,26 @@ class ConversationRepository:
             connection.commit()
         return records
 
+    def list_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int = 3,
+    ) -> list[ConversationMessageRecord]:
+        """Read recent persisted messages for a session in chronological order."""
+
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversation_messages
+                WHERE session_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (session_id, max(1, limit)),
+            ).fetchall()
+        return [_message_from_row(row) for row in reversed(rows)]
+
     def get_status(self, session_id: str) -> CandidateStatus:
         """读取候选人状态；不存在时返回空状态。"""
 
@@ -352,6 +372,20 @@ def _status_from_row(row: Any) -> CandidateStatus:
         decided_result=row["decided_result"],
         payload=_json_dict(row["payload"]),
         updated_at=row["updated_at"],
+    )
+
+
+def _message_from_row(row: Any) -> ConversationMessageRecord:
+    return ConversationMessageRecord(
+        id=row["id"],
+        session_id=row["session_id"],
+        sender=row["sender"],
+        text=row["text"],
+        raw_text=row["raw_text"],
+        sent_at=row["sent_at"],
+        platform_message_id=row["platform_message_id"],
+        message_hash=row["message_hash"],
+        created_at=row["created_at"],
     )
 
 

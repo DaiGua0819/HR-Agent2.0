@@ -186,6 +186,12 @@ class FakePage:
         return await element.text() if element else ""
 
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
+        if "interview_invite.search_contact" in script:
+            return self._interview_invite_search(arg)
+        if "interview_invite.locate_wechat_exchange" in script:
+            return self._interview_invite_locate_wechat(arg)
+        if "interview_invite.click_wechat_exchange" in script:
+            return self._interview_invite_click_wechat(arg)
         if script == "zhilian.read_chat_context":
             return self.current_conversation()
         if script == "zhilian.unread_filter_state":
@@ -558,6 +564,79 @@ class FakePage:
             }
             for index, item in enumerate(self.conversations)
         ]
+
+    def _interview_invite_search(self, arg: Any | None) -> dict[str, Any]:
+        payload = arg if isinstance(arg, dict) else {}
+        contact = payload.get("contact") if isinstance(payload.get("contact"), dict) else {}
+        display_name = str(contact.get("displayName") or "")
+        position = str(contact.get("appliedPosition") or "")
+        matches = [
+            (index, item)
+            for index, item in enumerate(self.conversations)
+            if display_name
+            and display_name
+            in str(item.get("name") or item.get("label") or "")
+        ]
+        if not matches:
+            return {
+                "found": False,
+                "verified": False,
+                "reason": "search_result_not_found",
+                "source": "fake_page",
+            }
+        verified_matches = [
+            (index, item)
+            for index, item in matches
+            if not position or position in str(item.get("position") or item.get("label") or "")
+        ]
+        if len(verified_matches) != 1:
+            return {
+                "found": True,
+                "verified": False,
+                "reason": "multiple_candidates_unverified",
+                "count": len(verified_matches) or len(matches),
+                "source": "fake_page",
+            }
+        self.selected_index = verified_matches[0][0]
+        item = verified_matches[0][1]
+        return {
+            "found": True,
+            "verified": True,
+            "displayName": display_name,
+            "position": position,
+            "label": str(item.get("label") or ""),
+            "source": "fake_page",
+        }
+
+    def _interview_invite_locate_wechat(self, arg: Any | None) -> dict[str, Any]:
+        _ = arg
+        convo = self.current_conversation()
+        found = bool(convo.get("wechat_exchange_available"))
+        return {
+            "found": found,
+            "label": "换微信" if found else "",
+            "reason": "" if found else "wechat_exchange_button_not_found",
+            "source": "fake_page",
+        }
+
+    def _interview_invite_click_wechat(self, arg: Any | None) -> dict[str, Any]:
+        _ = arg
+        convo = self.current_conversation()
+        if not convo.get("wechat_exchange_available"):
+            return {
+                "clicked": False,
+                "verified": False,
+                "reason": "wechat_exchange_button_not_found",
+                "source": "fake_page",
+            }
+        convo["wechat_exchange_clicked"] = True
+        convo["wechat_exchange_verified"] = True
+        return {
+            "clicked": True,
+            "confirmed": bool(convo.get("wechat_exchange_confirm", True)),
+            "verified": True,
+            "source": "fake_page",
+        }
 
     def _conversation_element(self, index: int, item: dict[str, Any]) -> FakeElement:
         label = item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"

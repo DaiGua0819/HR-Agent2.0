@@ -125,11 +125,19 @@ CLOSE_GENERIC_BLOCKERS_JS = r"""
     if (target) {
       const label = semantic ? semantic.label : topRight.label;
       target.click();
-      return { closed: true, source: "generic_blocker", label, blockerText: text(blocker).slice(0, 160) };
+      return {
+        closed: true,
+        source: "generic_blocker",
+        label,
+        blockerText: text(blocker).slice(0, 160),
+      };
     }
   }
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  return { closed: false, reason: blockers.length ? "generic_close_control_not_found" : "generic_blocker_not_found" };
+  return {
+    closed: false,
+    reason: blockers.length ? "generic_close_control_not_found" : "generic_blocker_not_found",
+  };
 }
 """
 
