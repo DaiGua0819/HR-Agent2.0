@@ -139,6 +139,7 @@ class PlaywrightCDPPage:
 
         clicked: dict[str, Any] = {}
         target_page = self.page
+        opened_new_page = False
         try:
             view = self.page.get_by_text("查看附件简历").last
             if not await view.count():
@@ -154,6 +155,7 @@ class PlaywrightCDPPage:
             clicked = {"clicked": True, "source": "zhilian_view_attachment_click"}
             try:
                 target_page = await page_task
+                opened_new_page = target_page is not self.page
                 clicked["openedPage"] = True
             except Exception:
                 clicked["openedPage"] = False
@@ -191,6 +193,14 @@ class PlaywrightCDPPage:
                 "reason": "download_not_captured",
                 "error": str(error),
             }
+        finally:
+            if opened_new_page and target_page is not self.page:
+                try:
+                    await target_page.close()
+                    clicked["closedPage"] = True
+                except Exception as close_error:
+                    clicked["closedPage"] = False
+                    clicked["closeError"] = str(close_error)
 
     async def _fetch_current_page_bytes(self, page: Any) -> dict[str, Any]:
         try:

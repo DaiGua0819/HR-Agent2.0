@@ -4,6 +4,28 @@
 
 ---
 
+### 快照 0043：智联附件简历下载后关闭新页面
+- 修改时间：2026-06-30 08:20:19 +08:00
+- 修改原因：
+  - 智联平台下载附件简历时会按官方设计打开新的 PDF / 下载页面。
+  - 旧实现只在新页面中抓取 PDF 字节，下载完成后没有关闭该页面，连续处理候选人时会留下多余标签页。
+- 修改文件：
+  - `app/browser/playwright_cdp.py`
+  - `tests/browser/test_playwright_cdp_download.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - `PlaywrightCDPPage._click_zhilian_attachment_resume_download()` 增加新页面清理逻辑。
+  - 只有确认打开了新的 `Page` 时才在 `finally` 中关闭；如果没有新页、目标仍是原聊天页，则不会关闭原页面。
+  - 新增回归测试覆盖“打开新页后必须关闭”和“没有新页时不能关闭原页”两个场景。
+- 验证结果：
+  - 先运行新增测试确认红灯：新页面未关闭时 `opened.closed is False`。
+  - 修复后 `.venv312\Scripts\python.exe -m pytest tests\agent\test_zhilian_phase1.py tests\browser\test_playwright_cdp_download.py -q`：21 passed。
+  - `.venv312\Scripts\python.exe -m ruff check app\browser\playwright_cdp.py tests\browser\test_playwright_cdp_download.py`：All checks passed。
+  - `.venv312\Scripts\python.exe -m compileall app\browser\playwright_cdp.py tests\browser\test_playwright_cdp_download.py`：通过。
+- 风险 / 待确认：
+  - 本次只验证 fake Playwright 页面，不触发真实智联页面下载；下一次 live 下载时应观察新 PDF 标签页是否自动关闭。
+---
+
 ### 快照 0040：拉高简历审阅工作台以完整显示十人列表
 - 修改时间：2026-06-29 20:57:08 +08:00
 - 修改原因：
