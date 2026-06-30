@@ -530,3 +530,19 @@
   - 筛选表单新增 `td-filter-form`，继续保留原生 `select multiple` 和 `FormData` 查询参数构造。
   - 简历表格新增 `td-data-table`，只增强表格容器视觉，不替换为 `t-table`。
   - 右侧摘要卡片和约面试预检输出新增 `td-summary-card`、`td-preflight-card`，提高信息分组可读性。
+
+---
+
+### 快照 0064：成员简历库隐藏左侧侧边栏
+- 修改时间：2026-06-30 18:52:41 +08:00
+- 修改原因：
+  - 用户在张怀滨 member 预览页中指出左侧深色侧边栏只剩“简历库”入口，占用横向空间，希望删除。
+- 修改文件：
+  - `frontend/styles.css`
+  - `frontend/index.html`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - member 模式下 `.sidebar` 隐藏，`.shell` 改为单列布局。
+  - 管理员模式不受影响，仍保留完整侧边导航。
+  - 前端资源版本刷新为 `20260630-member-no-sidebar`。

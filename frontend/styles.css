@@ -695,6 +695,12 @@ tr.active { background: var(--td-brand-color-light); }
   border: 1px solid var(--line);
   border-radius: 8px;
 }
+.member-resume-mode .shell {
+  grid-template-columns: 1fr;
+}
+.member-resume-mode .sidebar {
+  display: none;
+}
 .member-resume-mode [data-page="resumes"].active {
   grid-template-rows: max-content minmax(560px, max-content);
 }

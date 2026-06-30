@@ -1,4 +1,4 @@
-"""Frontend contract tests for resume library member view."""
+﻿"""Frontend contract tests for resume library member view."""
 
 from __future__ import annotations
 
@@ -39,6 +39,21 @@ def test_member_resume_library_hides_admin_table_block() -> None:
     assert "overflow-y: hidden" in tabs_block
 
 
+def test_member_resume_library_hides_sidebar_navigation() -> None:
+    """Members should use the resume library directly without the left sidebar."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "20260630-member-no-sidebar" in html
+    shell_block = styles.split(".member-resume-mode .shell {", 1)[1].split("}", 1)[0]
+    sidebar_block = styles.split(".member-resume-mode .sidebar {", 1)[1].split("}", 1)[0]
+
+    assert "grid-template-columns: 1fr" in shell_block
+    assert "display: none" in sidebar_block
+    assert ".sidebar {" in styles
+
+
 def test_member_resume_library_has_large_job_tabs_above_status_tabs() -> None:
     """Members choose allowed jobs from a large job-tab strip above status tabs."""
 
@@ -69,7 +84,7 @@ def test_resume_filters_have_enough_space_for_admin_fields() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
 
-    assert "20260630-tdesign-refresh" in html
+    assert "20260630-member-no-sidebar" in html
     assert "grid-template-rows: minmax(540px, 58vh) minmax(560px, auto)" in page_block
     assert "grid-template-columns: repeat(8, minmax(112px, 1fr))" in filters_block
     assert "padding: 10px 12px 14px" in filters_block
@@ -81,7 +96,7 @@ def test_tdesign_theme_adapter_is_loaded_without_replacing_native_controls() -> 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260630-tdesign-refresh" in html
+    assert "20260630-member-no-sidebar" in html
     assert "TDesign theme adapter" in styles
     for token in [
         "--td-brand-color",
@@ -304,7 +319,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260630-tdesign-refresh" in html
+    assert "20260630-member-no-sidebar" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
