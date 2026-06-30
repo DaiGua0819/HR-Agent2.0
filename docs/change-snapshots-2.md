@@ -382,3 +382,40 @@
   - `.venv312\Scripts\python.exe -m pytest tests\domain\test_frontend_resume_member_view.py -q`：14 passed。
   - `node --check frontend/app.js`：通过。
   - `.venv312\Scripts\python.exe -m ruff check tests\domain\test_frontend_resume_member_view.py`：All checks passed。
+
+---
+
+### 快照 0056：新增旧简历库一次性同步脚本
+- 修改时间：2026-06-30 16:21:56 +08:00
+- 修改原因：
+  - 需要把旧 8080 服务的简历 SQLite 和 PDF 文件安全接入新 18080 预览服务。
+  - 旧服务仍在运行，不能直接复制 live SQLite 文件，也不能让新旧服务共写同一个库。
+  - 新系统需要先 dry-run 汇总，再 apply 前自动备份目标库，降低误覆盖风险。
+- 修改文件：
+  - `scripts/sync_legacy_resumes.py`
+  - `tests/domain/test_legacy_resume_sync.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 新增 `SyncConfig/run_sync()` 和 CLI，默认 dry-run，只读取旧库一致快照并输出导入报告。
+  - apply 必须显式传 `--apply --yes`；执行前自动备份目标库，并写入导入 manifest。
+  - 导入保留旧 `id/payload/phone_key/job_type/match_score/updated_at`，补写 `parsed_name`，桥接字段保持空。
+  - PDF 复制到新 `uploads/legacy/` 目录，并把 `payload.pdfPath` 改写为新路径，同时保留 `legacyPdfPath`。
+  - 覆盖测试确认 dry-run 不写目标、replace 会复制 PDF 并改写 payload、merge 会跳过已有简历。
+
+---
+
+### 快照 0057：旧库同步到 18080 预览库完成
+- 修改时间：2026-06-30 16:35:00 +08:00
+- 修改原因：
+  - 用户确认开始按旧库接入方案执行，需要把旧 8080 简历库一次性导入新 18080 预览库。
+  - 服务器 Python 环境缺少项目依赖，迁移脚本需要改成标准库实现，避免依赖 `yaml/pydantic`。
+- 修改文件：
+  - `scripts/sync_legacy_resumes.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 迁移脚本移除对 `app.settings/app.db.engine` 的依赖，改为直接读取 `app/db/schema.sql` 并补齐目标字段。
+  - 已在服务器 `C:\RecruitAgent2Preview\hr-agent` 执行旧库 dry-run：旧库 `quick_check=ok`，扫描 2207 条，PDF 存在 2207 个，缺失 0。
+  - 已执行 apply 到新预览库：导入 2207 条，复制 2207 个 PDF，目标库 `quick_check=ok`。
+  - 目标库备份：`C:\RecruitAgent2Preview\hr-agent\data\backups\resumes_before_legacy_sync_20260630_162903.sqlite`。
+  - 导入 manifest：`C:\RecruitAgent2Preview\hr-agent\data\backups\legacy_sync_manifest_20260630_162903.json`。
+  - 独立只读检查确认：新库 `resumes` 行数 2207，`data/uploads/legacy` PDF 数 2207，抽样 `payload.pdfPath` 文件存在且保留 `legacyPdfPath`。
