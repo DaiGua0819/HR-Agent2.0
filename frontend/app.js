@@ -585,17 +585,17 @@ function renderContext() {
   $("previewTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
   renderResumePreview(context);
   $("summaryContent").innerHTML = `
-    <div class="summary-card"><h3>候选人</h3>
+    <div class="summary-card td-summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
       <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}</p>
       <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p></div>
-    <div class="summary-card"><h3>评分</h3>
+    <div class="summary-card td-summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
-    <div class="summary-card"><h3>来源</h3>
+    <div class="summary-card td-summary-card"><h3>来源</h3>
       <p>平台：${escapeHtml(platformName(context.conversation?.platform))}</p>
       <p>负责人：${escapeHtml(context.conversation?.owner || "")}</p>
       <p>会话：${escapeHtml(context.conversation?.sessionId || "未桥接")}</p></div>
-    <div class="summary-card"><h3>审阅</h3>
+    <div class="summary-card td-summary-card"><h3>审阅</h3>
       <p>查看：${review.readStatus === "viewed" ? "已看" : "未看"}</p>
       <p>判断：${labelDecision(review.decision)}</p><p>备注：${escapeHtml(review.note || "暂无")}</p></div>
   `;
@@ -721,8 +721,10 @@ function renderInterviewPreflight(selected) {
   const ready = Boolean(preflight.readyToExchange || preflight.workerResult?.readyToExchange);
   if (live) {
     return `
-      <p>入口状态：${live.accepted ? "约面试已发起" : "约面试失败"}</p>
-      <p>结果：${escapeHtml(live.reason || live.workerResult?.reason || "已发送加我微信沟通")}</p>
+      <div class="td-preflight-card">
+        <p>入口状态：${live.accepted ? "约面试已发起" : "约面试失败"}</p>
+        <p>结果：${escapeHtml(live.reason || live.workerResult?.reason || "已发送加我微信沟通")}</p>
+      </div>
     `;
   }
   if (preflight.requiresConfirmation) {
@@ -734,17 +736,21 @@ function renderInterviewPreflight(selected) {
       </button>
     `).join("");
     return `
-      <p>入口状态：需要人工确认候选会话</p>
-      <div class="mini-list">${buttons || `<div class="empty-inline">无候选会话</div>`}</div>
+      <div class="td-preflight-card">
+        <p>入口状态：需要人工确认候选会话</p>
+        <div class="mini-list">${buttons || `<div class="empty-inline td-empty-state">无候选会话</div>`}</div>
+      </div>
     `;
   }
   return `
-    <p>入口状态：${ready ? "预检通过，可以确认发起约面试" : "预检未通过"}</p>
-    <p>平台：${escapeHtml(platformName(preflight.platform))} / ${escapeHtml(preflight.owner || "")}</p>
-    <p>候选人：${escapeHtml(contact.displayName || "")}</p>
-    <p>核对岗位：${escapeHtml(contact.appliedPosition || "")}</p>
-    <p>换微信按钮：${ready ? "已定位" : escapeHtml(preflight.reason || preflight.workerResult?.reason || "未定位")}</p>
-    ${ready ? `<button class="${tdButtonClass("primary", "wide")}" data-confirm-interview>确认发起约面试</button>` : ""}
+    <div class="td-preflight-card">
+      <p>入口状态：${ready ? "预检通过，可以确认发起约面试" : "预检未通过"}</p>
+      <p>平台：${escapeHtml(platformName(preflight.platform))} / ${escapeHtml(preflight.owner || "")}</p>
+      <p>候选人：${escapeHtml(contact.displayName || "")}</p>
+      <p>核对岗位：${escapeHtml(contact.appliedPosition || "")}</p>
+      <p>换微信按钮：${ready ? "已定位" : escapeHtml(preflight.reason || preflight.workerResult?.reason || "未定位")}</p>
+      ${ready ? `<button class="${tdButtonClass("primary", "wide")}" data-confirm-interview>确认发起约面试</button>` : ""}
+    </div>
   `;
 }
 function renderAutomationControls() {

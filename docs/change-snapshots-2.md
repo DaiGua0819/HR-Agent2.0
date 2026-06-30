@@ -513,3 +513,20 @@
   - 新增 `tdButtonClass()`、`tdTagClass()`、`tdSegmentClass()`，动态模板统一输出 TDesign 风格按钮、标签和分段入口。
   - 状态 tabs、岗位 tabs、分页按钮、列表操作按钮、约面试确认按钮复用统一 class。
   - 静态按钮补齐 `td-btn` 系列 class，但仍保留原生按钮和现有 `data-*` 事件绑定。
+
+---
+
+### 快照 0063：TDesign 高风险区域视觉阶段三
+- 修改时间：2026-06-30 18:38:33 +08:00
+- 修改原因：
+  - 筛选表单、简历表格和约面试预检区域属于高风险区域，需要先做视觉容器增强，不能破坏 `FormData` 和多选字段提交语义。
+- 修改文件：
+  - `frontend/index.html`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 筛选表单新增 `td-filter-form`，继续保留原生 `select multiple` 和 `FormData` 查询参数构造。
+  - 简历表格新增 `td-data-table`，只增强表格容器视觉，不替换为 `t-table`。
+  - 右侧摘要卡片和约面试预检输出新增 `td-summary-card`、`td-preflight-card`，提高信息分组可读性。

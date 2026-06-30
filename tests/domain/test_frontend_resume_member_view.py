@@ -122,6 +122,32 @@ def test_tdesign_low_risk_component_layer_styles_dynamic_controls() -> None:
     assert "td-pagination" in script
 
 
+def test_tdesign_high_risk_pass_preserves_formdata_and_adds_visual_wrappers() -> None:
+    """The high-risk pass should style forms/tables without changing query semantics."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'class="filters td-filter-form"' in html
+    assert 'class="table-wrap td-data-table"' in html
+    assert 'class="detail-block td-preflight-panel"' in html
+    assert 'new FormData($("filters"))' in script
+    assert 'params[multiFilterKeys.has(key) ? "append" : "set"](key, cleaned)' in script
+    assert 'select name="school_level" multiple' in html
+    assert 'select name="decision" multiple' in html
+    assert 'select name="graduation_year" multiple' in html
+    for class_name in [
+        ".td-filter-form",
+        ".td-data-table",
+        ".td-summary-card",
+        ".td-preflight-card",
+        ".td-empty-state",
+    ]:
+        assert class_name in styles
+    assert "td-preflight-card" in script
+
+
 def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
     """Admins should see the old full resume-library job list with legacy labels."""
 
