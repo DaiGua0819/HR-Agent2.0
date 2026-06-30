@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from app.db.engine import connect, run_migrations
+from app.domain.resume.job_types import OPERATION_A, OPERATION_B, canonical_resume_job_type
 from app.domain.resume.models import Resume, ResumeRecord
+from app.domain.scoring.engine import score_resume_for_profile
 from app.settings import AppSettings, load_settings
 
 _BASE_COLUMNS = ["id", "payload", "phone_key", "job_type", "match_score", "updated_at"]
@@ -137,6 +139,7 @@ class ResumeRepository:
         record = resume.to_record()
         if not record.updated_at:
             record = _with_updated_at(record, _now_iso())
+        record = _with_auto_score(record)
         if self._is_memory:
             self._memory_records[record.id] = record
             return record
@@ -270,6 +273,34 @@ def _with_updated_at(record: ResumeRecord, updated_at: str) -> ResumeRecord:
         job_type=record.job_type,
         match_score=record.match_score,
         updated_at=updated_at,
+        parsed_name=record.parsed_name,
+        linked_session_id=record.linked_session_id,
+        linked_platform=record.linked_platform,
+        linked_owner=record.linked_owner,
+        linked_platform_conversation_id=record.linked_platform_conversation_id,
+        source_artifact_id=record.source_artifact_id,
+    )
+
+
+def _with_auto_score(record: ResumeRecord) -> ResumeRecord:
+    if record.match_score is not None and record.match_score >= 0:
+        return record
+    job_type = (
+        record.job_type
+        or record.payload.get("jobType")
+        or record.payload.get("applied_position")
+    )
+    canonical = canonical_resume_job_type(job_type)
+    if canonical not in {OPERATION_A, OPERATION_B}:
+        return record
+    result = score_resume_for_profile(record.payload, canonical)
+    return ResumeRecord(
+        id=record.id,
+        payload=record.payload,
+        phone_key=record.phone_key,
+        job_type=record.job_type,
+        match_score=int(result["score"]),
+        updated_at=record.updated_at,
         parsed_name=record.parsed_name,
         linked_session_id=record.linked_session_id,
         linked_platform=record.linked_platform,

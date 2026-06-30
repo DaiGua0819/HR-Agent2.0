@@ -59,3 +59,59 @@ def test_scoring_entrypoints_and_version_constants() -> None:
     assert contact_score["score"] == resume_score["score"]
     assert POSITION_SCORING_VERSION == "v5-position-must-bonus"
     assert SCORING_VERSION == "v4-agent-depth-human-feedback"
+
+
+def test_operation_a_scores_against_b2b_content_growth_jd() -> None:
+    """运营A按企业内容运营负责人 JD 识别 B2B 内容、线索和业务转化能力。"""
+
+    result = calculate_jd_match(
+        (
+            "本科 3年短视频内容运营 企业号 品牌号 创始人IP 账号定位 "
+            "月度选题 脚本撰写 拍摄剪辑 数据复盘 私信量 有效咨询量 "
+            "SaaS AI 企业服务 工作流 知识库 私有化部署 线索承接"
+        ),
+        "运营A",
+    )
+
+    assert result["profile"] == "运营A"
+    assert result["score"] >= 75
+    assert {item["label"] for item in result["must"]["items"]} >= {
+        "2年以上内容运营经验",
+        "账号策略与选题脚本",
+        "B2B业务表达",
+        "线索与数据复盘",
+    }
+    assert result["risks"]["count"] == 0
+
+
+def test_operation_b_scores_against_industrial_social_media_jd() -> None:
+    """运营B按工业品/B端社媒 JD 识别膨润土、外贸平台和询盘线索能力。"""
+
+    result = calculate_jd_match(
+        (
+            "大专 新媒体运营 B2B平台运营 工业品推广 膨润土 矿产品 "
+            "铸造 钻井泥浆 猫砂 冶金球团 涂料 短视频 图文 公众号 "
+            "LinkedIn Facebook YouTube 英文产品文案 数据复盘 询盘 有效线索"
+        ),
+        "运营B",
+    )
+
+    assert result["profile"] == "运营B"
+    assert result["score"] >= 75
+    assert {item["label"] for item in result["must"]["items"]} >= {
+        "大专及以上学历",
+        "新媒体或B2B运营经验",
+        "工业品内容理解",
+        "询盘与线索复盘",
+    }
+    assert result["bonus"]["count"] >= 3
+
+
+def test_operation_profiles_penalize_pure_execution_without_strategy() -> None:
+    """纯剪辑/娱乐热点但缺少作品、策略和业务线索意识的候选人不应高分。"""
+
+    result = calculate_jd_match("只会剪辑 娱乐热点 无作品集 不会策划 不看线索", "运营A")
+
+    assert result["profile"] == "运营A"
+    assert result["score"] <= 45
+    assert result["risks"]["count"] >= 2

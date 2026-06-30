@@ -58,6 +58,61 @@ def test_resume_repository_writes_and_updates_sqlite(tmp_path: Path) -> None:
     assert repository.get("resume-1").match_score == 95
 
 
+def test_resume_repository_auto_scores_operation_resume_on_save(tmp_path: Path) -> None:
+    """运营A/B新简历入库时若没有分数，应立即按JD规则写入match_score。"""
+
+    repository = ResumeRepository(tmp_path / "operation_scores.sqlite")
+    repository.save(
+        Resume(
+            id="operation-a-1",
+            name="Alice",
+            job_type="运营A",
+            payload={
+                "name": "Alice",
+                "education": "本科",
+                "rawText": (
+                    "3年短视频内容运营 企业号 品牌号 账号定位 月度选题 "
+                    "脚本撰写 拍摄剪辑 数据复盘 私信量 有效咨询量 SaaS AI 企业服务"
+                ),
+            },
+        )
+    )
+
+    stored = repository.get("operation-a-1")
+    assert stored is not None
+    assert stored.match_score is not None
+    assert stored.match_score >= 75
+
+
+def test_resume_repository_auto_scores_negative_placeholder_operation_score(
+    tmp_path: Path,
+) -> None:
+    """运营A/B入库时的 -1 占位分也应视为未评分并自动替换。"""
+
+    repository = ResumeRepository(tmp_path / "operation_negative_scores.sqlite")
+    repository.save(
+        Resume(
+            id="operation-b-1",
+            name="Bob",
+            job_type="运营B",
+            match_score=-1,
+            payload={
+                "name": "Bob",
+                "education": "大专",
+                "rawText": (
+                    "新媒体运营 B2B平台运营 工业品推广 膨润土 钻井泥浆 "
+                    "LinkedIn 英文文案 数据复盘 询盘 有效线索"
+                ),
+            },
+        )
+    )
+
+    stored = repository.get("operation-b-1")
+    assert stored is not None
+    assert stored.match_score is not None
+    assert stored.match_score >= 75
+
+
 def test_batch_suggestions_evaluation_and_interview_persist(tmp_path: Path) -> None:
     """批量、规则建议、评估日志和面试会话都写入临时 SQLite。"""
 

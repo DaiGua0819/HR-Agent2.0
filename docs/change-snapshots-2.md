@@ -437,3 +437,25 @@
   - 新增 `resumeImportTime()`，优先读取 `updated_at/updatedAt`，再兜底读取 payload 的 `createdAt/created_at/downloadedAt`。
   - 右侧“候选人”摘要把“学校”行替换为“入库时间”行。
   - 前端资源版本更新为 `20260630-import-time-summary`，避免浏览器继续使用旧缓存。
+
+---
+
+### 快照 0059：运营 A/B 简历按飞书 JD 自动评分
+- 修改时间：2026-06-30 17:13:27 +08:00
+- 修改原因：
+  - 用户提供运营 A、运营 B 的飞书 JD，要求后续这两个岗位入库后自动按 JD 评分。
+  - 需要把 2026-06-25 至今已入库的运营简历补跑评分，避免旧数据没有 `match_score`。
+- 修改文件：
+  - `app/domain/scoring/jd_profiles.py`
+  - `app/domain/resume/repository.py`
+  - `scripts/rescore_operation_resumes.py`
+  - `tests/domain/test_phase5_scoring.py`
+  - `tests/domain/test_phase7a_persistence.py`
+  - `tests/domain/test_operation_rescore_script.py`
+  - `docs/change-snapshots-2.md`
+- 修改结果：
+  - 新增运营 A JD 档案：重点识别 B2B 内容运营、账号策略、选题脚本、企业服务/AI/SaaS 表达、线索和数据复盘能力。
+  - 新增运营 B JD 档案：重点识别 B 端社媒、新媒体/B2B 运营、工业品/膨润土内容理解、询盘和有效线索复盘能力。
+  - `ResumeRepository.save()` 在运营 A/B 简历无分数入库时自动计算并写入 `match_score`，已有人工或历史非负分数不覆盖；`-1` 占位分视为未评分并自动替换。
+  - 新增 `scripts/rescore_operation_resumes.py`，默认 dry-run，支持 `--since/--until/--limit/--apply`，用于补跑 2026-06-25 至今运营 A/B 简历分数。
+  - 补充单元测试覆盖 JD 命中、低匹配风险扣分、入库自动评分和历史补跑脚本。
