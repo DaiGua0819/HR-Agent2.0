@@ -12,7 +12,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import LOCAL_USER
+from app.api.routes.auth import current_user_id, require_session_payload
+from app.auth.resume_scope import allowed_job_types, resume_visible_to_payload
 from app.domain.resume.files import preview_file_path, preview_media_type, render_preview_image
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
@@ -64,8 +65,10 @@ async def list_resumes(
 ) -> dict[str, object]:
     """列出简历，支持筛选、排序和分页。"""
 
+    session = require_session_payload(request)
+    user_id = current_user_id(request)
     review_service = _review_service(request)
-    review_states = review_service.states_for_user(LOCAL_USER.id) if review_service else {}
+    review_states = review_service.states_for_user(user_id) if review_service else {}
     result = _service(request).list_resumes(
         page=page,
         page_size=page_size,
@@ -84,6 +87,7 @@ async def list_resumes(
         date_from=date_from,
         date_to=date_to,
         review_states=review_states,
+        allowed_job_types=allowed_job_types(session),
         sort=sort,
         descending=desc,
     )
@@ -107,8 +111,7 @@ async def get_resume(resume_id: str, request: Request) -> dict[str, object]:
     """读取简历详情。"""
 
     resume = _service(request).get_resume(resume_id)
-    if resume is None:
-        raise HTTPException(status_code=404, detail="resume_not_found")
+    _assert_resume_visible(request, resume)
     return _resume_payload(resume)
 
 
@@ -117,8 +120,7 @@ async def get_resume_file(resume_id: str, request: Request) -> FileResponse:
     """按简历 id 返回数据库记录的 PDF/图片预览文件。"""
 
     resume = _service(request).get_resume(resume_id)
-    if resume is None:
-        raise HTTPException(status_code=404, detail="resume_not_found")
+    _assert_resume_visible(request, resume)
     path = preview_file_path(resume)
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
@@ -135,8 +137,7 @@ async def get_resume_preview_image(resume_id: str, request: Request) -> Response
     """按简历 id 返回无工具栏的简历图片预览。"""
 
     resume = _service(request).get_resume(resume_id)
-    if resume is None:
-        raise HTTPException(status_code=404, detail="resume_not_found")
+    _assert_resume_visible(request, resume)
     path = preview_file_path(resume)
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
@@ -155,6 +156,8 @@ async def update_resume(
 ) -> dict[str, object]:
     """编辑简历字段；写入内存桩。"""
 
+    current = _service(request).get_resume(resume_id)
+    _assert_resume_visible(request, current)
     resume = _service(request).update_resume(resume_id, payload.fields)
     if resume is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
@@ -165,10 +168,20 @@ async def update_resume(
 async def rescore_resume(resume_id: str, request: Request) -> dict[str, object]:
     """重新评分并把分数写回内存桩。"""
 
+    current = _service(request).get_resume(resume_id)
+    _assert_resume_visible(request, current)
     result = _service(request).rescore_resume(resume_id)
     if result is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
     return result
+
+
+def _assert_resume_visible(request: Request, resume: Resume | None) -> None:
+    if resume is None:
+        raise HTTPException(status_code=404, detail="resume_not_found")
+    session = require_session_payload(request)
+    if not resume_visible_to_payload(resume, session):
+        raise HTTPException(status_code=403, detail="resume_forbidden")
 
 
 def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[str, object]:

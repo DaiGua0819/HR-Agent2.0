@@ -153,6 +153,25 @@ def _authenticate(username: str, password: str) -> LocalAuthProfile:
     return profile
 
 
+def require_session_payload(request: Request) -> dict[str, object]:
+    """Return the authenticated session payload or reject the request."""
+
+    payload = _session_payload(request)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="not_authenticated")
+    return payload
+
+
+def current_user_id(request: Request) -> str:
+    """Return the stable user id from the authenticated session."""
+
+    payload = require_session_payload(request)
+    user = payload.get("user")
+    if not isinstance(user, dict) or not user.get("id"):
+        raise HTTPException(status_code=401, detail="invalid_session")
+    return str(user["id"])
+
+
 def _set_session(request: Request, response: Response, payload: dict[str, object]) -> None:
     token = secrets.token_urlsafe(32)
     _session_store(request)[token] = payload

@@ -31,7 +31,11 @@ const hrAuth = (() => {
   function updateUserCard(user) {
     document.getElementById("userName").textContent = user.user.name;
     const scope = user.resumeScope;
-    document.getElementById("userScope").textContent = `可见：${scope.owners.join("、")} / ${scope.platforms.join("、")}`;
+    const jobs = (scope.jobTypes || []).includes("*")
+      ? "全部岗位"
+      : (scope.jobTypes || []).join("、") || "暂无岗位权限";
+    document.getElementById("userScope").textContent =
+      `可见：${scope.owners.join("、")} / ${scope.platforms.join("、")} / ${jobs}`;
   }
   function bindLogin(api, afterLogin) {
     document.getElementById("feishuLoginBtn").onclick = () => {

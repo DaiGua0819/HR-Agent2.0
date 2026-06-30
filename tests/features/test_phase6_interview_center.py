@@ -156,6 +156,7 @@ def test_interview_center_api_routes_are_wired(tmp_path: Path) -> None:
     app.state.interview_center_service = service
     app.state.interview_invite_service = FakeInterviewInviteService()
     with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         invite = client.post("/api/interview/invite", json={"resumeId": "resume-1", "dryRun": True})
         assert invite.json()["accepted"] is True
 

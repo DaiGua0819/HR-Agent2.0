@@ -60,6 +60,7 @@ def test_rule_suggestions_and_control_plane_routes_are_wired() -> None:
 
     GLOBAL_RULE_SUGGESTIONS.clear()
     with TestClient(create_app()) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         rules = client.get("/api/scoring/rules", params={"job_type": "电气工程师"})
         assert rules.status_code == 200
         assert rules.json()["version"] == "v5-position-must-bonus"

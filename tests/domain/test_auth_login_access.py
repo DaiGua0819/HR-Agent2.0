@@ -62,6 +62,7 @@ def test_member_login_is_limited_to_resume_library() -> None:
     assert payload["uiAccess"]["views"] == ["resumes"]
     assert "automation:run" not in payload["permissions"]
     assert payload["resumeScope"]["includeUnlinked"] is False
+    assert payload["resumeScope"]["jobTypes"] == []
 
 
 def test_logout_clears_login_session() -> None:

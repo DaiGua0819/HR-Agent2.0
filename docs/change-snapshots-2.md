@@ -178,3 +178,32 @@
   - `.venv312\Scripts\python.exe -m ruff check app\platforms\zhilian\actions.py tests\agent\test_zhilian_phase1.py`：All checks passed。
 - 风险 / 待确认：
   - 本次未重新 live 处理范文博，避免超出上一轮处理范围；下一轮智联 live 时该类结果应不再出现 `confirm_button_not_visible`。
+---
+
+### 快照 0047：成员简历库岗位权限
+- 修改时间：2026-06-30 09:59:08 +08:00
+- 修改原因：
+  - 普通成员登录简历库后不能看到全部简历，需要按公司成员与岗位范围限制可见数据。
+  - 佘欣平、杨梅只允许看运营岗位 A/B；张怀滨只允许看 AI 智能体解决方案负责人、外部财务产品顾问、投资交易策略研究员相关简历。
+  - 简历详情、文件预览、审阅、约面试等接口不能只靠前端隐藏，必须在后端统一做权限校验。
+- 修改文件：
+  - `config/resume_scopes.yaml`
+  - `app/auth/resume_scope.py`
+  - `app/auth/access.py`
+  - `app/api/routes/auth.py`
+  - `app/api/routes/resumes.py`
+  - `app/api/routes/resume_review.py`
+  - `app/api/routes/interview.py`
+  - `app/domain/resume/service.py`
+  - `frontend/auth.js`
+  - `tests/domain/test_resume_scope_permissions.py`
+  - 相关登录/简历/面试路由测试
+- 修改结果：
+  - 新增岗位权限配置文件，管理员仍可看全部岗位，未配置普通成员默认没有岗位可见范围。
+  - `/api/auth/me` 返回 `resumeScope.jobTypes`，前端用户卡片展示当前可见岗位。
+  - `/api/resumes`、简历详情、文件、预览图、编辑、重评、审阅、约面试入口均接入会话权限与岗位范围校验。
+  - `/api/resume-review/queue` 也按同一岗位范围过滤，避免被分配的越权简历在待处理队列里露出。
+  - 新增测试覆盖运营成员只能看到运营简历、张怀滨只能看到战略直求岗位简历。
+- 风险 / 待确认：
+  - 当前配置先按飞书姓名匹配，后续拿到三位同事的 `open_id/user_id/union_id` 后应补进 `resume_scopes.yaml`，避免同名风险。
+  - 线上飞书登录需要在飞书开放平台配置应用可用范围/发布或测试用户；普通员工一般不应加为开发协作者。

@@ -7,7 +7,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import LOCAL_USER
+from app.api.routes.auth import current_user_id, require_session_payload
+from app.auth.resume_scope import resume_visible_to_payload
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume_review.service import ResumeReviewService
@@ -46,9 +47,11 @@ async def review_context(resume_id: str, request: Request) -> dict[str, object]:
     if record is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
     resume = Resume.from_record(record)
+    _assert_resume_visible(request, resume)
+    user_id = current_user_id(request)
     return _review_service(request).context_for_resume(
         resume=resume,
-        user_id=LOCAL_USER.id,
+        user_id=user_id,
         mark_viewed=True,
     )
 
@@ -57,9 +60,11 @@ async def review_context(resume_id: str, request: Request) -> dict[str, object]:
 async def mark_viewed(resume_id: str, request: Request) -> dict[str, object]:
     """显式标记已看。"""
 
-    if _resume_repository(request).get(resume_id) is None:
+    record = _resume_repository(request).get(resume_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
-    state = _review_service(request).mark_viewed(resume_id, LOCAL_USER.id)
+    _assert_resume_visible(request, Resume.from_record(record))
+    state = _review_service(request).mark_viewed(resume_id, current_user_id(request))
     return {"state": _state_payload(state)}
 
 
@@ -71,12 +76,14 @@ async def review_decision(
 ) -> dict[str, object]:
     """写入审阅结论。"""
 
-    if _resume_repository(request).get(resume_id) is None:
+    record = _resume_repository(request).get(resume_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="resume_not_found")
+    _assert_resume_visible(request, Resume.from_record(record))
     try:
         return _review_service(request).set_decision(
             resume_id=resume_id,
-            user_id=LOCAL_USER.id,
+            user_id=current_user_id(request),
             decision=payload.decision,
             reason_tags=payload.reason_tags,
             note=payload.note,
@@ -90,8 +97,31 @@ async def review_decision(
 async def review_queue(request: Request) -> dict[str, Any]:
     """返回当前用户的待处理队列。"""
 
-    items = _review_service(request).queue_for_user(LOCAL_USER.id)
+    session = require_session_payload(request)
+    items = _review_service(request).queue_for_user(current_user_id(request))
+    items = _filter_visible_queue(items, session)
     return {"items": items, "total": len(items)}
+
+
+def _filter_visible_queue(
+    items: list[dict[str, object]],
+    session: dict[str, object],
+) -> list[dict[str, object]]:
+    visible: list[dict[str, object]] = []
+    for item in items:
+        resume_payload = item.get("resume")
+        if not isinstance(resume_payload, dict):
+            continue
+        resume = Resume.model_validate(resume_payload)
+        if resume_visible_to_payload(resume, session):
+            visible.append(item)
+    return visible
+
+
+def _assert_resume_visible(request: Request, resume: Resume) -> None:
+    session = require_session_payload(request)
+    if not resume_visible_to_payload(resume, session):
+        raise HTTPException(status_code=403, detail="resume_forbidden")
 
 
 def _state_payload(state: Any) -> dict[str, object]:

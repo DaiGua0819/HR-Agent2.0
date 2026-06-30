@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.routes.auth import require_session_payload
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.service import InterviewCenterService
@@ -82,6 +83,7 @@ async def send_interview_invite(
 ) -> dict[str, object]:
     """简历的“约面试”入口，默认先做平台预检。"""
 
+    _assert_can_invite(request)
     try:
         return await _invite_service(request).invite(
             payload.resume_id,
@@ -92,6 +94,14 @@ async def send_interview_invite(
     except InterviewInviteError as exc:
         status = 404 if exc.reason == "resume_not_found" else 400
         raise HTTPException(status_code=status, detail=exc.reason) from exc
+
+
+def _assert_can_invite(request: Request) -> None:
+    session = require_session_payload(request)
+    access = session.get("uiAccess")
+    actions = access.get("actions") if isinstance(access, dict) else []
+    if "interview:invite" not in actions:
+        raise HTTPException(status_code=403, detail="interview_invite_forbidden")
 
 
 @router.post("/api/interview-center/sessions")

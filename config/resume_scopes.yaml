@@ -1,0 +1,27 @@
+jobGroups:
+  operation_ab:
+    label: 运营A/B
+    jobTypes:
+      - 运营A
+      - 运营B
+      - 企业内容运营负责人
+      - 企业内容运营负责人（B2B/短视频方向）
+      - B端社交媒体运营
+  strategic_direct:
+    label: AI/财务/投资直求简历
+    jobTypes:
+      - AI智能体解决方案负责人
+      - 外部财务产品顾问
+      - 投资交易策略研究员
+      - 投资交易策略研究员（量化与市场情绪方向）
+
+members:
+  - names:
+      - 佘欣平
+      - 杨梅
+    jobGroups:
+      - operation_ab
+  - names:
+      - 张怀滨
+    jobGroups:
+      - strategic_direct

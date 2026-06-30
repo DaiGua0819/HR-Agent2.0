@@ -110,6 +110,7 @@ def test_interview_invite_api_uses_injected_service() -> None:
     app.state.interview_invite_service = service
 
     with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         response = client.post(
             "/api/interview/invite",
             json={"resumeId": "resume-1", "dryRun": True, "selectedSessionId": "s1"},

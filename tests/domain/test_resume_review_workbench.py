@@ -111,6 +111,7 @@ def test_resume_file_route_returns_pdf_from_stored_resume_path(tmp_path: Path) -
     app.state.resume_service = ResumeService(resume_repo)
 
     with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         response = client.get("/api/resumes/resume-pdf/file")
 
     assert response.status_code == 200
@@ -139,6 +140,7 @@ def test_resume_preview_image_route_renders_pdf_page(tmp_path: Path) -> None:
     app.state.resume_service = ResumeService(resume_repo)
 
     with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         response = client.get("/api/resumes/resume-image/preview-image")
 
     assert response.status_code == 200

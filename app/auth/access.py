@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.auth.feishu_oauth import FeishuProfile
+from app.auth.resume_scope import resume_scope_for_user
 from app.domain.resume_review.models import LocalUser
 from app.settings import load_settings
 
@@ -16,19 +17,20 @@ def user_payload(user: LocalUser, *, feishu: dict[str, object] | None = None) ->
     """Convert a domain user into the frontend auth payload."""
 
     is_admin = _is_admin_user(user)
+    feishu_data = feishu or {}
     payload: dict[str, object] = {
         "user": {
             "id": user.id,
             "name": user.name,
-            "avatarUrl": (feishu or {}).get("avatarUrl", ""),
+            "avatarUrl": feishu_data.get("avatarUrl", ""),
         },
         "roles": user.roles,
         "permissions": user.permissions,
-        "resumeScope": {
-            "owners": user.owners,
-            "platforms": user.platforms,
-            "includeUnlinked": is_admin,
-        },
+        "resumeScope": resume_scope_for_user(
+            user,
+            feishu=feishu_data,
+            include_unlinked=is_admin,
+        ),
         "uiAccess": ui_access(user),
     }
     if feishu:

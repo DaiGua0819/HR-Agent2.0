@@ -161,6 +161,7 @@ def test_feishu_callback_maps_member_to_resume_library(monkeypatch) -> None:
     assert payload["roles"] == ["member"]
     assert payload["uiAccess"]["views"] == ["resumes"]
     assert payload["resumeScope"]["owners"] == ["普通同事"]
+    assert payload["resumeScope"]["jobTypes"] == []
 
 
 def test_feishu_callback_writes_login_diagnostics(tmp_path, monkeypatch) -> None:

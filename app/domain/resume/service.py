@@ -62,6 +62,7 @@ class ResumeService:
         date_from: str = "",
         date_to: str = "",
         review_states: dict[str, Any] | None = None,
+        allowed_job_types: str | Iterable[str] | None = None,
         sort: str = "updated_at",
         descending: bool = True,
     ) -> ResumeListResult:
@@ -87,6 +88,7 @@ class ResumeService:
             date_from=date_from,
             date_to=date_to,
             review_states=review_states or {},
+            allowed_job_types=allowed_job_types,
         )
         resumes = _sort_resumes(resumes, sort=sort, descending=descending)
         total = len(resumes)
@@ -147,6 +149,7 @@ def _filter_resumes(
     date_from: str,
     date_to: str,
     review_states: dict[str, Any],
+    allowed_job_types: str | Iterable[str] | None,
 ) -> list[Resume]:
     needle = clean_text(query).lower()
     job = clean_text(job_type)
@@ -156,10 +159,16 @@ def _filter_resumes(
     school_levels = _filter_values(school_level)
     graduation_years = _filter_values(graduation_year)
     decisions = _normalize_decisions(decision)
+    allowed_jobs = None if allowed_job_types is None else _filter_values(allowed_job_types)
     start_date = _date_key(date_from)
     end_date = _date_key(date_to)
     result: list[Resume] = []
     for resume in resumes:
+        if allowed_jobs is not None and "*" not in allowed_jobs and not _matches_job_scope(
+            resume,
+            allowed_jobs,
+        ):
+            continue
         if job and job not in (resume.job_type or resume.applied_position or ""):
             continue
         if platform and platform not in _platform_values(resume):
@@ -246,6 +255,11 @@ def _normalize_decision(value: object) -> str:
 def _matches_filter_value(value: str, selected: Iterable[str]) -> bool:
     normalized = clean_text(value)
     return any(item == normalized or item in normalized for item in selected)
+
+
+def _matches_job_scope(resume: Resume, allowed_jobs: Iterable[str]) -> bool:
+    job = clean_text(resume.job_type or resume.applied_position)
+    return bool(job) and any(item == job or item in job or job in item for item in allowed_jobs)
 
 
 def _payload_value(resume: Resume, *keys: str) -> str:
