@@ -207,3 +207,29 @@
 - 风险 / 待确认：
   - 当前配置先按飞书姓名匹配，后续拿到三位同事的 `open_id/user_id/union_id` 后应补进 `resume_scopes.yaml`，避免同名风险。
   - 线上飞书登录需要在飞书开放平台配置应用可用范围/发布或测试用户；普通员工一般不应加为开发协作者。
+
+---
+
+### 快照 0048：成员岗位入口与权限兜底
+- 修改时间：2026-06-30 10:57:30 +08:00
+- 修改原因：
+  - 成员登录后需要在状态按钮上方先看到可选岗位入口，按钮样式要更大、更接近岗位入口导航。
+  - 普通成员不需要“待补充”和“待我处理”状态入口，也不需要右侧“待补充”操作按钮。
+  - 佘新平登录后仍看到测试简历，需确认后端默认权限不是全量，并补齐姓名别名。
+- 修改文件：
+  - `config/resume_scopes.yaml`
+  - `app/domain/resume/service.py`
+  - `app/api/routes/resumes.py`
+  - `frontend/index.html`
+  - `frontend/app.js`
+  - `frontend/styles.css`
+  - `tests/domain/test_resume_scope_permissions.py`
+  - `tests/domain/test_frontend_resume_member_view.py`
+- 修改结果：
+  - `/api/resumes` 增加 `jobFacets`，只在当前登录用户可见岗位范围内统计数量。
+  - 前端新增“JOB TABLES / 岗位入口”大按钮区，点击岗位后按该岗位重新拉取简历。
+  - member 模式隐藏“待补充 / 待我处理”状态入口和右侧“待补充”按钮。
+  - `resume_scopes.yaml` 给佘欣平补充 `佘新平` 别名；未配置成员默认返回空简历列表。
+- 风险 / 待确认：
+  - 姓名别名仍只是临时兜底，等成员都登录成功后应把飞书 `open_id/user_id/union_id` 写入权限配置。
+  - 服务器 `18080` 需要更新并重启新服务后，同事端才能看到新 UI 和权限修复；旧 `8080` 服务不动。

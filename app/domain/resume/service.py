@@ -28,6 +28,7 @@ class ResumeListResult:
     page: int
     page_size: int
     pages: int
+    job_facets: list[dict[str, object]]
 
 
 class ResumeService:
@@ -70,9 +71,28 @@ class ResumeService:
 
         page = max(1, page)
         page_size = min(200, max(1, page_size))
-        resumes = [Resume.from_record(record) for record in self.repository.iter_resumes()]
+        all_resumes = [Resume.from_record(record) for record in self.repository.iter_resumes()]
+        facet_resumes = _filter_resumes(
+            all_resumes,
+            query=query,
+            job_type="",
+            source_platform=source_platform,
+            owner=owner,
+            education=education,
+            school_level=school_level,
+            graduation_year=graduation_year,
+            score_min=score_min,
+            score_max=score_max,
+            read_status=read_status,
+            decision=decision,
+            manual_review=manual_review,
+            date_from=date_from,
+            date_to=date_to,
+            review_states=review_states or {},
+            allowed_job_types=allowed_job_types,
+        )
         resumes = _filter_resumes(
-            resumes,
+            all_resumes,
             query=query,
             job_type=job_type,
             source_platform=source_platform,
@@ -100,6 +120,7 @@ class ResumeService:
             page=page,
             page_size=page_size,
             pages=ceil(total / page_size) if total else 0,
+            job_facets=_job_facets(facet_resumes, allowed_job_types),
         )
 
     def get_resume(self, resume_id: str) -> Resume | None:
@@ -260,6 +281,34 @@ def _matches_filter_value(value: str, selected: Iterable[str]) -> bool:
 def _matches_job_scope(resume: Resume, allowed_jobs: Iterable[str]) -> bool:
     job = clean_text(resume.job_type or resume.applied_position)
     return bool(job) and any(item == job or item in job or job in item for item in allowed_jobs)
+
+
+def _job_facets(
+    resumes: list[Resume],
+    allowed_job_types: str | Iterable[str] | None,
+) -> list[dict[str, object]]:
+    counts: dict[str, int] = {}
+    for resume in resumes:
+        job = clean_text(resume.job_type or resume.applied_position)
+        if job:
+            counts[job] = counts.get(job, 0) + 1
+    allowed = None if allowed_job_types is None else _filter_values(allowed_job_types)
+    if allowed and "*" not in allowed:
+        return [
+            {
+                "jobType": job,
+                "count": sum(
+                    count
+                    for actual, count in counts.items()
+                    if actual == job or actual in job or job in actual
+                ),
+            }
+            for job in allowed
+        ]
+    return [
+        {"jobType": job, "count": count}
+        for job, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def _payload_value(resume: Resume, *keys: str) -> str:

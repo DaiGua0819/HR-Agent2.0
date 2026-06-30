@@ -47,6 +47,42 @@ def test_operation_member_only_reads_operation_ab_resumes(monkeypatch) -> None:
     assert [item["id"] for item in listed.json()["items"]] == ["resume-operation"]
     assert forbidden.status_code == 403
     assert forbidden.json()["detail"] == "resume_forbidden"
+    assert listed.json()["jobFacets"][0]["jobType"] == "运营A"
+
+
+def test_operation_member_alias_xinping_gets_same_scope(monkeypatch) -> None:
+    """佘新平 is treated as the same operation-scope member alias."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    app = _app_for_member("ou_she_alias", "佘新平")
+
+    with TestClient(app) as client:
+        _feishu_login(client)
+        me = client.get("/api/auth/me")
+        listed = client.get("/api/resumes")
+
+    load_settings.cache_clear()
+    assert me.status_code == 200
+    assert "运营A" in me.json()["resumeScope"]["jobTypes"]
+    assert [item["id"] for item in listed.json()["items"]] == ["resume-operation"]
+
+
+def test_unconfigured_member_cannot_read_seed_resumes(monkeypatch) -> None:
+    """Unconfigured members default to no job scope instead of seeing all seed resumes."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    app = _app_for_member("ou_unknown", "未配置同事")
+
+    with TestClient(app) as client:
+        _feishu_login(client)
+        listed = client.get("/api/resumes")
+
+    load_settings.cache_clear()
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
+    assert listed.json()["total"] == 0
 
 
 def test_member_review_queue_filters_out_forbidden_resumes(monkeypatch, tmp_path: Path) -> None:

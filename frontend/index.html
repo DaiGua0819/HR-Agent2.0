@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260629-member-tall-workbench" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260630-member-job-tabs" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260629-feishu-login" />
   </head>
   <body>
@@ -130,6 +130,11 @@
 
         <section class="page" data-page="resumes">
           <div class="library-panel">
+            <div class="job-tabs-panel" id="jobTabsBlock" hidden>
+              <p class="job-tabs-eyebrow">JOB TABLES</p>
+              <h2>岗位入口</h2>
+              <div class="job-tabs" id="jobTabs"></div>
+            </div>
             <div class="tabs" id="statusTabs"></div>
             <form class="filters" id="filters">
               <label class="wide"><span>关键词</span><input name="q" placeholder="姓名 / 手机 / 专业 / 学校 / 技能" /></label>
@@ -303,6 +308,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260629-review-keyboard-flow"></script>
+    <script src="/assets/app.js?v=20260630-member-job-tabs"></script>
   </body>
 </html>

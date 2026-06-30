@@ -10,6 +10,8 @@ const state = {
   pageSize: 10,
   total: 0,
   pages: 0,
+  jobType: "",
+  jobFacets: [],
   interviewSelection: null,
 };
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["undecided", "待判断"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
@@ -41,6 +43,15 @@ const canView = (view) => hrAuth.canView(state.user, view);
 const canAction = (action) => hrAuth.canAction(state.user, action);
 const setAllowedNavigation = () => hrAuth.setAllowedNavigation(state.user);
 const isMemberUser = () => (state.user?.roles || []).includes("member") && !(state.user?.roles || []).includes("super_admin");
+function visibleStatusTabs() {
+  if (!isMemberUser()) return tabs;
+  return tabs.filter(([key]) => key !== "needs_more_info" && key !== "queue");
+}
+function visibleJobTypes() {
+  const values = state.user?.resumeScope?.jobTypes || [];
+  if (!Array.isArray(values) || values.includes("*")) return [];
+  return values.filter(Boolean);
+}
 function setResumeMemberMode() {
   document.body.classList.toggle("member-resume-mode", isMemberUser());
 }
@@ -141,7 +152,8 @@ function renderDailyRows(items) {
   $("dailyEmpty").style.display = items.length ? "none" : "block";
 }
 function buildTabs() {
-  $("statusTabs").innerHTML = tabs
+  if (!visibleStatusTabs().some(([key]) => key === state.tab)) state.tab = "all";
+  $("statusTabs").innerHTML = visibleStatusTabs()
     .map(([key, label]) => `<button data-tab="${key}" class="${state.tab === key ? "active" : ""}">${label}</button>`)
     .join("");
   document.querySelectorAll("[data-tab]").forEach((button) => {
@@ -149,6 +161,33 @@ function buildTabs() {
       state.tab = button.dataset.tab;
       state.page = 1;
       if (state.tab === "queue") return loadQueue();
+      loadResumes();
+    };
+  });
+}
+function buildJobTabs() {
+  const block = $("jobTabsBlock");
+  const list = $("jobTabs");
+  if (!block || !list) return;
+  const jobs = visibleJobTypes();
+  block.hidden = !jobs.length;
+  if (!jobs.length) {
+    list.innerHTML = "";
+    return;
+  }
+  const counts = new Map((state.jobFacets || []).map((item) => [item.jobType, item.count || 0]));
+  const allCount = state.jobFacets.reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const buttons = [["", `全部简历 (${allCount})`]].concat(
+    jobs.map((job) => [job, `${job} (${counts.get(job) || 0})`]),
+  );
+  list.innerHTML = buttons
+    .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="${state.jobType === job ? "active" : ""}">${escapeHtml(label)}</button>`)
+    .join("");
+  list.querySelectorAll("[data-job-tab]").forEach((button) => {
+    button.onclick = () => {
+      state.jobType = button.dataset.jobTab || "";
+      $("filters").job_type.value = state.jobType;
+      state.page = 1;
       loadResumes();
     };
   });
@@ -161,6 +200,7 @@ function queryFromFilters() {
     if (!cleaned) continue;
     params[multiFilterKeys.has(key) ? "append" : "set"](key, cleaned);
   }
+  if (state.jobType) params.set("job_type", state.jobType);
   if (state.tab === "unread") params.set("read_status", "unread");
   if (state.tab === "viewed") params.set("read_status", "viewed");
   if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) { params.delete("decision"); params.append("decision", state.tab); }
@@ -174,6 +214,8 @@ async function loadResumes() {
   state.page = data.page || 1;
   state.pageSize = data.pageSize || 10;
   state.pages = data.pages || 0;
+  state.jobFacets = data.jobFacets || [];
+  buildJobTabs();
   renderRows();
   renderMiniList();
   renderPagination();
@@ -561,11 +603,13 @@ function bindPageActions() {
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
+    state.jobType = $("filters").job_type.value.trim();
     state.page = 1;
     loadResumes();
   });
   $("filters").addEventListener("reset", () =>
     setTimeout(() => {
+      state.jobType = "";
       state.page = 1;
       loadResumes();
     }, 0),
@@ -591,12 +635,12 @@ function bindPageActions() {
   bindResumeKeyboardNavigation();
 }
 async function afterLogin(user) {
-  state.user = user; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode(); setView(uiAccess().defaultView);
+  state.user = user; state.jobType = ""; state.jobFacets = []; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode(); setView(uiAccess().defaultView);
   if (canView("resumes")) await loadResumes();
 }
 async function logout() {
   await api("/api/auth/logout", { method: "POST" });
-  state.user = null; state.selectedId = ""; state.context = null;
+  state.user = null; state.selectedId = ""; state.context = null; state.jobType = ""; state.jobFacets = [];
   setResumeMemberMode();
   hrAuth.showLogin();
 }

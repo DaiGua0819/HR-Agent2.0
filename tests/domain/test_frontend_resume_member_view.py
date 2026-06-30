@@ -39,6 +39,34 @@ def test_member_resume_library_hides_admin_table_block() -> None:
     assert "overflow-y: hidden" in tabs_block
 
 
+def test_member_resume_library_has_large_job_tabs_above_status_tabs() -> None:
+    """Members choose allowed jobs from a large job-tab strip above status tabs."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="jobTabsBlock"' in html
+    assert html.index('id="jobTabsBlock"') < html.index('id="statusTabs"')
+    assert "function buildJobTabs()" in script
+    assert "resumeScope" in script and "jobFacets" in script
+    assert "visibleStatusTabs()" in script
+    assert 'key !== "needs_more_info" && key !== "queue"' in script
+    assert ".job-tabs-panel" in styles
+    assert ".job-tabs button" in styles
+    assert "min-height: 48px" in styles
+
+
+def test_member_resume_library_hides_more_info_action() -> None:
+    """Members do not need the needs-more-info review action."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert ".member-resume-mode #moreInfoBtn" in styles
+    block = styles.split(".member-resume-mode #moreInfoBtn", 1)[1].split("}", 1)[0]
+    assert "display: none" in block
+
+
 def test_resume_image_preview_has_single_scroll_container() -> None:
     """The rendered resume image should not create a nested vertical scrollbar."""
 

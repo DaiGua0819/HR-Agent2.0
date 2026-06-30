@@ -18,6 +18,7 @@ jobGroups:
 members:
   - names:
       - 佘欣平
+      - 佘新平
       - 杨梅
     jobGroups:
       - operation_ab

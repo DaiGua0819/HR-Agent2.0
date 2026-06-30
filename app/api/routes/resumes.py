@@ -103,6 +103,7 @@ async def list_resumes(
         "page": result.page,
         "pageSize": result.page_size,
         "pages": result.pages,
+        "jobFacets": result.job_facets,
     }
 
 

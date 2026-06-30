@@ -182,7 +182,44 @@ h3 { font-size: 15px; }
 .safety-pill.live { color: var(--danger); background: var(--danger-soft); }
 .library-panel {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto auto 1fr auto;
+}
+.job-tabs-panel {
+  padding: 18px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+.job-tabs-eyebrow {
+  margin: 0 0 8px;
+  color: #d84315;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.job-tabs-panel h2 {
+  margin-bottom: 12px;
+  font-size: 24px;
+}
+.job-tabs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+}
+.job-tabs button {
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 8px;
+  color: #0f172a;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.job-tabs button.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: #aac5ff;
 }
 .tabs {
   display: flex;
@@ -444,6 +481,9 @@ tr.active { background: #f0f6ff; }
   overflow: visible;
 }
 .member-resume-mode #resumeTableBlock {
+  display: none;
+}
+.member-resume-mode #moreInfoBtn {
   display: none;
 }
 @media (max-width: 1180px) {
