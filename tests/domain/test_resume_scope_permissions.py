@@ -170,13 +170,16 @@ def test_ai_intern_member_only_reads_ai_intern_resumes(monkeypatch) -> None:
 
 
 def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: Path) -> None:
-    """点击简历预览下载时使用 姓名_岗位.pdf 文件名，并继续受岗位范围限制。"""
+    """点击简历预览下载时使用 姓名_岗位.pdf 文件名，不额外限制岗位范围。"""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
     pdf_path = tmp_path / "source.pdf"
     content = b"%PDF-1.4\nfake resume\n%%EOF"
     pdf_path.write_bytes(content)
+    operation_pdf_path = tmp_path / "operation.pdf"
+    operation_content = b"%PDF-1.4\noperation resume\n%%EOF"
+    operation_pdf_path.write_bytes(operation_content)
     app = create_app()
     app.state.feishu_oauth_service = FakeFeishuOAuth(
         FeishuProfile(open_id="ou_ma", tenant_key="tenant-a", name="马弘毅"),
@@ -190,7 +193,13 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
                 job_type="AI应用开发实习生",
                 payload={"downloadPath": str(pdf_path)},
             ).to_record(),
-            _record("resume-operation", "企业内容运营负责人（B2B/短视频方向）"),
+            Resume(
+                id="resume-operation",
+                name="运营候选人",
+                phone="13800138001",
+                job_type="企业内容运营负责人（B2B/短视频方向）",
+                payload={"downloadPath": str(operation_pdf_path)},
+            ).to_record(),
         ]
     )
     app.state.resume_repository = repository
@@ -199,7 +208,7 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
     with TestClient(app) as client:
         _feishu_login(client)
         downloaded = client.get("/api/resumes/resume-ai-intern-file/download")
-        forbidden = client.get("/api/resumes/resume-operation/download")
+        out_of_scope_downloaded = client.get("/api/resumes/resume-operation/download")
 
     load_settings.cache_clear()
     assert downloaded.status_code == 200
@@ -207,7 +216,8 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
     disposition = downloaded.headers["content-disposition"]
     assert disposition.startswith("attachment;")
     assert quote("候选人甲_AI应用开发实习生.pdf") in disposition
-    assert forbidden.status_code == 403
+    assert out_of_scope_downloaded.status_code == 200
+    assert out_of_scope_downloaded.content == operation_content
 
 
 def _app_for_member(open_id: str, name: str):

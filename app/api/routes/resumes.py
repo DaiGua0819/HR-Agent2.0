@@ -154,8 +154,10 @@ async def get_resume_preview_image(resume_id: str, request: Request) -> Response
 async def download_resume(resume_id: str, request: Request) -> FileResponse:
     """按简历 id 下载简历文件（PDF），文件名格式：姓名_岗位.pdf。"""
 
+    require_session_payload(request)
     resume = _service(request).get_resume(resume_id)
-    _assert_resume_visible(request, resume)
+    if resume is None:
+        raise HTTPException(status_code=404, detail="resume_not_found")
     path = preview_file_path(resume)
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
