@@ -11,7 +11,7 @@ import random
 from app.agent.rules import is_ai_basic_rule, resume_request_prompt
 from app.core.constants import Platform
 
-BOSS_OPERATION_PREPHRASE = "可以发一份简历过来吗"
+BOSS_OPERATION_PREPHRASE = "你好可以发一份简历过来吗"
 OPERATION_RESUME_TYPES = {"运营A", "运营B"}
 DIRECT_RESUME_PROMPT_POOL = ("你好，方便发一份简历过来吗", "你好，可以看看简历吗")
 ALL_PLATFORM_DIRECT_RESUME_TYPES = {

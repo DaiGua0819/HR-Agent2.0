@@ -120,6 +120,22 @@ def rule_screening(rule: dict[str, Any] | None) -> dict[str, Any]:
     return {}
 
 
+def should_prioritize_screening(text: str, rule: dict[str, Any] | None) -> bool:
+    """部分岗位遇到泛问句时直接推进筛选，不先发通用 FAQ。"""
+
+    if not text or not rule:
+        return False
+    patterns = _string_list(rule.get("screeningFirstQuestionPatterns"))
+    kb = rule.get("companyKnowledgeBase") if isinstance(rule.get("companyKnowledgeBase"), dict) else {}
+    patterns.extend(_string_list(kb.get("screeningFirstQuestionPatterns")))
+    compact_text = _compact(text)
+    for pattern in patterns:
+        compact_pattern = _compact(pattern)
+        if compact_pattern and compact_pattern in compact_text:
+            return True
+    return False
+
+
 def find_knowledge_answer(
     question: str,
     rules: dict[str, Any] | None = None,
@@ -133,28 +149,30 @@ def find_knowledge_answer(
         return None
     kb = (rules or load_chat_rules()).get("companyKnowledgeBase") or {}
     candidates = _collect_answer_candidates(kb)
-    scored: list[tuple[int, str]] = []
+    scored: list[tuple[int, int, str]] = []
     compact_question = _compact(text)
     compact_position = _compact(position)
     for item in candidates:
         keys = [_compact(value) for value in item["keys"] if value]
         if not keys:
             continue
-        score = 0
+        position_bonus = 0
         if compact_position and any(
             compact_position in key or key in compact_position for key in keys
         ):
-            score += 2
-        if any(key and (key in compact_question or compact_question in key) for key in keys):
-            score += 5
-        if any(key and key[:2] in compact_question for key in keys if len(key) >= 2):
-            score += 1
-        if score > 0:
-            scored.append((score, item["answer"]))
+            position_bonus = 2
+        question_match_len = 0
+        for key in keys:
+            if key and (key in compact_question or compact_question in key):
+                question_match_len = max(question_match_len, len(key))
+        prefix_bonus = int(any(key and key[:2] in compact_question for key in keys if len(key) >= 2))
+        if question_match_len or prefix_bonus:
+            score = 5 + prefix_bonus + position_bonus
+            scored.append((question_match_len, score, item["answer"]))
     if not scored:
         return None
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0][1]
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return scored[0][2]
 
 
 def looks_like_question(text: str) -> bool:
@@ -176,6 +194,7 @@ def _collect_answer_candidates(value: Any) -> list[dict[str, Any]]:
         keys = (
             value.get("keywords")
             or value.get("match")
+            or value.get("questionPatterns")
             or value.get("question")
             or value.get("title")
         )

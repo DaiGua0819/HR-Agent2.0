@@ -22,6 +22,7 @@ from app.agent.rules import (
     looks_like_question,
     rule_screening,
     select_position_rule,
+    should_prioritize_screening,
 )
 from app.agent.screening import (
     analyze_position_screening,
@@ -98,9 +99,29 @@ class ConversationRunner:
         if self._needs_initial_ai_basic_phrase(conversation, rule):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
 
+        if rule_screening(rule) and should_prioritize_screening(last.text, rule):
+            return await self._handle_screening(state, conversation, rule, last.text)
+
         answer = self._knowledge_answer(last.text, conversation)
         if answer:
             screening = rule_screening(rule)
+            if is_ai_basic_rule(conversation.candidate.applied_position, rule):
+                phrase = initial_common_phrase(rule)
+                judgement = await judge_candidate_reply(last.text, question=phrase, llm=self.llm)
+                if judgement.status == "accept":
+                    failed = await self._send_or_fail(
+                        state,
+                        answer,
+                        action="answer_question",
+                        failure_reason="knowledge_answer_send_failed",
+                    )
+                    if failed:
+                        return failed
+                    return await self._request_resume_after_basic_accept(
+                        state,
+                        knowledge_answer=answer,
+                        judgement=asdict(judgement),
+                    )
             if is_direct_resume_rule(rule):
                 failed = await self._send_or_fail(
                     state,
@@ -148,9 +169,6 @@ class ConversationRunner:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
-        if is_direct_resume_rule(rule) and self._should_escalate_direct_question(last.text):
-            state["pending_question"] = last.text
-            return self._finish(state, "escalate", "unknown_question", evidence=last.text)
         if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)
         if looks_like_question(last.text):
@@ -225,18 +243,39 @@ class ConversationRunner:
             return handled
         judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
         if judgement.status == "accept":
-            result = await self.adapter.request_resume()
-            state["resume_requested"] = bool(
-                result.get("requested") or result.get("resumeReceived")
-            )
-            return self._finish(
+            return await self._request_resume_after_basic_accept(
                 state,
-                "request_resume",
-                "basic_accept",
                 judgement=asdict(judgement),
-                result=result,
             )
         return self._finish(state, "wait", f"basic_{judgement.status}", judgement=asdict(judgement))
+
+    async def _request_resume_after_basic_accept(
+        self,
+        state: GraphState,
+        *,
+        knowledge_answer: str = "",
+        judgement: dict[str, Any] | None = None,
+    ) -> GraphState:
+        """AI 基础条件明确接受后，处理已有简历状态或继续求简历。"""
+
+        judgement = judgement if isinstance(judgement, dict) else {}
+        handled, _ = await self._preflight_resume_request(
+            state,
+            knowledgeAnswer=knowledge_answer,
+            judgement=judgement,
+        )
+        if handled:
+            return handled
+        result = await self.adapter.request_resume()
+        state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
+        return self._finish(
+            state,
+            "request_resume",
+            "basic_accept",
+            knowledgeAnswer=knowledge_answer,
+            judgement=judgement,
+            result=result,
+        )
 
     async def _send_initial_ai_basic_phrase(
         self,
@@ -570,6 +609,7 @@ def _candidate_rejected_conversation(text: str) -> bool:
         "不太匹配",
         "不匹配",
         "不考虑",
+        "不太考虑",
         "暂不考虑",
         "不感兴趣",
         "不用了",

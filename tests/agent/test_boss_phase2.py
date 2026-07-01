@@ -9,6 +9,7 @@ import asyncio
 
 from app.agent.graph import build_recruit_graph
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
+from app.agent.rules import find_knowledge_answer
 from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
@@ -141,18 +142,18 @@ def test_boss_direct_resume_exchange_resume_intent_requests_resume() -> None:
     assert page.resume_requests == 1
 
 
-def test_boss_direct_resume_unknown_job_detail_question_escalates() -> None:
-    """Direct-resume jobs do not bypass unknown job-detail questions."""
+def test_boss_direct_resume_job_detail_question_requests_resume() -> None:
+    """直求简历岗位不答岗位细节，继续按配置求简历。"""
 
     state, page = run_case(
         Platform.BOSS,
-        conversation("DirectRole", [{"sender": "other", "text": "What are the job details?"}]),
+        conversation("外部财务产品顾问", [{"sender": "other", "text": "方便介绍一下岗位细节要求吗？"}]),
     )
 
-    assert state["next_action"] == "escalate"
-    assert state["stage"] == "unknown_question"
-    assert page.sent_messages == []
-    assert page.resume_requests == 0
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages == ["你好，方便发一份简历过来吗"]
+    assert page.resume_requests == 1
 
 
 def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
@@ -178,6 +179,82 @@ def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
     )
     assert state["next_action"] == "request_resume"
     assert page.resume_requests == 1
+
+
+def test_ai_basic_acceptance_with_interview_question_answers_then_requests_resume() -> None:
+    """AI 候选人接受基础条件后追问线上面试，先答再求简历。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": "基础条件确认话术"},
+                {"sender": "other", "text": "可以接受，请问支持线上面试吗？"},
+            ],
+        ),
+        llm=FakeLLM("accept"),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "basic_accept"
+    assert page.sent_messages == ["面试都是线上"]
+    assert page.resume_requests == 1
+
+
+def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
+    """HRBP 问还招/细节时不先答“还在招”，直接发岗位条件问题。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation("HRBP", [{"sender": "other", "text": "您好，hrbp职位还在招吗，方便介绍岗位细节吗？"}]),
+    )
+
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"]
+    assert page.resume_requests == 0
+
+
+def test_sales_paid_training_question_uses_question_patterns_without_requesting_resume() -> None:
+    """旧知识库 FAQ 的 questionPatterns 能命中；条件式接受不直接求简历。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation("销售管培生", [{"sender": "other", "text": "请问是带薪培训吗，如果是的话我接受"}]),
+    )
+
+    assert state["next_action"] == "answer_question"
+    assert page.sent_messages == ["是带薪培训"]
+    assert page.resume_requests == 0
+
+
+def test_specific_question_pattern_wins_over_position_boost() -> None:
+    """组合问法比岗位分区里的泛薪资关键词更具体，应优先命中。"""
+
+    rules = sample_rules()
+    rules["companyKnowledgeBase"]["sections"] = {
+        "人力资源": {
+            "matchPositions": ["人力资源管培生"],
+            "faq": [
+                {
+                    "topic": "hrSalary",
+                    "questionPatterns": ["薪资"],
+                    "answer": "具体工资由老板根据面试和个人情况定",
+                }
+            ],
+        }
+    }
+    rules["companyKnowledgeBase"]["faq"].append(
+        {
+            "topic": "scheduleAndTrainingCompensation",
+            "questionPatterns": ["工作时间和薪资构成"],
+            "answer": "工作时间是8-11，13-17，培训期间一天150",
+        }
+    )
+
+    answer = find_knowledge_answer("每天的工作时间和薪资构成是怎么样的呀", rules, position="人力资源管培生")
+
+    assert answer == "工作时间是8-11，13-17，培训期间一天150"
 
 
 def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
@@ -441,7 +518,29 @@ def sample_rules() -> dict[str, object]:
             },
             "销售管培生": {
                 "category": "sales",
-                "screeningQuestions": ["你是否接受出差？"],
+                "screening": {
+                    "mode": "ask_required_questions",
+                    "questions": [
+                        {"text": "你是否接受出差？", "required": True},
+                    ],
+                },
+            },
+            "HRBP": {
+                "category": "HRBP",
+                "screeningFirstQuestionPatterns": [
+                    "还在招",
+                    "岗位细节",
+                    "细节要求",
+                ],
+                "screening": {
+                    "mode": "ask_required_questions",
+                    "questions": [
+                        {
+                            "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+                            "required": True,
+                        },
+                    ],
+                },
             },
             "运营A": {
                 "category": "operation_direct_resume",
@@ -468,5 +567,23 @@ def sample_rules() -> dict[str, object]:
                 "resumeRequestPrompt": "please send resume",
             },
         },
-        "companyKnowledgeBase": {},
+        "companyKnowledgeBase": {
+            "faq": [
+                {
+                    "topic": "hiringStatus",
+                    "questionPatterns": ["还在招", "还招"],
+                    "answer": "还在招的",
+                },
+                {
+                    "topic": "salesCompensation",
+                    "questionPatterns": ["带薪培训"],
+                    "answer": "是带薪培训",
+                },
+                {
+                    "topic": "interviewProcess",
+                    "questionPatterns": ["线上面试", "线下面试"],
+                    "answer": "面试都是线上",
+                },
+            ]
+        },
     }
