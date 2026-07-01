@@ -105,6 +105,9 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
 
 
 async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    trusted_click = await _trusted_click_visible_request_resume_confirm(page)
+    if trusted_click.get("clicked"):
+        return True
     hard_click = await _click_request_resume_confirm_hard(page)
     if hard_click.get("clicked"):
         return True
@@ -121,13 +124,6 @@ async def _click_request_resume_confirm(page: BrowserPage) -> bool:
 
 
 async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
-    button = await _find_button_by_any_text(
-        page,
-        selectors.REQUEST_RESUME_CONFIRM_BUTTON,
-        selectors.REQUEST_RESUME_CONFIRM_TEXTS,
-    )
-    if button is not None:
-        return {"verified": True, "source": "button"}
     return await _confirm_prompt_visible(page)
 
 
@@ -160,18 +156,31 @@ async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
 
 
 async def _click_request_resume_button(page: BrowserPage) -> dict[str, object]:
+    trusted_click = await _trusted_click_visible_request_resume_button(page)
+    if trusted_click.get("clicked"):
+        verified = await _request_resume_click_verified(page)
+        if verified.get("verified"):
+            return {
+                "ok": True,
+                "action": "click",
+                "label": "BOSS求简历",
+                "verified": True,
+                "reason": verified.get("reason", ""),
+                "trustedClick": trusted_click,
+            }
     hard_click = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_BUTTON_CLICK_JS)
     if hard_click.get("clicked"):
         await asyncio.sleep(1)
         verified = await _request_resume_click_verified(page)
-        return {
-            "ok": bool(verified.get("verified")),
-            "action": "click",
-            "label": "BOSS求简历",
-            "verified": bool(verified.get("verified")),
-            "reason": verified.get("reason", ""),
-            "hardDom": hard_click,
-        }
+        if verified.get("verified"):
+            return {
+                "ok": True,
+                "action": "click",
+                "label": "BOSS求简历",
+                "verified": True,
+                "reason": verified.get("reason", ""),
+                "hardDom": hard_click,
+            }
     button = await _find_button_by_text(
         page, selectors.REQUEST_RESUME_BUTTON, selectors.REQUEST_RESUME_TEXT
     )
@@ -190,6 +199,46 @@ async def _click_request_resume_confirm_hard(page: BrowserPage) -> dict[str, obj
     if result.get("clicked"):
         await asyncio.sleep(1)
     return result
+
+
+async def _trusted_click_visible_request_resume_button(page: BrowserPage) -> dict[str, object]:
+    rect = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_BUTTON_RECT_JS)
+    return await _trusted_mouse_click(page, rect, source="trusted_request_resume_button")
+
+
+async def _trusted_click_visible_request_resume_confirm(page: BrowserPage) -> dict[str, object]:
+    rect = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_CONFIRM_RECT_JS)
+    return await _trusted_mouse_click(page, rect, source="trusted_request_resume_confirm")
+
+
+async def _trusted_mouse_click(
+    page: BrowserPage,
+    rect: dict[str, object],
+    *,
+    source: str,
+) -> dict[str, object]:
+    raw_page = getattr(page, "page", None)
+    mouse = getattr(raw_page, "mouse", None)
+    if mouse is None:
+        return {"clicked": False, "reason": "trusted_mouse_unavailable", "source": source}
+    if not rect.get("found"):
+        return {
+            "clicked": False,
+            "reason": rect.get("reason") or "target_not_found",
+            "source": source,
+        }
+    try:
+        x = float(rect.get("x") or 0) + float(rect.get("width") or 0) / 2
+        y = float(rect.get("y") or 0) + float(rect.get("height") or 0) / 2
+    except (TypeError, ValueError):
+        return {"clicked": False, "reason": "bad_target_rect", "source": source, "rect": rect}
+    await mouse.move(x, y)
+    await asyncio.sleep(0.2)
+    await mouse.down()
+    await asyncio.sleep(0.1)
+    await mouse.up()
+    await asyncio.sleep(1)
+    return {"clicked": True, "source": source, "x": round(x), "y": round(y), "rect": rect}
 
 
 async def _click_confirm_by_prompt_position(page: BrowserPage) -> dict[str, object]:
@@ -464,6 +513,56 @@ _BOSS_REQUEST_RESUME_BUTTON_CLICK_JS = r"""
 """
 
 
+_BOSS_REQUEST_RESUME_BUTTON_RECT_JS = r"""
+() => {
+  const marker = "boss_request_resume_button_rect";
+  const requestText = "求简历";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const roots = Array.from(document.querySelectorAll(
+    ".conversation-operate, .toolbar-box-right, .toolbar-box, .operate-box, .chat-op"
+  )).filter(visible);
+  const scoped = roots.length ? roots : [document.body];
+  const candidates = [];
+  for (const root of scoped) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      ".operate-icon-item, .operate-btn, .btn-request-resume, button, [role='button']"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && text(el).includes(requestText))
+    .sort((a, b) => {
+      const priority = (el) => {
+        if (el.matches(".operate-icon-item")) return 0;
+        if (el.matches(".operate-btn")) return 1;
+        return 2;
+      };
+      return priority(a) - priority(b) || text(a).length - text(b).length;
+    });
+  if (!matches.length) {
+    return { found: false, reason: "request_resume_button_not_found", source: marker };
+  }
+  const target = matches[0].closest(".operate-icon-item") || matches[0];
+  const rect = target.getBoundingClientRect();
+  return {
+    found: true,
+    source: marker,
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    text: text(target),
+  };
+}
+"""
+
+
 _BOSS_CONFIRM_PROMPT_VISIBLE_JS = r"""
 () => {
   const marker = "boss_confirm_prompt_visible";
@@ -490,6 +589,57 @@ _BOSS_CONFIRM_PROMPT_VISIBLE_JS = r"""
     bodyText.includes("取消") &&
     bodyText.includes("确定");
   return { verified: bodyVisible, source: bodyVisible ? `${marker}_body` : marker };
+}
+"""
+
+
+_BOSS_REQUEST_RESUME_CONFIRM_RECT_JS = r"""
+() => {
+  const marker = "boss_request_resume_confirm_rect";
+  const prompt = "确定向牛人索取简历吗";
+  const confirmTexts = new Set(["确定", "确认", "发送请求", "发起请求", "继续"]);
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const containers = Array.from(document.querySelectorAll(
+    ".exchange-tooltip, .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, " +
+    "[role='dialog'], .modal, [class*='dialog'], [class*='modal']"
+  )).filter((el) => visible(el) && text(el).includes(prompt));
+  if (!containers.length) {
+    return { found: false, reason: "request_resume_confirm_prompt_not_visible", source: marker };
+  }
+  const candidates = [];
+  for (const root of containers) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      ".boss-btn-primary, .boss-btn, button, [role='button'], .btn, a, span"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && confirmTexts.has(text(el)))
+    .sort((a, b) => {
+      const priority = (el) => el.matches(
+        ".boss-btn-primary, .btn-primary, .confirm-btn, .sure-btn"
+      ) ? 0 : 1;
+      return priority(a) - priority(b);
+    });
+  if (!matches.length) {
+    return { found: false, reason: "request_resume_confirm_not_found", source: marker };
+  }
+  const rect = matches[0].getBoundingClientRect();
+  return {
+    found: true,
+    source: marker,
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    text: text(matches[0]),
+  };
 }
 """
 
