@@ -567,19 +567,19 @@ def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> Non
     assert requested.already_requested is True
 
 
-def test_knowledge_answer_and_unknown_question_escalation() -> None:
-    """知识库命中则回答，未命中则不回复并转人工记录。"""
+def test_screening_position_answers_known_question_then_asks_next_question() -> None:
+    """筛选岗位：能答先答再问，不能答就直接问配置问题。"""
 
     state, page = run_case(conversation("销售管培生", [{"sender": "other", "text": "薪资多少？"}]))
-    assert state["next_action"] == "answer_question"
-    assert page.sent_messages == ["薪资以岗位说明为准。"]
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["薪资以岗位说明为准。", "你是否接受出差？"]
 
     state, page = run_case(
         conversation("销售管培生", [{"sender": "other", "text": "住宿政策是什么？"}])
     )
-    assert state["next_action"] == "escalate"
-    assert state["pending_question"] == "住宿政策是什么？"
-    assert page.sent_messages == []
+    assert state["next_action"] == "ask_screening"
+    assert "pending_question" not in state
+    assert page.sent_messages == ["你是否接受出差？"]
 
 
 def test_send_message_verification_uses_recent_mine_message_selector() -> None:

@@ -148,7 +148,7 @@ class ConversationRunner:
                     screening,
                     llm=self.llm,
                 )
-                if analysis.get("status") == "accept":
+                if analysis.get("status") in {"not_asked", "accept"}:
                     failed = await self._send_or_fail(
                         state,
                         answer,
@@ -175,6 +175,8 @@ class ConversationRunner:
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
         if looks_like_question(last.text):
+            if rule_screening(rule):
+                return await self._handle_screening(state, conversation, rule, last.text)
             state["pending_question"] = last.text
             return self._finish(state, "escalate", "unknown_question", evidence=last.text)
 

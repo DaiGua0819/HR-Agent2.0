@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from app.agent.graph import build_recruit_graph
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
@@ -103,6 +104,61 @@ class DelayedBossChatPage(FakePage):
         self.waited_selectors.append(selector)
         self.chat_ready = True
         return True
+
+
+class BossHardResumeActionPage(FakePage):
+    """Fake BOSS page where only hard DOM function calls can request resumes."""
+
+    def __init__(self, *, pending_resume_consent: bool = False) -> None:
+        super().__init__(
+            conversations=[
+                {
+                    "id": "hard-resume",
+                    "name": "求简历候选人",
+                    "position": "DirectRole",
+                    "label": "求简历候选人 DirectRole",
+                    "unread_count": 1,
+                    "messages": [{"sender": "other", "text": "你好"}],
+                }
+            ]
+        )
+        self.pending_resume_consent = pending_resume_consent
+        self.resume_button_clicked = False
+        self.resume_confirm_clicked = False
+        self.resume_consent_clicked = False
+
+    async def query_all(self, selector: str):
+        if (
+            "operate-icon-item" in selector
+            or "operate-btn" in selector
+            or "btn-request-resume" in selector
+            or "boss-dialog" in selector
+            or "exchange-tooltip" in selector
+        ):
+            return []
+        return await super().query_all(selector)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "boss.inspect_resume_request_state":
+            return {
+                "hasResumeAttachment": False,
+                "alreadyRequested": self.resume_confirm_clicked,
+                "pendingResumeConsent": self.pending_resume_consent
+                and not self.resume_consent_clicked,
+                "summary": "",
+            }
+        if "boss_resume_consent_click" in script:
+            self.resume_consent_clicked = True
+            return {"clicked": True, "source": "boss_resume_consent_click"}
+        if "boss_request_resume_button_click" in script:
+            self.resume_button_clicked = True
+            return {"clicked": True, "source": "boss_request_resume_button_click"}
+        if "boss_request_resume_confirm_click" in script:
+            self.resume_confirm_clicked = True
+            return {"clicked": True, "source": "boss_request_resume_confirm_click"}
+        if "boss_confirm_prompt_visible" in script:
+            return {"verified": self.resume_button_clicked, "source": "fake_hard_dom"}
+        return await super().eval_js(script, arg)
 
 
 def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
@@ -268,7 +324,7 @@ def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
 
 
 def test_sales_paid_training_question_uses_question_patterns_without_requesting_resume() -> None:
-    """旧知识库 FAQ 的 questionPatterns 能命中；条件式接受不直接求简历。"""
+    """筛选岗位能答的问题先答，再继续发送岗位筛选问题。"""
 
     state, page = run_case(
         Platform.BOSS,
@@ -278,9 +334,24 @@ def test_sales_paid_training_question_uses_question_patterns_without_requesting_
         ),
     )
 
-    assert state["next_action"] == "answer_question"
-    assert page.sent_messages == ["是带薪培训"]
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["是带薪培训", "你是否接受出差？"]
     assert page.resume_requests == 0
+
+
+def test_screening_unknown_question_asks_configured_question() -> None:
+    """筛选岗位遇到不能回答的问句时，跳过答疑并发送已配置问题。"""
+
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "国际业务管培生",
+            [{"sender": "other", "text": "希望和你聊聊这个职位，是否有时间呢？"}],
+        ),
+    )
+
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["你好，方便问下你之前做过化工原料外贸销售吗"]
 
 
 def test_specific_question_pattern_wins_over_position_boost() -> None:
@@ -422,6 +493,50 @@ def test_boss_existing_attachment_does_not_open_preview_download() -> None:
     assert result["downloaded"] is False
     assert result["reason"] == "boss_attachment_present_no_local_download"
     assert "preview_opened" not in page.current_conversation()
+
+
+def test_boss_request_resume_uses_hard_dom_function_call_for_button_and_confirm() -> None:
+    """BOSS 求简历按钮和确认按钮走硬 DOM function call，不依赖泛选择器。"""
+
+    page = BossHardResumeActionPage()
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["requested"] is True
+    assert result["confirmed"] is True
+    assert page.resume_button_clicked is True
+    assert page.resume_confirm_clicked is True
+
+
+def test_boss_request_resume_uses_hard_dom_function_call_for_resume_consent() -> None:
+    """候选人主动发附件简历时，recruiter_request_resume 应点击授权卡片的“同意”。"""
+
+    page = BossHardResumeActionPage(pending_resume_consent=True)
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["requested"] is True
+    assert result["acceptedResumeConsent"] is True
+    assert page.resume_consent_clicked is True
+    assert page.resume_button_clicked is False
+
+
+def test_boss_skill_documents_request_resume_function_call_contract() -> None:
+    """BOSS skill 必须写清楚求简历只能调用 recruiter_request_resume。"""
+
+    root = Path(__file__).resolve().parents[2]
+    skill = root / "app" / "agent" / "skills" / "boss-recruiter-automation" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    for expected in (
+        "求简历、同意候选人主动发来的附件简历，都必须调用 `recruiter_request_resume`",
+        "boss_resume_consent_click",
+        "boss_request_resume_button_click",
+        "boss_confirm_prompt_visible",
+        "boss_request_resume_confirm_click",
+        "不要让模型/agent 临场猜 selector 或手工点按钮",
+    ):
+        assert expected in text
 
 
 def test_boss_resume_state_detects_request_sent_system_message() -> None:
@@ -610,6 +725,18 @@ def sample_rules() -> dict[str, object]:
                     "questions": [
                         {
                             "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+                            "required": True,
+                        },
+                    ],
+                },
+            },
+            "国际业务管培生": {
+                "category": "foreign_trade",
+                "screening": {
+                    "mode": "ask_required_questions",
+                    "questions": [
+                        {
+                            "text": "你好，方便问下你之前做过化工原料外贸销售吗",
                             "required": True,
                         },
                     ],

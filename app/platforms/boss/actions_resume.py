@@ -34,6 +34,14 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
 
     state = await inspect_resume_request_state(page)
     if state.pending_resume_consent:
+        hard_consent = await _click_resume_consent(page)
+        if hard_consent.get("clicked"):
+            return {
+                "requested": True,
+                "acceptedResumeConsent": True,
+                "state": state,
+                "click": hard_consent,
+            }
         consent = await _find_button_by_text(
             page,
             selectors.REQUEST_RESUME_BUTTON,
@@ -66,17 +74,7 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
             "confirmed": bool(confirmed),
             "state": after_confirm,
         }
-    button = await _find_button_by_text(
-        page, selectors.REQUEST_RESUME_BUTTON, selectors.REQUEST_RESUME_TEXT
-    )
-    if button is None:
-        return {"requested": False, "blocked": True, "reason": "request_resume_button_not_found"}
-    click = await reliable_click_element(
-        page,
-        button,
-        label="BOSS求简历",
-        verify=lambda: _request_resume_click_verified(page),
-    )
+    click = await _click_request_resume_button(page)
     if not click.get("ok"):
         return {
             "requested": False,
@@ -107,6 +105,9 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
 
 
 async def _click_request_resume_confirm(page: BrowserPage) -> bool:
+    hard_click = await _click_request_resume_confirm_hard(page)
+    if hard_click.get("clicked"):
+        return True
     result = await reliable_confirm(
         page,
         selectors.REQUEST_RESUME_CONFIRM_BUTTON,
@@ -143,9 +144,52 @@ async def _request_resume_click_verified(page: BrowserPage) -> dict[str, object]
 
 
 async def _confirm_prompt_visible(page: BrowserPage) -> dict[str, object]:
+    hard_state = await _safe_eval_dict(page, _BOSS_CONFIRM_PROMPT_VISIBLE_JS)
+    if hard_state.get("verified"):
+        return hard_state
     body = await page.text()
     visible = "确定向牛人索取简历" in body and "取消" in body and "确定" in body
     return {"verified": visible, "source": "body_text" if visible else "none"}
+
+
+async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
+    result = await _safe_eval_dict(page, _BOSS_RESUME_CONSENT_CLICK_JS)
+    if result.get("clicked"):
+        await asyncio.sleep(1)
+    return result
+
+
+async def _click_request_resume_button(page: BrowserPage) -> dict[str, object]:
+    hard_click = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_BUTTON_CLICK_JS)
+    if hard_click.get("clicked"):
+        await asyncio.sleep(1)
+        verified = await _request_resume_click_verified(page)
+        return {
+            "ok": bool(verified.get("verified")),
+            "action": "click",
+            "label": "BOSS求简历",
+            "verified": bool(verified.get("verified")),
+            "reason": verified.get("reason", ""),
+            "hardDom": hard_click,
+        }
+    button = await _find_button_by_text(
+        page, selectors.REQUEST_RESUME_BUTTON, selectors.REQUEST_RESUME_TEXT
+    )
+    if button is None:
+        return {"ok": False, "reason": "request_resume_button_not_found", "hardDom": hard_click}
+    return await reliable_click_element(
+        page,
+        button,
+        label="BOSS求简历",
+        verify=lambda: _request_resume_click_verified(page),
+    )
+
+
+async def _click_request_resume_confirm_hard(page: BrowserPage) -> dict[str, object]:
+    result = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_CONFIRM_CLICK_JS)
+    if result.get("clicked"):
+        await asyncio.sleep(1)
+    return result
 
 
 async def _click_confirm_by_prompt_position(page: BrowserPage) -> dict[str, object]:
@@ -287,6 +331,232 @@ _CLICK_CONFIRM_BY_PROMPT_POSITION_JS = r"""
     if (clicked) return { clicked: true, source: "prompt_position", target: clicked };
   }
   return { clicked: false, reason: "confirm_point_not_found" };
+}
+"""
+
+
+_BOSS_RESUME_CONSENT_CLICK_JS = r"""
+() => {
+  const marker = "boss_resume_consent_click";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const fireClick = (el) => {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const EventClass = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new EventClass(eventName, {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }));
+    }
+    if (typeof el.click === "function") el.click();
+  };
+  const containers = Array.from(document.querySelectorAll(
+    ".message-item, .conversation-message, .chat-message-list, .custom-card, " +
+    ".card-wrap, .card-wrapper, .dialog-wrap.active, body"
+  )).filter((el) => visible(el) && text(el).includes("简历") && text(el).includes("是否同意"));
+  const scoped = containers.length ? containers : [document.body];
+  const candidates = [];
+  for (const root of scoped) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      "span.card-btn, a.btn, button, [role='button'], .btn"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && text(el) === "同意")
+    .sort((a, b) => {
+      const priority = (el) => el.matches("span.card-btn") ? 0 : el.matches("a.btn") ? 1 : 2;
+      return priority(a) - priority(b);
+    });
+  if (!matches.length) {
+    return { clicked: false, reason: "resume_consent_button_not_found", source: marker };
+  }
+  const target = matches[0];
+  fireClick(target);
+  return {
+    clicked: true,
+    source: marker,
+    tag: target.tagName.toLowerCase(),
+    className: String(target.className || ""),
+    text: text(target),
+  };
+}
+"""
+
+
+_BOSS_REQUEST_RESUME_BUTTON_CLICK_JS = r"""
+() => {
+  const marker = "boss_request_resume_button_click";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const fireClick = (el) => {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const EventClass = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new EventClass(eventName, {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }));
+    }
+    if (typeof el.click === "function") el.click();
+  };
+  const roots = Array.from(document.querySelectorAll(
+    ".conversation-operate, .toolbar-box-right, .toolbar-box, .operate-box, .chat-op"
+  )).filter(visible);
+  const scoped = roots.length ? roots : [document.body];
+  const candidates = [];
+  for (const root of scoped) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      ".operate-icon-item, .operate-btn, .btn-request-resume, button, [role='button']"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && text(el).includes("求简历"))
+    .sort((a, b) => {
+      const priority = (el) => {
+        if (el.matches(".operate-icon-item")) return 0;
+        if (el.matches(".operate-btn")) return 1;
+        return 2;
+      };
+      return priority(a) - priority(b) || text(a).length - text(b).length;
+    });
+  if (!matches.length) {
+    return { clicked: false, reason: "request_resume_button_not_found", source: marker };
+  }
+  const target = matches[0].closest(".operate-icon-item") || matches[0];
+  fireClick(target);
+  return {
+    clicked: true,
+    source: marker,
+    tag: target.tagName.toLowerCase(),
+    className: String(target.className || ""),
+    text: text(target),
+  };
+}
+"""
+
+
+_BOSS_CONFIRM_PROMPT_VISIBLE_JS = r"""
+() => {
+  const marker = "boss_confirm_prompt_visible";
+  const prompt = "确定向牛人索取简历";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const containers = Array.from(document.querySelectorAll(
+    ".exchange-tooltip, .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, " +
+    "[role='dialog'], .modal, [class*='dialog'], [class*='modal']"
+  )).filter((el) => visible(el) && text(el).includes(prompt));
+  if (containers.length) {
+    return { verified: true, source: marker, text: text(containers[0]).slice(0, 80) };
+  }
+  const bodyText = document.body && document.body.innerText
+    ? document.body.innerText.replace(/\s+/g, "")
+    : "";
+  const bodyVisible = bodyText.includes(prompt) &&
+    bodyText.includes("取消") &&
+    bodyText.includes("确定");
+  return { verified: bodyVisible, source: bodyVisible ? `${marker}_body` : marker };
+}
+"""
+
+
+_BOSS_REQUEST_RESUME_CONFIRM_CLICK_JS = r"""
+() => {
+  const marker = "boss_request_resume_confirm_click";
+  const prompt = "确定向牛人索取简历";
+  const confirmTexts = new Set(["确定", "确认", "发送请求", "发起请求", "继续"]);
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const fireClick = (el) => {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      const EventClass = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new EventClass(eventName, {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }));
+    }
+    if (typeof el.click === "function") el.click();
+  };
+  const containers = Array.from(document.querySelectorAll(
+    ".exchange-tooltip, .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, " +
+    "[role='dialog'], .modal, [class*='dialog'], [class*='modal']"
+  )).filter((el) => visible(el) && (text(el).includes(prompt) || text(el).includes("求简历")));
+  const scoped = containers.length ? containers : [document.body];
+  const candidates = [];
+  for (const root of scoped) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      ".boss-btn-primary, .boss-btn, button, [role='button'], .btn, a, span"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && confirmTexts.has(text(el)))
+    .sort((a, b) => {
+      const priority = (el) => el.matches(
+        ".boss-btn-primary, .btn-primary, .confirm-btn, .sure-btn"
+      ) ? 0 : 1;
+      return priority(a) - priority(b);
+    });
+  if (!matches.length) {
+    return { clicked: false, reason: "request_resume_confirm_not_found", source: marker };
+  }
+  const target = matches[0];
+  fireClick(target);
+  return {
+    clicked: true,
+    source: marker,
+    tag: target.tagName.toLowerCase(),
+    className: String(target.className || ""),
+    text: text(target),
+  };
 }
 """
 

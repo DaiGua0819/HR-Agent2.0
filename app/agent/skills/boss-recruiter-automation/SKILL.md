@@ -16,7 +16,7 @@ description: Use when operating BOSS recruiter automation for unread message han
 - 只回答候选人最近 1-3 条未回复问题：`recruiter_answer_candidate_questions`
 - 发送 AI 实习生公司基本情况/基础条件/常用语：`recruiter_send_company_info`
 - 发送指定常用语：`recruiter_send_common_phrase`
-- 求简历或同意候选人主动发来的简历：`recruiter_request_resume`；BOSS 运营 A/B、外部财务产品顾问、AI智能体解决方案负责人等直求简历岗位由工作流先发固定话术再求简历
+- 求简历、同意候选人主动发来的附件简历，都必须调用 `recruiter_request_resume`；BOSS 运营 A/B、外部财务产品顾问、AI智能体解决方案负责人等直求简历岗位由工作流先发固定话术再求简历
 - 最近 N 个联系人处理并观察后续回复：`recruiter_screen_recent_with_followup`
 - 推荐牛人/主动打招呼/主动联系候选人：`recruiter_proactive_contact_recommended_candidates`
 - 需要标记不合适且用户明确允许时：`recruiter_mark_unsuitable`
@@ -39,9 +39,17 @@ description: Use when operating BOSS recruiter automation for unread message han
 4. 如果岗位是 BOSS 运营 A/B（`运营A`、`运营B`、企业内容运营负责人（B2B/短视频方向）、B端社交媒体运营）：不发送筛选问题，不主动回答岗位细节/是否还招等泛问题；未收到简历且未求过简历时，先在聊天界面发送 `你好可以发一份简历过来吗` 或 `你好可以看看简历吗`，再执行“求简历”；已收到或已求过则不重复发送话术、不重复求简历。
 5. 如果岗位是财务 AI 团队新增直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer）：不发送筛选问题；先按岗位配置发送 `resumeRequestPrompt`，再执行“求简历”；简历入库分别归类为 `外部财务产品顾问`、`AI智能体解决方案负责人`。
 6. 如果岗位有 `companyKnowledgeBase.sections[岗位].screening`：按岗位配置的问题推进；必须项不满足就跳过；满足规则后求简历。
-7. 候选人提出问题时，先用岗位知识库回答；不知道或知识库没有的信息统一回复“暂时还不清楚”；如果对方既回答筛选条件又追问问题，先答疑，再继续求简历或下一步筛选。
+7. 需要发送筛选问题的岗位，先判断候选人当前是否有可回答的问题：知识库能答则先回复答案，再继续发送配置好的筛选问题；知识库不能答或规则外问题，不回复“暂时还不清楚”、不标记停在 `unknown_question`，直接跳过答疑并发送下一条配置筛选问题。
 8. 不能因为候选人主动发了简历附件就直接求简历；必须结合最近几轮对话判断是否仍然合适。
 9. 每个候选人的处理结果、未知问题、岗位、状态和时间都要记录，方便复查和后续补知识库。
+
+## BOSS 简历 Function Call 契约
+
+- 业务流程走到求简历、同意候选人主动发来的附件简历、或处理“对方想发送附件简历给您，您是否同意”卡片时，只调用 `recruiter_request_resume`。
+- `recruiter_request_resume` 内部固定先执行 `boss_resume_consent_click`：在聊天消息卡片中定位可见的“同意”按钮，优先点击 `span.card-btn`，其次点击 `a.btn`。
+- 如果没有待同意的附件简历卡片，`recruiter_request_resume` 再执行 `boss_request_resume_button_click`：在聊天工具栏 `.conversation-operate` / `.toolbar-box-right` 里点击可见的“求简历”按钮。
+- 点击“求简历”后必须用 `boss_confirm_prompt_visible` 检测“确定向牛人索取简历吗？”确认层；确认层出现时执行 `boss_request_resume_confirm_click` 点击“确定/确认/发送请求/发起请求/继续”。
+- 不要让模型/agent 临场猜 selector 或手工点按钮；所有真实点击都由 `recruiter_request_resume` 这条后端 function call 完成。
 
 ## 主动联系推荐牛人
 
