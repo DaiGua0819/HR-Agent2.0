@@ -107,6 +107,34 @@ def test_feishu_callback_maps_bootstrap_admin_by_name(monkeypatch) -> None:
     assert payload["feishu"]["adminMatchedBy"] == "bootstrap_name"
 
 
+def test_feishu_callback_maps_hexinhong_as_bootstrap_admin(monkeypatch) -> None:
+    """和新红 is a configured bootstrap admin and should enter as super admin."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    monkeypatch.delenv("FEISHU_ADMIN_OPEN_IDS", raising=False)
+    load_settings.cache_clear()
+    app = _app_with_feishu(
+        FeishuProfile(open_id="ou_hexinhong", tenant_key="tenant-a", name="和新红"),
+    )
+
+    with TestClient(app) as client:
+        start = client.get("/api/auth/feishu/start", follow_redirects=False)
+        state = start.headers["location"].split("state=", 1)[1]
+        response = client.get(
+            f"/api/auth/feishu/callback?code=ok-code&state={state}",
+            follow_redirects=False,
+        )
+        me = client.get("/api/auth/me")
+
+    load_settings.cache_clear()
+    assert response.status_code == 307
+    assert me.status_code == 200
+    payload = me.json()
+    assert payload["roles"] == ["super_admin"]
+    assert payload["uiAccess"]["defaultView"] == "dashboard"
+    assert payload["feishu"]["adminMatchedBy"] == "bootstrap_name"
+
+
 def test_feishu_callback_keeps_bootstrap_admin_names_after_open_id_is_set(
     monkeypatch,
 ) -> None:
