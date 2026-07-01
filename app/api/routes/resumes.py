@@ -150,6 +150,27 @@ async def get_resume_preview_image(resume_id: str, request: Request) -> Response
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(content=body, media_type=media_type)
 
+@router.get("/{resume_id}/download")
+async def download_resume(resume_id: str, request: Request) -> FileResponse:
+    """按简历 id 下载简历文件（PDF），文件名格式：姓名_岗位.pdf。"""
+
+    resume = _service(request).get_resume(resume_id)
+    _assert_resume_visible(request, resume)
+    path = preview_file_path(resume)
+    if path is None:
+        raise HTTPException(status_code=404, detail="resume_file_not_found")
+    name = (resume.name or resume.parsed_name or "").strip()
+    job = (resume.job_type or resume.applied_position or "").strip()
+    suffix = path.suffix.lower()
+    filename = f"{name}_{job}{suffix}" if name and job else path.name
+    return FileResponse(
+        path,
+        media_type=preview_media_type(path),
+        filename=filename,
+        content_disposition_type="attachment",
+    )
+
+
 
 @router.patch("/{resume_id}")
 async def update_resume(
@@ -207,6 +228,7 @@ def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[
             "hasFilePreview": file_path is not None,
             "filePreviewUrl": f"/api/resumes/{resume.id}/file" if file_path else "",
             "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
+            "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
             "reviewState": _review_state_payload(review_state),
         }
     )

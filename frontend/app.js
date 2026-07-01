@@ -569,7 +569,9 @@ function renderResumePreview(context) {
     preview.className = "resume-preview image-preview";
     preview.innerHTML = `
       <div class="resume-image-stage">
-        <img alt="${escapeHtml(resumeName(resume))} 简历内容" src="${escapeHtml(file.previewImageUrl)}" />
+        <a href="${escapeHtml(file.downloadUrl || '/api/resumes/' + resume.id + '/download')}" download class="resume-download-link" title="点击下载简历PDF">
+          <img alt="${escapeHtml(resumeName(resume))} 简历内容" src="${escapeHtml(file.previewImageUrl)}" />
+        </a>
       </div>
     `;
     return;

@@ -154,6 +154,7 @@ class ResumeReviewService:
                 "previewImageUrl": (
                     f"/api/resumes/{resume.id}/preview-image" if preview_path else ""
                 ),
+                "downloadUrl": f"/api/resumes/{resume.id}/download" if preview_path else "",
                 "name": preview_path.name if preview_path else "",
             },
             "permissions": {
