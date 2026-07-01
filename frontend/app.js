@@ -18,7 +18,7 @@ const state = {
   resumePrefetchingPages: new Set(),
   resumePrefetchingContexts: new Set(),
 };
-const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["undecided", "待判断"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
+const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const RESUME_LIBRARY_JOB_TYPES = [
   "AI应用开发实习生",
@@ -64,25 +64,25 @@ function escapeHtml(value) {
 const platformName = (value) => ({ boss: "BOSS", job51: "51job", zhilian: "智联", all: "全部" }[value] || value || "未知");
 const labelDecision = (value) => ({ suitable: "合适", unsuitable: "不合适", needs_more_info: "待补充", undecided: "待判断" }[value || "undecided"]);
 const decisionClass = (value) => ({ suitable: "success", unsuitable: "danger", needs_more_info: "warning" }[value] || "");
-function tdButtonClass(tone = "default", extra = "") {
+function tsButtonClass(tone = "default", extra = "") {
   const tones = {
-    default: "td-btn",
-    primary: "td-btn td-btn--primary",
-    success: "td-btn td-btn--success",
-    danger: "td-btn td-btn--danger",
-    warning: "td-btn td-btn--warning",
-    text: "td-btn td-btn--text",
+    default: "ts-btn",
+    primary: "ts-btn ts-btn--primary",
+    success: "ts-btn ts-btn--success",
+    danger: "ts-btn ts-btn--danger",
+    warning: "ts-btn ts-btn--warning",
+    text: "ts-btn ts-btn--text",
   };
   return [tones[tone] || tones.default, extra].filter(Boolean).join(" ");
 }
-function tdTagClass(value = "default") {
+function tsTagClass(value = "default") {
   const tone = decisionClass(value) || (value === "viewed" ? "success" : value === "unread" ? "warning" : "default");
-  return ["td-tag", tone !== "default" ? `td-tag--${tone}` : ""].filter(Boolean).join(" ");
+  return ["ts-tag", tone !== "default" ? `ts-tag--${tone}` : ""].filter(Boolean).join(" ");
 }
-function tdSegmentClass(active) {
-  return `td-segment-button${active ? " active" : ""}`;
+function tsSegmentClass(active) {
+  return `ts-segment-button${active ? " active" : ""}`;
 }
-const multiFilterKeys = new Set(["school_level", "graduation_year", "decision"]);
+const multiFilterKeys = new Set([]);
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
 function canonicalResumeJobType(value) {
   const text = String(value || "").trim();
@@ -193,13 +193,91 @@ const setAllowedNavigation = () => hrAuth.setAllowedNavigation(state.user);
 const isMemberUser = () => (state.user?.roles || []).includes("member") && !(state.user?.roles || []).includes("super_admin");
 function visibleStatusTabs() {
   if (!isMemberUser()) return tabs;
-  return tabs.filter(([key]) => key !== "needs_more_info" && key !== "queue");
+  return tabs.filter(([key]) => !["undecided", "needs_more_info", "queue"].includes(key));
 }
 function visibleJobTypes() {
   const values = state.user?.resumeScope?.jobTypes || [];
   if (!Array.isArray(values)) return [];
   if (values.includes("*")) return uniqueJobTypes(RESUME_LIBRARY_JOB_TYPES);
   return uniqueJobTypes(values);
+}
+function bindDockEffect(container, selector, options = {}) {
+  if (!container || container.dataset.dockBound === "true") return;
+  container.dataset.dockBound = "true";
+  const maxScale = options.maxScale || 1.3;
+  const radius = options.radius || 100;
+  const marginFactor = options.marginFactor || 15;
+  const vertical = Boolean(options.vertical);
+  const reset = () => {
+    container.querySelectorAll(selector).forEach((item) => {
+      requestAnimationFrame(() => {
+        item.style.transform = "scale(1)";
+        item.style.margin = "0px";
+        item.style.zIndex = "1";
+      });
+    });
+  };
+  container.addEventListener("mousemove", (event) => {
+    container.querySelectorAll(selector).forEach((item) => {
+      const rect = item.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const distanceX = event.clientX - centerX;
+      const distanceY = event.clientY - centerY;
+      const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+      let scale = 1;
+      let margin = "0px";
+      let zIndex = "1";
+      if (distance < radius) {
+        const normalizedDistance = distance / radius;
+        scale = 1 + (maxScale - 1) * Math.max(0, 1 - Math.pow(normalizedDistance, 1.6));
+        if (scale > 1.03) {
+          const marginValue = (scale - 1) * marginFactor;
+          margin = vertical ? `${marginValue}px 0px` : `0px ${marginValue}px`;
+          zIndex = String(Math.round(scale * 10));
+        }
+      }
+      requestAnimationFrame(() => {
+        item.style.transform = `scale(${scale})`;
+        item.style.margin = margin;
+        item.style.zIndex = zIndex;
+      });
+    });
+  });
+  container.addEventListener("mouseleave", reset);
+}
+function toggleLibraryPanel() {
+  const panel = $("resumeLibraryPanel");
+  const button = $("libraryToggleBtn");
+  const icon = $("libraryIcon");
+  if (!panel || !button) return;
+  const workspace = panel.closest(".ts-resume-workspace");
+  const collapsed = !panel.classList.contains("is-library-collapsed");
+  panel.classList.toggle("is-library-collapsed", collapsed);
+  workspace?.classList.toggle("is-library-collapsed", collapsed);
+  button.setAttribute("aria-expanded", String(!collapsed));
+  button.setAttribute("title", collapsed ? "展开名单" : "收起名单");
+  if (icon) icon.textContent = collapsed ? "v" : "^";
+}
+function toggleFilterPanel() {
+  const panel = $("filterPanel");
+  const button = $("filterToggleBtn");
+  const icon = $("filterIcon");
+  if (!panel || !button) return;
+  const nextOpen = !panel.classList.contains("is-open");
+  panel.classList.toggle("is-open", nextOpen);
+  button.setAttribute("aria-expanded", String(nextOpen));
+  if (icon) icon.textContent = nextOpen ? "⌃" : "⌄";
+}
+function toggleSegmentPanel() {
+  const panel = $("segmentPanel");
+  const button = $("segmentToggleBtn");
+  const icon = $("segmentIcon");
+  if (!panel || !button) return;
+  const nextOpen = !panel.classList.contains("is-open");
+  panel.classList.toggle("is-open", nextOpen);
+  button.setAttribute("aria-expanded", String(nextOpen));
+  if (icon) icon.textContent = nextOpen ? "^" : "v";
 }
 function setResumeMemberMode() {
   document.body.classList.toggle("member-resume-mode", isMemberUser());
@@ -303,7 +381,7 @@ function renderDailyRows(items) {
 function buildTabs() {
   if (!visibleStatusTabs().some(([key]) => key === state.tab)) state.tab = "all";
   $("statusTabs").innerHTML = visibleStatusTabs()
-    .map(([key, label]) => `<button data-tab="${key}" class="${tdSegmentClass(state.tab === key)}">${label}</button>`)
+    .map(([key, label]) => `<button data-tab="${key}" class="${tsSegmentClass(state.tab === key)}">${label}</button>`)
     .join("");
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.onclick = () => {
@@ -336,7 +414,7 @@ function buildJobTabs() {
     jobs.map((job) => [job, `${displayResumeJobType(job)} (${counts.get(canonicalResumeJobType(job)) || 0})`]),
   );
   list.innerHTML = buttons
-    .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="${tdSegmentClass(state.jobType === job)}">${escapeHtml(label)}</button>`)
+    .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="filter-tag ${state.jobType === job ? "active" : ""}">${escapeHtml(label)}</button>`)
     .join("");
   list.querySelectorAll("[data-job-tab]").forEach((button) => {
     button.onclick = () => {
@@ -437,7 +515,9 @@ async function loadQueue() {
   renderQueue(items);
 }
 function renderRows() {
-  $("resumeRows").innerHTML = state.resumes
+  const rows = $("resumeRows");
+  if (!rows) return;
+  rows.innerHTML = state.resumes
     .map((resume) => {
       const review = resume.reviewState || {};
       return `
@@ -447,10 +527,10 @@ function renderRows() {
           <td>${escapeHtml(platformName(resumePlatform(resume)))}</td>
           <td>${escapeHtml(resumeOwner(resume))}</td>
           <td>${escapeHtml(resume.match_score ?? resume.matchScore ?? "")}</td>
-          <td><span class="${tdTagClass(review.readStatus === "viewed" ? "viewed" : "unread")}">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
-              <span class="${tdTagClass(review.decision)}">${labelDecision(review.decision)}</span></td>
+          <td><span class="${tsTagClass(review.readStatus === "viewed" ? "viewed" : "unread")}">${review.readStatus === "viewed" ? "已看" : "未看"}</span>
+              <span class="${tsTagClass(review.decision)}">${labelDecision(review.decision)}</span></td>
           <td>${escapeHtml((resume.updated_at || resume.updatedAt || "").slice(0, 10))}</td>
-          <td><button class="${tdButtonClass("text")}" data-open="${resume.id}">查看</button> <button class="${tdButtonClass("success")}" data-decision="${resume.id}:suitable">合适</button></td>
+          <td><button class="${tsButtonClass("text")}" data-open="${resume.id}">查看</button> <button class="${tsButtonClass("success")}" data-decision="${resume.id}:suitable">合适</button></td>
         </tr>
       `;
     })
@@ -462,18 +542,44 @@ function renderMiniList() {
   $("miniList").innerHTML = state.resumes
     .map((resume) => {
       const tier = resumeSchoolTierBadge(resume);
+      const review = resume.reviewState || {};
+      const readLabel = review.readStatus === "viewed" ? "已读" : "未读";
+      const decision = labelDecision(review.decision);
+      const imported = resumeImportTime(resume);
       return `
-        <button class="mini-item ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}">
-          <span class="mini-heading">
+        <button class="candidate-card ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}" style="transform: scale(1); z-index: 1; margin: 0px;">
+          <span class="candidate-card__heading">
             <strong>${escapeHtml(resumeName(resume))}</strong>
-            ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : ""}
+            <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
           </span>
-          <small>${escapeHtml(resumeJob(resume))}</small>
+          <span class="candidate-card__job">${escapeHtml(resumeJob(resume))}</span>
+          <span class="candidate-card__meta">
+            <span class="candidate-card__meta-item candidate-card__meta-school">
+              <span class="candidate-card__meta-label">院校</span>
+              <span class="candidate-card__meta-value">${escapeHtml(resumeSchool(resume) || "待提取")}</span>
+            </span>
+            <span class="candidate-card__meta-item candidate-card__meta-tier">
+              ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : `<span class="candidate-card__meta-value">${escapeHtml(resumeEducationLine(resume))}</span>`}
+            </span>
+            <span class="candidate-card__meta-item candidate-card__meta-date">${escapeHtml(imported)}</span>
+            <span class="candidate-card__meta-item candidate-card__meta-platform">${escapeHtml(platformName(resumePlatform(resume)))}</span>
+            <span class="candidate-card__meta-item candidate-card__meta-read">${escapeHtml(readLabel)}</span>
+          </span>
         </button>
       `;
     })
     .join("");
+  $("emptyState").textContent = state.resumes.length ? "" : "当前筛选条件下暂无简历";
+  $("emptyState").style.display = state.resumes.length ? "none" : "block";
   bindRowActions();
+  bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.16, radius: 130, marginFactor: 20, vertical: true });
+  requestAnimationFrame(scrollSelectedCandidateIntoView);
+}
+function scrollSelectedCandidateIntoView() {
+  const list = $("miniList");
+  const selected = list?.querySelector(".candidate-card.active");
+  if (!selected) return;
+  selected.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
 }
 function renderPagination() {
   const node = $("resumePagination");
@@ -482,9 +588,9 @@ function renderPagination() {
   const current = Math.min(Math.max(1, state.page || 1), pages);
   node.innerHTML = `
     <span>第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
-    <div class="td-pagination">
-      <button class="${tdButtonClass("default")}" data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
-      <button class="${tdButtonClass("primary")}" data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
+    <div class="ts-pagination">
+      <button class="${tsButtonClass("default")}" data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
+      <button class="${tsButtonClass("primary")}" data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
     </div>
   `;
   node.querySelectorAll("[data-page-move]").forEach((button) => {
@@ -506,7 +612,7 @@ function renderQueue(items) {
               <strong>${escapeHtml(resumeName(resume))}</strong>
               <span>${escapeHtml(resumeJob(resume))}</span>
               <p>${escapeHtml(item.assignment?.note || "合适待复核")}</p>
-              <button class="${tdButtonClass("primary")}" data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
+              <button class="${tsButtonClass("primary")}" data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
             </article>
           `;
         })
@@ -541,7 +647,7 @@ async function openResume(id) {
   $("previewTitle").textContent = "正在读取简历...";
   $("resumePreview").className = "resume-preview";
   $("resumePreview").textContent = "正在加载候选人详情和审阅摘要，请稍候。";
-  $("summaryContent").innerHTML = `<p class="muted">正在读取审阅摘要...</p>`;
+  $("summaryCards").innerHTML = `<p class="muted">正在读取审阅摘要...</p>`;
   state.context = await api(`/api/resumes/${id}/review-context`);
   state.resumeContextCache.set(id, state.context);
   renderRows();
@@ -584,22 +690,17 @@ function renderContext() {
   if (!context) return;
   const resume = context.resume;
   const review = context.reviewState || {};
+  const schoolTier = resumeSchoolTierBadge(resume) || resumeSchoolLevel(resume);
+  const schoolTierMarkup = schoolTier ? `<span class="summary-school-level">${escapeHtml(schoolTier)}</span>` : "";
   $("previewTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
   renderResumePreview(context);
-  $("summaryContent").innerHTML = `
-    <div class="summary-card td-summary-card"><h3>候选人</h3>
+  $("summaryCards").innerHTML = `
+    <div class="summary-card ts-summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
-      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}</p>
+      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}${schoolTierMarkup}</p>
       <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p></div>
-    <div class="summary-card td-summary-card"><h3>评分</h3>
+    <div class="summary-card ts-summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
-    <div class="summary-card td-summary-card"><h3>来源</h3>
-      <p>平台：${escapeHtml(platformName(context.conversation?.platform))}</p>
-      <p>负责人：${escapeHtml(context.conversation?.owner || "")}</p>
-      <p>会话：${escapeHtml(context.conversation?.sessionId || "未桥接")}</p></div>
-    <div class="summary-card td-summary-card"><h3>审阅</h3>
-      <p>查看：${review.readStatus === "viewed" ? "已看" : "未看"}</p>
-      <p>判断：${labelDecision(review.decision)}</p><p>备注：${escapeHtml(review.note || "暂无")}</p></div>
   `;
 }
 async function setDecision(id, decision) {
@@ -643,7 +744,7 @@ async function advanceAfterReviewAction(id) {
     renderMiniList();
     $("previewTitle").textContent = "没有更多简历";
     $("resumePreview").textContent = "当前筛选条件下已经没有待查看的简历。";
-    $("summaryContent").innerHTML = `<p class="muted">当前筛选条件下没有更多简历。</p>`;
+    $("summaryCards").innerHTML = `<p class="muted">当前筛选条件下没有更多简历。</p>`;
   }
 }
 async function requestInterview() {
@@ -694,7 +795,7 @@ async function loadInterviewSessions() {
   try {
     const data = await api("/api/interview-center/sessions");
     $("interviewSessions").innerHTML = (data.items || []).length
-      ? data.items.map((item) => `<button class="mini-item">${escapeHtml(item.candidateName || item.id)}</button>`).join("")
+      ? data.items.map((item) => `<button class="candidate-card">${escapeHtml(item.candidateName || item.id)}</button>`).join("")
       : `<div class="empty-inline">暂无面试会话。</div>`;
   } catch (error) {
     $("interviewSessions").innerHTML = `<div class="empty-inline">面试会话读取失败：${escapeHtml(error.message)}</div>`;
@@ -723,7 +824,7 @@ function renderInterviewPreflight(selected) {
   const ready = Boolean(preflight.readyToExchange || preflight.workerResult?.readyToExchange);
   if (live) {
     return `
-      <div class="td-preflight-card">
+      <div class="ts-preflight-card">
         <p>入口状态：${live.accepted ? "约面试已发起" : "约面试失败"}</p>
         <p>结果：${escapeHtml(live.reason || live.workerResult?.reason || "已发送加我微信沟通")}</p>
       </div>
@@ -732,26 +833,26 @@ function renderInterviewPreflight(selected) {
   if (preflight.requiresConfirmation) {
     const candidates = preflight.candidates || [];
     const buttons = candidates.map((item) => `
-      <button class="mini-item" data-select-interview-session="${escapeHtml(item.id || "")}">
+      <button class="candidate-card" data-select-interview-session="${escapeHtml(item.id || "")}">
         <strong>${escapeHtml(item.candidateName || "候选会话")}</strong>
         <span>${escapeHtml(item.position || "")}</span>
       </button>
     `).join("");
     return `
-      <div class="td-preflight-card">
+      <div class="ts-preflight-card">
         <p>入口状态：需要人工确认候选会话</p>
-        <div class="mini-list">${buttons || `<div class="empty-inline td-empty-state">无候选会话</div>`}</div>
+        <div class="mini-list">${buttons || `<div class="empty-inline ts-empty-state">无候选会话</div>`}</div>
       </div>
     `;
   }
   return `
-    <div class="td-preflight-card">
+    <div class="ts-preflight-card">
       <p>入口状态：${ready ? "预检通过，可以确认发起约面试" : "预检未通过"}</p>
       <p>平台：${escapeHtml(platformName(preflight.platform))} / ${escapeHtml(preflight.owner || "")}</p>
       <p>候选人：${escapeHtml(contact.displayName || "")}</p>
       <p>核对岗位：${escapeHtml(contact.appliedPosition || "")}</p>
       <p>换微信按钮：${ready ? "已定位" : escapeHtml(preflight.reason || preflight.workerResult?.reason || "未定位")}</p>
-      ${ready ? `<button class="${tdButtonClass("primary", "wide")}" data-confirm-interview>确认发起约面试</button>` : ""}
+      ${ready ? `<button class="${tsButtonClass("primary", "wide")}" data-confirm-interview>确认发起约面试</button>` : ""}
     </div>
   `;
 }
@@ -763,7 +864,7 @@ function renderAutomationControls() {
   const owners = state.user?.resumeScope?.owners || ["宋峰峰", "和新红"];
   const platforms = state.user?.resumeScope?.platforms || ["boss", "job51", "zhilian"];
   $("automationControls").innerHTML = `
-    <button class="control-card primary td-btn td-btn--primary" data-process-all>按配置处理全部</button>
+    <button class="control-card primary ts-btn ts-btn--primary" data-process-all>按配置处理全部</button>
     ${owners
       .flatMap((owner) =>
         platforms.map(
@@ -830,6 +931,9 @@ function bindResumeKeyboardNavigation() {
 function bindPageActions() {
   hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
+  $("libraryToggleBtn").onclick = toggleLibraryPanel;
+  $("segmentToggleBtn").onclick = toggleSegmentPanel;
+  $("filterToggleBtn").onclick = toggleFilterPanel;
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
     state.jobType = $("filters").job_type.value.trim();
@@ -861,6 +965,7 @@ function bindPageActions() {
   $("logoutBtn").onclick = logout;
   $("prevBtn").onclick = () => move(-1);
   $("nextBtn").onclick = () => move(1);
+  bindDockEffect($("actionDock"), ".action-dock-btn", { maxScale: 1.3, radius: 110, marginFactor: 15 });
   ["generateQuestionsBtn", "syncFeishuBtn", "renderImageBtn", "backfillBtn"].forEach((id) => {
     $(id).onclick = () => ($("interviewStatus").textContent = "当前首版界面已保留入口，真实调用继续复用后端面试中心接口。");
   });
@@ -868,7 +973,9 @@ function bindPageActions() {
 }
 async function afterLogin(user) {
   clearResumePrefetchCache();
-  state.user = user; state.jobType = ""; state.jobFacets = []; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode(); setView(uiAccess().defaultView);
+  state.user = user; state.jobType = ""; state.jobFacets = []; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode();
+  const landingView = canView("resumes") ? "resumes" : uiAccess().defaultView;
+  setView(landingView);
   if (canView("resumes")) await loadResumes();
 }
 async function logout() {
