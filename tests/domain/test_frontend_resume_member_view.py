@@ -237,6 +237,18 @@ def test_resume_image_preview_has_single_scroll_container() -> None:
     assert "overflow: visible" in image_stage_block
 
 
+def test_resume_image_preview_left_click_downloads_file() -> None:
+    """The resume preview image should be wrapped in a download link."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "resume-download-link" in script
+    assert "download class=\"resume-download-link\"" in script
+    assert "'/api/resumes/' + resume.id + '/download'" in script
+    assert ".resume-download-link" in styles
+
+
 def test_resume_keyboard_navigation_crosses_page_boundaries() -> None:
     """Left/right shortcuts should move between resumes and across pages."""
 

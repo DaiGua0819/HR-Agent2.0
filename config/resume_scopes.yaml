@@ -1,4 +1,8 @@
 jobGroups:
+  ai_intern:
+    label: AI实习生
+    jobTypes:
+      - AI应用开发实习生
   operation_ab:
     label: 运营A/B
     jobTypes:
@@ -12,6 +16,10 @@ jobGroups:
       - 投资交易策略研究员（量化与市场情绪方向）
 
 members:
+  - names:
+      - 马弘毅
+    jobGroups:
+      - ai_intern
   - names:
       - 佘欣平
       - 佘新平

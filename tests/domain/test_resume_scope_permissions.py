@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from app.auth.feishu_oauth import FeishuProfile
 from app.control_plane.main import create_app
@@ -147,6 +148,68 @@ def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
     ] == [{"jobType": "投资交易策略研究员（量化与市场情绪方向）", "count": 2}]
 
 
+def test_ai_intern_member_only_reads_ai_intern_resumes(monkeypatch) -> None:
+    """马弘毅登录后只看到 AI 实习生岗位简历。"""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    app = _app_for_member("ou_ma", "马弘毅")
+
+    with TestClient(app) as client:
+        _feishu_login(client)
+        me = client.get("/api/auth/me")
+        listed = client.get("/api/resumes")
+        forbidden = client.get("/api/resumes/resume-operation")
+
+    load_settings.cache_clear()
+    assert me.status_code == 200
+    assert me.json()["resumeScope"]["jobTypes"] == ["AI应用开发实习生"]
+    assert [item["id"] for item in listed.json()["items"]] == ["resume-ai-intern"]
+    assert listed.json()["jobFacets"] == [{"jobType": "AI应用开发实习生", "count": 1}]
+    assert forbidden.status_code == 403
+
+
+def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: Path) -> None:
+    """点击简历预览下载时使用 姓名_岗位.pdf 文件名，并继续受岗位范围限制。"""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    pdf_path = tmp_path / "source.pdf"
+    content = b"%PDF-1.4\nfake resume\n%%EOF"
+    pdf_path.write_bytes(content)
+    app = create_app()
+    app.state.feishu_oauth_service = FakeFeishuOAuth(
+        FeishuProfile(open_id="ou_ma", tenant_key="tenant-a", name="马弘毅"),
+    )
+    repository = ResumeRepository.in_memory(
+        [
+            Resume(
+                id="resume-ai-intern-file",
+                name="候选人甲",
+                phone="13800138000",
+                job_type="AI应用开发实习生",
+                payload={"downloadPath": str(pdf_path)},
+            ).to_record(),
+            _record("resume-operation", "企业内容运营负责人（B2B/短视频方向）"),
+        ]
+    )
+    app.state.resume_repository = repository
+    app.state.resume_service = ResumeService(repository)
+
+    with TestClient(app) as client:
+        _feishu_login(client)
+        downloaded = client.get("/api/resumes/resume-ai-intern-file/download")
+        forbidden = client.get("/api/resumes/resume-operation/download")
+
+    load_settings.cache_clear()
+    assert downloaded.status_code == 200
+    assert downloaded.content == content
+    disposition = downloaded.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert quote("候选人甲_AI应用开发实习生.pdf") in disposition
+    assert forbidden.status_code == 403
+
+
 def _app_for_member(open_id: str, name: str):
     app = create_app()
     app.state.feishu_oauth_service = FakeFeishuOAuth(
@@ -159,6 +222,7 @@ def _app_for_member(open_id: str, name: str):
             _record("resume-finance", "外部财务产品顾问"),
             _record("resume-investment", "投资交易策略研究员（量化与市场情绪方向）"),
             _record("resume-investment-short", "投资交易策略研究员"),
+            _record("resume-ai-intern", "AI应用开发实习生"),
         ]
     )
     app.state.resume_repository = repository
