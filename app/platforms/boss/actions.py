@@ -40,6 +40,11 @@ async def open_chat_page(page: BrowserPage) -> None:
     """打开 BOSS 招聘端聊天页。"""
 
     await page.goto(selectors.CHAT_URL)
+    await page.wait_for(
+        ".chat-message-filter, .chat-message-filter-left, .chat-user, "
+        f"{selectors.SESSION_ITEM}",
+        timeout_ms=12000,
+    )
 
 
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:

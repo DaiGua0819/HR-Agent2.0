@@ -59,6 +59,52 @@ class BossPreviewDownloadPage(FakePage):
         return await super().eval_js(script, arg)
 
 
+class DelayedBossChatPage(FakePage):
+    """Fake BOSS page whose chat UI appears only after wait_for is called."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            conversations=[
+                {
+                    "id": "delayed-unread",
+                    "name": "延迟候选人",
+                    "position": "AI应用开发实习生",
+                    "label": "延迟候选人 AI应用开发实习生",
+                    "unread_count": 1,
+                }
+            ]
+        )
+        self.chat_ready = False
+        self.waited_selectors: list[str] = []
+
+    async def query_all(self, selector: str):
+        if not self.chat_ready and (
+            "chat-message-filter" in selector
+            or ".user-list-item" in selector
+            or ".geek-item" in selector
+        ):
+            return []
+        return await super().query_all(selector)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "chat_message_filter_left_span" in script:
+            if not self.chat_ready:
+                return {"selected": False, "reason": "unread_filter_not_found"}
+            self.unread_selected = True
+            return {"selected": True, "label": "未读", "source": "fake_boss_filter"}
+        if (
+            ".chat-message-filter-left span.active" in script
+            and "chat_message_filter_left_span" not in script
+        ):
+            return "未读" if self.unread_selected else "全部"
+        return await super().eval_js(script, arg)
+
+    async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
+        self.waited_selectors.append(selector)
+        self.chat_ready = True
+        return True
+
+
 def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
     """同一张图和同一个 runner 类可分别注入智联/BOSS adapter。"""
 
@@ -147,7 +193,10 @@ def test_boss_direct_resume_job_detail_question_requests_resume() -> None:
 
     state, page = run_case(
         Platform.BOSS,
-        conversation("外部财务产品顾问", [{"sender": "other", "text": "方便介绍一下岗位细节要求吗？"}]),
+        conversation(
+            "外部财务产品顾问",
+            [{"sender": "other", "text": "方便介绍一下岗位细节要求吗？"}],
+        ),
     )
 
     assert state["next_action"] == "request_resume"
@@ -207,7 +256,10 @@ def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
 
     state, page = run_case(
         Platform.BOSS,
-        conversation("HRBP", [{"sender": "other", "text": "您好，hrbp职位还在招吗，方便介绍岗位细节吗？"}]),
+        conversation(
+            "HRBP",
+            [{"sender": "other", "text": "您好，hrbp职位还在招吗，方便介绍岗位细节吗？"}],
+        ),
     )
 
     assert state["next_action"] == "ask_screening"
@@ -220,7 +272,10 @@ def test_sales_paid_training_question_uses_question_patterns_without_requesting_
 
     state, page = run_case(
         Platform.BOSS,
-        conversation("销售管培生", [{"sender": "other", "text": "请问是带薪培训吗，如果是的话我接受"}]),
+        conversation(
+            "销售管培生",
+            [{"sender": "other", "text": "请问是带薪培训吗，如果是的话我接受"}],
+        ),
     )
 
     assert state["next_action"] == "answer_question"
@@ -252,7 +307,11 @@ def test_specific_question_pattern_wins_over_position_boost() -> None:
         }
     )
 
-    answer = find_knowledge_answer("每天的工作时间和薪资构成是怎么样的呀", rules, position="人力资源管培生")
+    answer = find_knowledge_answer(
+        "每天的工作时间和薪资构成是怎么样的呀",
+        rules,
+        position="人力资源管培生",
+    )
 
     assert answer == "工作时间是8-11，13-17，培训期间一天150"
 
@@ -398,6 +457,20 @@ def test_boss_unread_list_requires_numeric_badge() -> None:
     refs = asyncio.run(boss_actions.read_unread_conversations(page, owner="宋峰峰"))
 
     assert [item.conversation_id for item in refs] == ["new-unread"]
+
+
+def test_boss_open_chat_page_waits_for_chat_filter_before_unread_scan() -> None:
+    """BOSS SPA 刚 goto 后要等聊天筛选栏渲染，否则会误判没有未读。"""
+
+    page = DelayedBossChatPage()
+
+    asyncio.run(boss_actions.open_chat_page(page))
+    result = asyncio.run(boss_actions.select_unread_filter(page))
+    refs = asyncio.run(boss_actions.read_unread_conversations(page, owner="宋峰峰"))
+
+    assert result["selected"] is True
+    assert [item.conversation_id for item in refs] == ["delayed-unread"]
+    assert page.waited_selectors
 
 
 def test_boss_screening_ask_accept_and_reject() -> None:
