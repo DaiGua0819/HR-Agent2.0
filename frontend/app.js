@@ -17,7 +17,15 @@ const state = {
   resumeContextCache: new Map(),
   resumePrefetchingPages: new Set(),
   resumePrefetchingContexts: new Set(),
+  resumePreviewImageCache: new Set(),
+  resumePreviewImageQueue: [],
+  resumePreviewImageInFlight: new Set(),
+  resumePreviewImageLoaders: new Map(),
+  resumePreviewImageActiveCount: 0,
+  resumePreviewImageGeneration: 0,
 };
+const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
+const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const RESUME_LIBRARY_JOB_TYPES = [
@@ -501,6 +509,7 @@ function clearResumePrefetchCache() {
   state.resumeContextCache.clear();
   state.resumePrefetchingPages.clear();
   state.resumePrefetchingContexts.clear();
+  clearResumePreviewImagePrefetchQueue();
 }
 async function clearResumePrefetchCacheAfterMutation() {
   clearResumePrefetchCache();
@@ -517,15 +526,78 @@ function applyResumeListData(data) {
   renderMiniList();
   renderPagination();
 }
-function prefetchFirstResumeContext(data) {
-  const first = (data.items || [])[0];
-  const id = first?.id;
-  if (!id || state.resumeContextCache.has(id) || state.resumePrefetchingContexts.has(id)) return;
-  state.resumePrefetchingContexts.add(id);
-  api(`/api/resumes/${id}/review-context`)
-    .then((context) => state.resumeContextCache.set(id, context))
-    .catch(() => {})
-    .finally(() => state.resumePrefetchingContexts.delete(id));
+function resumePreviewImageUrl(resume) {
+  return resume?.filePreviewImageUrl || resume?.file_preview_image_url || resume?.file?.previewImageUrl || "";
+}
+function clearResumePreviewImagePrefetchQueue() {
+  state.resumePreviewImageGeneration += 1;
+  state.resumePreviewImageQueue = [];
+  state.resumePreviewImageCache.clear();
+  state.resumePreviewImageInFlight.clear();
+  state.resumePreviewImageLoaders.clear();
+  state.resumePreviewImageActiveCount = 0;
+}
+function followingResumePreviewCandidates(selectedId) {
+  if (!selectedId) return [];
+  const result = [];
+  const seen = new Set([selectedId]);
+  const append = (items) => {
+    for (const resume of items || []) {
+      if (result.length >= RESUME_PREVIEW_PREFETCH_LIMIT) return;
+      const id = resume?.id || "";
+      const url = resumePreviewImageUrl(resume);
+      if (!id || seen.has(id) || !url) continue;
+      seen.add(id);
+      result.push({ id, url });
+    }
+  };
+  const currentIndex = state.resumes.findIndex((resume) => resume.id === selectedId);
+  if (currentIndex >= 0) append(state.resumes.slice(currentIndex + 1));
+  for (const page of [state.page + 1, state.page + 2]) {
+    if (result.length >= RESUME_PREVIEW_PREFETCH_LIMIT) break;
+    const cached = state.resumePageCache.get(resumeListCacheKey(page));
+    append(cached?.items || []);
+  }
+  return result.slice(0, RESUME_PREVIEW_PREFETCH_LIMIT);
+}
+function enqueueResumePreviewImagePrefetch(url) {
+  if (!url || state.resumePreviewImageCache.has(url) || state.resumePreviewImageInFlight.has(url)) return;
+  if (state.resumePreviewImageQueue.some((item) => item.url === url)) return;
+  state.resumePreviewImageQueue.push({ url, generation: state.resumePreviewImageGeneration });
+  runResumePreviewImagePrefetchQueue();
+}
+function runResumePreviewImagePrefetchQueue() {
+  while (
+    state.resumePreviewImageActiveCount < RESUME_PREVIEW_PREFETCH_CONCURRENCY &&
+    state.resumePreviewImageQueue.length
+  ) {
+    const item = state.resumePreviewImageQueue.shift();
+    if (!item || item.generation !== state.resumePreviewImageGeneration) continue;
+    const { url, generation } = item;
+    if (state.resumePreviewImageCache.has(url) || state.resumePreviewImageInFlight.has(url)) continue;
+    state.resumePreviewImageActiveCount += 1;
+    state.resumePreviewImageInFlight.add(url);
+    const image = new Image();
+    state.resumePreviewImageLoaders.set(url, image);
+    const finish = (loaded) => {
+      if (generation !== state.resumePreviewImageGeneration) return;
+      if (loaded) state.resumePreviewImageCache.add(url);
+      state.resumePreviewImageInFlight.delete(url);
+      state.resumePreviewImageLoaders.delete(url);
+      state.resumePreviewImageActiveCount = Math.max(0, state.resumePreviewImageActiveCount - 1);
+      runResumePreviewImagePrefetchQueue();
+    };
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    image.decoding = "async";
+    image.src = url;
+  }
+}
+function prefetchFollowingResumePreviewImages(selectedId) {
+  if (state.view !== "resumes" || state.tab === "queue") return;
+  followingResumePreviewCandidates(selectedId).forEach(({ url }) => {
+    enqueueResumePreviewImagePrefetch(url);
+  });
 }
 function prefetchNextResumePages() {
   if (state.view !== "resumes" || state.tab === "queue") return;
@@ -537,7 +609,7 @@ function prefetchNextResumePages() {
     api(`/api/resumes?${cacheKey}`)
       .then((data) => {
         state.resumePageCache.set(cacheKey, data);
-        prefetchFirstResumeContext(data);
+        prefetchFollowingResumePreviewImages(state.selectedId);
       })
       .catch(() => {})
       .finally(() => state.resumePrefetchingPages.delete(cacheKey));
@@ -706,6 +778,7 @@ async function openResume(id) {
   state.selectedId = id;
   renderRows();
   renderMiniList();
+  prefetchFollowingResumePreviewImages(id);
   if (state.resumeContextCache.has(id)) {
     state.context = state.resumeContextCache.get(id);
     renderContext();

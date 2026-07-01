@@ -621,8 +621,38 @@ def test_resume_library_prefetches_next_two_pages() -> None:
     assert "function prefetchNextResumePages()" in script
     assert "for (const page of [state.page + 1, state.page + 2])" in script
     assert "state.resumePageCache.set(cacheKey, data)" in script
-    assert "prefetchFirstResumeContext(data)" in script
+    assert "prefetchFollowingResumePreviewImages(state.selectedId)" in script
     assert "loadResumes({ preferCache: true })" in script
+
+
+def test_resume_library_prefetches_next_ten_preview_images_without_marking_viewed() -> None:
+    """Opening a resume should warm nearby preview images without touching review-context."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert "function prefetchFollowingResumePreviewImages" in script
+    preview_block = script.split(
+        "function prefetchFollowingResumePreviewImages",
+        1,
+    )[1].split("async function openResume", 1)[0]
+
+    assert "const RESUME_PREVIEW_PREFETCH_LIMIT = 10" in script
+    assert "const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2" in script
+    assert "resumePreviewImageQueue" in script
+    assert "resumePreviewImageInFlight" in script
+    assert "resumePreviewImageCache" in script
+    assert "function followingResumePreviewCandidates(selectedId)" in script
+    assert "function enqueueResumePreviewImagePrefetch(url)" in script
+    assert "function runResumePreviewImagePrefetchQueue()" in script
+    assert "state.resumePreviewImageActiveCount < RESUME_PREVIEW_PREFETCH_CONCURRENCY" in script
+    assert "result.length >= RESUME_PREVIEW_PREFETCH_LIMIT" in script
+    assert "state.resumePageCache.get(resumeListCacheKey(page))" in script
+    assert "resumePreviewImageUrl(resume)" in script
+    assert "new Image()" in script
+    assert "image.src = url" in script
+    assert "followingResumePreviewCandidates(selectedId).forEach(({ url }) => {" in script
+    assert "enqueueResumePreviewImagePrefetch(url)" in preview_block
+    assert "prefetchFollowingResumePreviewImages(id)" in script
+    assert "review-context" not in preview_block
 
 
 def test_resume_prefetch_cache_is_invalidated_after_filters_and_review_actions() -> None:
@@ -634,6 +664,7 @@ def test_resume_prefetch_cache_is_invalidated_after_filters_and_review_actions()
     assert "clearResumePrefetchCache();" in script
     assert "await clearResumePrefetchCacheAfterMutation()" in script
     assert "function clearResumePrefetchCacheAfterMutation()" in script
+    assert "clearResumePreviewImagePrefetchQueue()" in script
 
 
 def test_review_actions_advance_to_next_resume() -> None:
