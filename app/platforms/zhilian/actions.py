@@ -440,15 +440,21 @@ async def _download_attachment_resume(page: BrowserPage) -> dict[str, object]:
             "sourceKind": "attachment",
         }
     content = download.get("bytes") if isinstance(download, dict) else None
+    download_meta = _download_metadata(download)
     if isinstance(content, str):
         content = content.encode("utf-8")
     if not isinstance(content, bytes):
+        reason = (
+            str(download.get("reason") or "attachment_download_missing")
+            if isinstance(download, dict)
+            else "attachment_download_missing"
+        )
         return {
             "ok": False,
             "downloaded": False,
             "blocked": True,
-            "reason": str(download.get("reason") or "attachment_download_missing"),
-            "download": download,
+            "reason": reason,
+            "download": download_meta,
             "sourceKind": "attachment",
         }
     result = save_zhilian_resume_bytes(
@@ -457,7 +463,17 @@ async def _download_attachment_resume(page: BrowserPage) -> dict[str, object]:
         applied_position=applied_position,
         filename=str(download.get("filename") or ""),
     )
-    return {**result, "sourceKind": "attachment", "download": download}
+    return {**result, "sourceKind": "attachment", "download": download_meta}
+
+
+def _download_metadata(download: object) -> dict[str, object]:
+    if not isinstance(download, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in download.items()
+        if key not in {"bytes", "bytesBase64"}
+    }
 
 
 async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
@@ -838,6 +854,49 @@ _CLICK_VIEW_ATTACHMENT_RESUME_DOWNLOAD_JS = r"""
       rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0;
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const clickTargetFor = (el) => {
+    if (!el) return null;
+    const selector = [
+      "button",
+      "a",
+      "[role='button']",
+      "[onclick]",
+      ".file-card",
+      ".attachment-card",
+      ".message-file",
+      ".im-file",
+    ].join(", ");
+    return el.closest(selector) || el;
+  };
+  const clickElement = (el) => {
+    const target = clickTargetFor(el);
+    if (!target) return { clicked: false, reason: "click_target_missing" };
+    try {
+      target.scrollIntoView({ block: "center", inline: "center" });
+    } catch (error) {
+      target.scrollIntoView();
+    }
+    const rect = target.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: rect.left + Math.max(1, rect.width / 2),
+      clientY: rect.top + Math.max(1, rect.height / 2),
+    };
+    target.dispatchEvent(new MouseEvent("mousedown", options));
+    target.dispatchEvent(new MouseEvent("mouseup", options));
+    if (typeof target.click === "function") {
+      target.click();
+    } else {
+      target.dispatchEvent(new MouseEvent("click", options));
+    }
+    return {
+      clicked: true,
+      label: text(target) || text(el),
+      source: "zhilian_view_attachment_resume_download",
+    };
+  };
   const detail = document.querySelector("#im-session-detail, .im-session-detail") || document;
   const candidates = Array.from(detail.querySelectorAll("button, a, [role='button'], span, div"))
     .filter(visible)
@@ -845,11 +904,10 @@ _CLICK_VIEW_ATTACHMENT_RESUME_DOWNLOAD_JS = r"""
   const target = candidates.find((item) => {
     const value = text(item).replace(/\s+/g, "");
     return value === "查看附件简历";
-  }) || candidates[0];
+  }) || candidates[candidates.length - 1];
   if (!target) {
     return { clicked: false, reason: "view_attachment_button_not_found" };
   }
-  target.click();
-  return { clicked: true, label: text(target), source: "zhilian_view_attachment_resume_download" };
+  return clickElement(target);
 }
 """

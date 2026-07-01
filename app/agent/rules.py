@@ -126,12 +126,43 @@ def should_prioritize_screening(text: str, rule: dict[str, Any] | None) -> bool:
     if not text or not rule:
         return False
     patterns = _string_list(rule.get("screeningFirstQuestionPatterns"))
-    kb = rule.get("companyKnowledgeBase") if isinstance(rule.get("companyKnowledgeBase"), dict) else {}
+    kb = (
+        rule.get("companyKnowledgeBase")
+        if isinstance(rule.get("companyKnowledgeBase"), dict)
+        else {}
+    )
     patterns.extend(_string_list(kb.get("screeningFirstQuestionPatterns")))
     compact_text = _compact(text)
     for pattern in patterns:
         compact_pattern = _compact(pattern)
         if compact_pattern and compact_pattern in compact_text:
+            return True
+    return False
+
+
+def is_silent_question(
+    question: str,
+    rules: dict[str, Any] | None = None,
+    *,
+    position: str = "",
+) -> bool:
+    """识别明确要求不自动回复的问题。"""
+
+    text = question.strip()
+    if not text:
+        return False
+    compact_question = _compact(text)
+    if _is_pure_hiring_status_question(compact_question):
+        return True
+    data = rules or load_chat_rules()
+    kb = (
+        data.get("companyKnowledgeBase")
+        if isinstance(data.get("companyKnowledgeBase"), dict)
+        else {}
+    )
+    for pattern in _collect_silent_patterns(_knowledge_answer_sources(kb, data, position)):
+        compact_pattern = _compact(pattern)
+        if compact_pattern and compact_pattern in compact_question:
             return True
     return False
 
@@ -147,8 +178,15 @@ def find_knowledge_answer(
     text = question.strip()
     if not text:
         return None
-    kb = (rules or load_chat_rules()).get("companyKnowledgeBase") or {}
-    candidates = _collect_answer_candidates(kb)
+    data = rules or load_chat_rules()
+    kb = (
+        data.get("companyKnowledgeBase")
+        if isinstance(data.get("companyKnowledgeBase"), dict)
+        else {}
+    )
+    candidates: list[dict[str, Any]] = []
+    for source in _knowledge_answer_sources(kb, data, position):
+        candidates.extend(_collect_answer_candidates(source))
     scored: list[tuple[int, int, str]] = []
     compact_question = _compact(text)
     compact_position = _compact(position)
@@ -163,11 +201,16 @@ def find_knowledge_answer(
             position_bonus = 2
         question_match_len = 0
         for key in keys:
-            if key and (key in compact_question or compact_question in key):
+            if not key:
+                continue
+            if key == compact_question:
                 question_match_len = max(question_match_len, len(key))
-        prefix_bonus = int(any(key and key[:2] in compact_question for key in keys if len(key) >= 2))
-        if question_match_len or prefix_bonus:
-            score = 5 + prefix_bonus + position_bonus
+            elif key in compact_question:
+                question_match_len = max(question_match_len, len(key))
+            elif len(compact_question) >= 4 and compact_question in key:
+                question_match_len = max(question_match_len, len(compact_question))
+        if question_match_len:
+            score = 5 + position_bonus
             scored.append((question_match_len, score, item["answer"]))
     if not scored:
         return None
@@ -210,6 +253,85 @@ def _collect_answer_candidates(value: Any) -> list[dict[str, Any]]:
         for child in value:
             out.extend(_collect_answer_candidates(child))
     return out
+
+
+def _knowledge_answer_sources(
+    kb: dict[str, Any],
+    rules: dict[str, Any],
+    position: str,
+) -> list[Any]:
+    """只检索公共知识和当前岗位 section，避免跨岗位 FAQ 泄漏。"""
+
+    sources: list[Any] = []
+    if kb:
+        root_common = {key: value for key, value in kb.items() if key != "sections"}
+        if root_common:
+            sources.append(root_common)
+    section_match = _best_section_match(position, rules) if position else None
+    if section_match:
+        sources.append(section_match[1])
+    return sources
+
+
+def _collect_silent_patterns(sources: list[Any]) -> list[str]:
+    patterns: list[str] = []
+    for source in sources:
+        patterns.extend(_collect_named_string_list(source, "silentQuestionPatterns"))
+    return patterns
+
+
+def _collect_named_string_list(value: Any, field_name: str) -> list[str]:
+    out: list[str] = []
+    if isinstance(value, dict):
+        if field_name in value:
+            out.extend(_string_list(value.get(field_name)))
+        for child in value.values():
+            out.extend(_collect_named_string_list(child, field_name))
+    elif isinstance(value, list):
+        for child in value:
+            out.extend(_collect_named_string_list(child, field_name))
+    return out
+
+
+def _is_pure_hiring_status_question(compact_text: str) -> bool:
+    if not compact_text:
+        return False
+    status_terms = (
+        "还在招",
+        "还招",
+        "还招聘",
+        "还招人",
+        "招人吗",
+        "招吗",
+        "招聘吗",
+        "还缺人",
+        "还要人",
+        "招实习生",
+        "还招实习生",
+        "还可以聊",
+        "还能聊",
+    )
+    if not any(term in compact_text for term in status_terms):
+        return False
+    detail_terms = (
+        "细节",
+        "要求",
+        "介绍",
+        "详情",
+        "工作内容",
+        "职责",
+        "薪资",
+        "工资",
+        "待遇",
+        "时间",
+        "面试",
+        "出差",
+        "单休",
+        "地点",
+        "地址",
+        "base",
+    )
+    return not any(term in compact_text for term in detail_terms)
 
 
 def _compact(value: str) -> str:

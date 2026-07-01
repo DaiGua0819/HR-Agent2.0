@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
+from app.agent.rules import find_knowledge_answer
 from app.agent.runner import ZhilianConversationRunner
 from app.browser.fake_page import FakePage
 from app.domain.conversation.repository import ConversationRepository
@@ -131,6 +133,90 @@ def test_operation_direct_resume_has_no_prompt() -> None:
     assert state["next_action"] == "request_resume"
     assert page.sent_messages == ["你好，方便发一份简历过来吗"]
     assert page.resume_requests == 1
+
+
+def test_direct_resume_attachment_does_not_answer_resume_faq_before_download() -> None:
+    """直求简历岗位收到附件简历时，不能先发“还要等一段时间”等 FAQ。"""
+
+    state, page = run_case(
+        {
+            **conversation(
+                "外部财务产品顾问",
+                [{"sender": "other", "text": "您好，这是我的附件简历，请查收\n查看附件简历"}],
+            ),
+            "has_resume_attachment": True,
+            "resume_bytes": b"%PDF-1.7\nbody\n%%EOF",
+            "resume_filename": "杨利芳_外部财务产品顾问.pdf",
+        }
+    )
+
+    assert page.sent_messages == []
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "resume_attachment_downloaded"
+    assert state["decision"]["result"]["downloaded"] is True
+    assert "bytes" not in state["decision"]["result"].get("download", {})
+
+
+def test_pure_hiring_status_question_is_silent() -> None:
+    """“还在招吗”这类纯招聘状态问题统一不回复。"""
+
+    state, page = run_case(
+        conversation("销售管培生", [{"sender": "other", "text": "请问还在招吗"}])
+    )
+
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "silent_question"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_screening_confirmation_is_not_answered_by_short_knowledge_prefix() -> None:
+    """候选人对已问筛选题回复“可以”时，继续筛选而不是命中“可以线上面试吗”。"""
+
+    state, page = run_case(
+        conversation(
+            "人力资源管培生",
+            [
+                {"sender": "me", "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"},
+                {"sender": "other", "text": "okok 可以"},
+            ],
+        )
+    )
+
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["你好，这个岗位需要出差，可以接受吗"]
+
+
+def test_short_confirmation_does_not_match_knowledge_prefix() -> None:
+    """短确认语不能因为 FAQ 前两个字相同就命中知识库。"""
+
+    assert find_knowledge_answer("okok 可以", sample_rules(), position="人力资源管培生") is None
+
+
+def test_runner_finish_sanitizes_bytes_for_json_responses() -> None:
+    """runner 返回给 API/日志的 decision 不能包含原始 PDF bytes。"""
+
+    page = FakePage(
+        conversations=[conversation("销售管培生", [{"sender": "other", "text": "你好"}])]
+    )
+    adapter = ZhilianAdapter(page, owner="宋峰峰")
+    sink = InMemoryDecisionSink()
+    runner = ZhilianConversationRunner(adapter, rules=sample_rules(), decision_sink=sink)
+
+    state = runner._finish(
+        {
+            "candidate": {"name": "候选人", "applied_position": "销售管培生"},
+            "applied_position": "销售管培生",
+            "rule_source": "test",
+        },
+        "request_resume",
+        "resume_attachment_downloaded",
+        result={"download": {"filename": "resume.pdf", "bytes": b"%PDF-1.7"}},
+    )
+
+    json.dumps(state["decision"], ensure_ascii=False)
+    json.dumps(sink.events[-1], ensure_ascii=False)
+    assert state["decision"]["result"]["download"]["bytes"] == {"type": "bytes", "length": 8}
 
 
 def test_zhilian_unread_filter_and_refs_use_shared_pattern() -> None:
@@ -595,6 +681,22 @@ def sample_rules() -> dict[str, object]:
                 "category": "sales",
                 "screeningQuestions": ["你是否接受出差？"],
             },
+            "人力资源管培生": {
+                "category": "hr",
+                "screening": {
+                    "mode": "ask_required_questions",
+                    "questions": [
+                        {
+                            "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+                            "required": True,
+                        },
+                        {
+                            "text": "你好，这个岗位需要出差，可以接受吗",
+                            "required": True,
+                        },
+                    ],
+                },
+            },
             "运营A": {
                 "category": "operation_direct_resume",
                 "directResume": True,
@@ -613,7 +715,19 @@ def sample_rules() -> dict[str, object]:
                 {
                     "question": "薪资",
                     "answer": "薪资以岗位说明为准。",
-                }
+                },
+                {
+                    "questionPatterns": ["后续流程", "简历"],
+                    "answer": "还要等一段时间",
+                },
+                {
+                    "questionPatterns": ["还在招", "还招"],
+                    "answer": "还在招的",
+                },
+                {
+                    "questionPatterns": ["可以线上面试吗", "线上面试"],
+                    "answer": "HR管培生也是线上面试",
+                },
             ]
         },
     }

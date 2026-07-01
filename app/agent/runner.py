@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 from app.agent.judgement import judge_candidate_reply
@@ -18,6 +19,7 @@ from app.agent.rules import (
     initial_common_phrase,
     is_ai_basic_rule,
     is_direct_resume_rule,
+    is_silent_question,
     load_chat_rules,
     looks_like_question,
     rule_screening,
@@ -26,6 +28,8 @@ from app.agent.rules import (
 )
 from app.agent.screening import (
     analyze_position_screening,
+    normalize_position_screening_questions,
+    position_screening_question_matches_any,
     select_position_screening_question_text,
 )
 from app.agent.state import GraphState
@@ -95,11 +99,27 @@ class ConversationRunner:
                 "candidate_rejected",
                 evidence=last.text,
             )
+        if is_silent_question(
+            last.text,
+            self.rules,
+            position=conversation.candidate.applied_position,
+        ):
+            return self._finish(
+                state,
+                "wait",
+                "silent_question",
+                evidence=last.text,
+            )
 
         if self._needs_initial_ai_basic_phrase(conversation, rule):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
 
+        if is_direct_resume_rule(rule):
+            return await self._handle_direct_resume(state, conversation, rule)
+
         if rule_screening(rule) and should_prioritize_screening(last.text, rule):
+            return await self._handle_screening(state, conversation, rule, last.text)
+        if self._should_handle_screening_before_knowledge(conversation, rule, last.text):
             return await self._handle_screening(state, conversation, rule, last.text)
 
         answer = self._knowledge_answer(last.text, conversation)
@@ -122,21 +142,6 @@ class ConversationRunner:
                         knowledge_answer=answer,
                         judgement=asdict(judgement),
                     )
-            if is_direct_resume_rule(rule):
-                failed = await self._send_or_fail(
-                    state,
-                    answer,
-                    action="answer_question",
-                    failure_reason="knowledge_answer_send_failed",
-                )
-                if failed:
-                    return failed
-                return await self._handle_direct_resume(
-                    state,
-                    conversation,
-                    rule,
-                    knowledge_answer=answer,
-                )
             if screening:
                 analysis = await analyze_position_screening(
                     conversation.messages,
@@ -169,8 +174,6 @@ class ConversationRunner:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
-        if is_direct_resume_rule(rule):
-            return await self._handle_direct_resume(state, conversation, rule)
         if looks_like_question(last.text):
             state["pending_question"] = last.text
             return self._finish(state, "escalate", "unknown_question", evidence=last.text)
@@ -513,6 +516,30 @@ class ConversationRunner:
         )
 
     @staticmethod
+    def _should_handle_screening_before_knowledge(
+        conversation: Conversation,
+        rule: dict[str, Any],
+        text: str,
+    ) -> bool:
+        """短确认/拒绝语优先进入筛选进度，不走 FAQ。"""
+
+        screening = rule_screening(rule)
+        if not screening or not text.strip() or looks_like_question(text):
+            return False
+        questions = normalize_position_screening_questions(screening)
+        if not questions:
+            return False
+        for message in conversation.messages:
+            if message.sender != MessageSender.ME:
+                continue
+            if any(
+                position_screening_question_matches_any(message.text, question)
+                for question in questions
+            ):
+                return True
+        return False
+
+    @staticmethod
     def _should_escalate_direct_question(text: str) -> bool:
         if not looks_like_question(text):
             return False
@@ -576,6 +603,7 @@ class ConversationRunner:
         }
 
     def _finish(self, state: GraphState, action: str, reason: str, **extra: Any) -> GraphState:
+        extra = _json_safe(extra)
         state["next_action"] = action
         state["stage"] = reason
         state["decision"] = {"action": action, "reason": reason, **extra}
@@ -593,6 +621,22 @@ class ConversationRunner:
         return state
 
 ZhilianConversationRunner = ConversationRunner
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a response/log safe value without raw binary payloads."""
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"type": "bytes", "length": len(value)}
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _candidate_rejected_conversation(text: str) -> bool:
