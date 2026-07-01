@@ -64,9 +64,23 @@ MEMBER_USER = LocalUser(
     owners=["宋峰峰"],
     platforms=["boss", "job51", "zhilian"],
 )
+ZHANG_HUAIBIN_USER = LocalUser(
+    id="local-zhanghuaibin",
+    name="张怀滨",
+    roles=["member"],
+    permissions=["resumes:read", "resumes:review"],
+    owners=["张怀滨"],
+    platforms=["boss", "job51", "zhilian"],
+)
 AUTH_PROFILES = {
     "admin": LocalAuthProfile("admin", LOCAL_USER, "HR_AGENT_LOCAL_ADMIN_PASSWORD", "admin"),
     "member": LocalAuthProfile("member", MEMBER_USER, "HR_AGENT_LOCAL_MEMBER_PASSWORD", "member"),
+    "zhanghuaibin": LocalAuthProfile(
+        "zhanghuaibin",
+        ZHANG_HUAIBIN_USER,
+        "HR_AGENT_LOCAL_ZHANGHUAIBIN_PASSWORD",
+        "zhanghuaibin",
+    ),
 }
 
 
@@ -92,6 +106,23 @@ async def login(
     session_payload = user_payload(profile.user)
     _set_session(request, response, session_payload)
     return session_payload
+
+
+@router.get("/dev-login")
+async def dev_login(
+    username: str,
+    request: Request,
+) -> RedirectResponse:
+    """Create a loopback-only development session for local UI testing."""
+
+    if request.url.hostname not in {"127.0.0.1", "localhost"}:
+        raise HTTPException(status_code=404, detail="not_found")
+    profile = AUTH_PROFILES.get(username.strip().lower())
+    if profile is None:
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+    redirect = RedirectResponse("/index.html")
+    _set_session(request, redirect, user_payload(profile.user))
+    return redirect
 
 
 @router.get("/feishu/start")

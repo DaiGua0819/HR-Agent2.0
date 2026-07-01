@@ -15,6 +15,7 @@ from app.platforms.job51 import selectors
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.dom_scripts import (
     ANNEX_DOWNLOAD_PAYLOAD_JS,
+    CLICK_ATTACHMENT_RESUME_JS,
     CLICK_ONLINE_RESUME_JS,
     CLICK_ONLINE_RESUME_SAVE_JS,
     FETCH_BLOB_BYTES_JS,
@@ -289,7 +290,14 @@ async def _open_attachment_resume_preview(page: BrowserPage) -> bool:
         )
         if result.get("ok"):
             return True
-    return False
+    opened = await _safe_eval_dict(page, "job51.click_attachment_resume")
+    if not opened:
+        opened = await _safe_eval_dict(page, CLICK_ATTACHMENT_RESUME_JS)
+    if not opened.get("clicked"):
+        return False
+    await asyncio.sleep(1)
+    visible = await _annex_download_visible(page)
+    return bool(visible.get("verified"))
 
 
 async def _open_online_resume_preview(page: BrowserPage) -> dict[str, object]:

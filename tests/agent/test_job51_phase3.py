@@ -13,6 +13,7 @@ from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.job51.actions_chat import (
+    _normalize_unread_rows,
     click_thread_by_state,
     find_next_thread,
     read_unread_conversations,
@@ -20,9 +21,10 @@ from app.platforms.job51.actions_chat import (
     should_skip_thread_label,
     verify_opened_candidate,
 )
-from app.platforms.job51.actions_navigation import _wait_chat_shell
+from app.platforms.job51.actions_navigation import _wait_chat_shell, open_chat_page
 from app.platforms.job51.actions_resume import (
     InMemoryResumeDownloadMemory,
+    _open_attachment_resume_preview,
     resume_download_suitability_guard,
     save_resume_bytes,
     validate_resume_bytes,
@@ -117,6 +119,18 @@ def test_job51_chat_shell_accepts_logged_in_chat_text() -> None:
     assert asyncio.run(_wait_chat_shell(page, timeout_ms=100)) is True
 
 
+def test_job51_open_chat_page_never_clicks_app_entry_when_chat_shell_is_slow() -> None:
+    """51job 聊天页慢加载时只直达 ehire 聊天页，不点 app.51job 入口。"""
+
+    page = SlowJob51ChatPage()
+
+    asyncio.run(open_chat_page(page))
+
+    assert page.clicks == []
+    assert page.gotos == ["https://ehire.51job.com/Revision/chat"]
+    assert page.url == "https://ehire.51job.com/Revision/chat"
+
+
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:
     """51job 点开未读行后校验当前聊天区身份，避免虚拟列表误读上一个人。"""
 
@@ -137,6 +151,30 @@ def test_job51_find_next_thread_verifies_opened_candidate() -> None:
         )
     )
     assert opened["opened"] is True
+
+
+def test_job51_verify_opened_candidate_uses_dom_context_fallback_until_stable() -> None:
+    """Live CDP pages may only expose the generic DOM context script after row click."""
+
+    page = DelayedJob51ContextPage(
+        [
+            {},
+            {"name": "Alice", "position": "AI Intern", "label": "Alice AI Intern\nhello"},
+        ]
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {"label": "1\nAlice AI Intern\n9:32\nhello", "name": "Alice", "position": "AI Intern"},
+            chat_ready=True,
+            timeout_ms=50,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert page.dom_context_reads == 2
 
 
 def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
@@ -163,6 +201,34 @@ def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
     assert page.selected_index == 1
 
 
+def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
+    """Live 51job rows need name and position for post-click identity verification."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "index": 0,
+                "id": "",
+                "label": "3\nAlice AI Intern\n9:32\nhello",
+                "name": "Alice",
+                "position": "AI Intern",
+                "unreadCount": 3,
+            }
+        ]
+    )
+
+    assert rows == [
+        {
+            "index": 0,
+            "id": "",
+            "label": "3\nAlice AI Intern\n9:32\nhello",
+            "name": "Alice",
+            "position": "AI Intern",
+            "unread_count": 3,
+        }
+    ]
+
+
 def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
     """运营 A/B 在 51job 不发前置话术；财务 AI 直求简历会发配置话术。"""
 
@@ -182,6 +248,27 @@ def test_direct_resume_candidate_rejection_skips_without_requesting_resume() -> 
 
     state, page = run_case(
         conversation("运营A", [{"sender": "other", "text": "你好，职位不太合适，谢谢关注！"}])
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "candidate_rejected"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_ai_basic_rejects_single_rest_without_downloading_existing_attachment() -> None:
+    """AI 基础条件拒绝要先跳过，不能因页面已有附件简历而下载。"""
+
+    state, page = run_case(
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": "基础条件确认话术"},
+                {"sender": "other", "text": "不好意思，不太考虑单休[握手]"},
+            ],
+            has_attachment_card=True,
+            resume_bytes=b"%PDF-1.7\nbody\n%%EOF",
+        )
     )
 
     assert state["next_action"] == "skip"
@@ -327,6 +414,17 @@ def test_job51_attachment_without_download_link_blocks_without_request() -> None
     assert page.resume_requests == 0
 
 
+def test_job51_attachment_preview_uses_dom_fallback_when_click_is_intercepted() -> None:
+    """51job 底部快捷回复遮挡附件卡时，用 DOM fallback 点开预览。"""
+
+    page = InterceptedAttachmentPage()
+
+    opened = asyncio.run(_open_attachment_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened is True
+    assert page.dom_clicked is True
+
+
 def test_job51_does_not_download_resume_before_candidate_qualifies() -> None:
     """51job 看见附件不等于立刻下载，必须先走到业务上的求简历步骤。"""
 
@@ -424,6 +522,94 @@ class RowAdapter:
         self.page = RowPage(rows)
 
 
+class SlowJob51ChatPage:
+    """Simulates a logged-in chat tab whose shell selectors are still loading."""
+
+    def __init__(self) -> None:
+        self.url = "https://ehire.51job.com/Revision/chat/?rt=1782868459257"
+        self.body_text = "加载中"
+        self.clicks: list[str] = []
+        self.gotos: list[str] = []
+        self.shell_ready = False
+
+    async def text(self, selector: str | None = None) -> str:
+        _ = selector
+        return self.body_text
+
+    async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
+        _ = timeout_ms
+        if self.shell_ready and selector in {
+            "#conversation-list .list-item",
+            "#drop-area.input-textarea_self",
+            "label.el-checkbox.btn.unread-checkbox",
+        }:
+            return True
+        return selector == "#sensor_talentcommunicate"
+
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
+        _ = timeout_ms
+        self.clicks.append(selector)
+        if selector == "#sensor_talentcommunicate":
+            self.url = "https://app.51job.com/51job/"
+        return True
+
+    async def goto(self, url: str) -> None:
+        self.gotos.append(url)
+        self.url = url
+        self.body_text = "人才沟通 全部职位 未读"
+        self.shell_ready = True
+
+
+class DelayedJob51ContextPage:
+    """Simulates a live CDP page whose DOM context settles after a click."""
+
+    def __init__(self, contexts: list[dict[str, object]]) -> None:
+        self.contexts = contexts
+        self.dom_context_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script in {"job51.opened_candidate_state", "job51.read_chat_context"}:
+            return {}
+        index = min(self.dom_context_reads, len(self.contexts) - 1)
+        self.dom_context_reads += 1
+        return self.contexts[index]
+
+
+class InterceptedAttachmentPage:
+    """Simulates a 51job attachment card covered by the quick-reply bar."""
+
+    def __init__(self) -> None:
+        self.dom_clicked = False
+
+    async def query_all(self, selector: str) -> list[InterceptedAttachmentElement]:
+        if ".resume-element .info-content-item.file-item" in selector:
+            return [InterceptedAttachmentElement()]
+        return []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if "info-content-item.file-item" in script:
+            self.dom_clicked = True
+            return {"clicked": True, "source": "dom_attachment_card"}
+        if "annex-resume" in script:
+            return {"found": self.dom_clicked, "href": "blob:resume" if self.dom_clicked else ""}
+        return {}
+
+
+class InterceptedAttachmentElement:
+    async def click(self, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
+        raise TimeoutError("quick reply intercepts pointer events")
+
+    async def text(self) -> str:
+        return "附件简历"
+
+    async def attr(self, name: str) -> str | None:
+        _ = name
+        return None
+
+
 class RowPage:
     def __init__(self, rows: list[SlowRow]) -> None:
         self.rows = rows
@@ -507,6 +693,10 @@ def sample_rules() -> dict[str, object]:
             "销售管培生": {
                 "category": "sales",
                 "screeningQuestions": ["你是否接受出差？"],
+            },
+            "AI应用开发实习生": {
+                "category": "ai_app_intern",
+                "initialCommonPhrase": "基础条件确认话术",
             },
             "运营A": {
                 "category": "operation_direct_resume",

@@ -98,10 +98,14 @@ READ_UNREAD_ROWS_JS = r"""
     rows: rows.map((row, index) => {
       const label = text(row);
       const count = parseBadge(row);
+      const name = text(row.querySelector(".username, .username-text"));
+      const position = text(row.querySelector(".jobname"));
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
         label,
+        name,
+        position,
         unreadCount: count || (unreadState ? 1 : 0),
       };
     }),
@@ -393,6 +397,29 @@ ANNEX_DOWNLOAD_PAYLOAD_JS = r"""
     href: link.href,
     filename: link.getAttribute("download") || "",
   };
+}
+"""
+
+CLICK_ATTACHMENT_RESUME_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const candidates = Array.from(document.querySelectorAll(
+    ".resume-element .info-content-item.file-item, " +
+    ".resume-element [class*='file-item'], [class*='attachment'] [class*='resume']"
+  )).filter(visible);
+  const target = candidates.find((item) => /附件简历|简历|pdf|doc/i.test(text(item))) ||
+    candidates[0];
+  if (!target) return { clicked: false, reason: "attachment_button_not_found" };
+  target.scrollIntoView({ block: "center", inline: "nearest" });
+  target.click();
+  return { clicked: true, label: text(target), source: "dom_attachment_card" };
 }
 """
 

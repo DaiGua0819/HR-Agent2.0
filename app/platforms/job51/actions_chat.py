@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -104,6 +105,8 @@ async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
                 "index": index,
                 "id": await row.attr("id") or "",
                 "label": await row.text(),
+                "name": await row.attr("name") or "",
+                "position": await row.attr("position") or "",
                 "unread_count": unread_count,
             }
         )
@@ -205,13 +208,31 @@ async def verify_opened_candidate(
     expected: dict[str, object],
     *,
     chat_ready: bool = False,
+    timeout_ms: int = 1500,
+    interval_ms: int = 150,
 ) -> dict[str, object]:
     """校验虚拟列表点击后，右侧聊天区确实切到了目标候选人。"""
 
+    deadline = asyncio.get_running_loop().time() + max(timeout_ms, 0) / 1000
+    while True:
+        result = await _verify_opened_candidate_once(page, expected, chat_ready=chat_ready)
+        if result.get("opened") or asyncio.get_running_loop().time() >= deadline:
+            return result
+        await asyncio.sleep(max(interval_ms, 0) / 1000)
+
+
+async def _verify_opened_candidate_once(
+    page: BrowserPage,
+    expected: dict[str, object],
+    *,
+    chat_ready: bool,
+) -> dict[str, object]:
     raw = await _safe_eval_dict(page, "job51.opened_candidate_state", expected)
-    if raw:
+    if raw.get("opened"):
         return raw
     context = await _safe_eval_dict(page, "job51.read_chat_context")
+    if not context:
+        context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
     expected_name = str(expected.get("name") or "").strip()
     expected_position = str(expected.get("position") or "").strip()
     expected_label = str(expected.get("label") or "").strip()
@@ -453,6 +474,8 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
                 "label": label,
+                "name": str(item.get("name") or item.get("candidateName") or ""),
+                "position": str(item.get("position") or item.get("jobName") or ""),
                 "unread_count": unread_count,
             }
         )

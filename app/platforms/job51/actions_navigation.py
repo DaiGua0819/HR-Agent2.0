@@ -8,27 +8,29 @@ from __future__ import annotations
 import asyncio
 
 from app.browser.base import BrowserPage
-from app.browser.reliable_actions import reliable_click
 from app.platforms.job51 import selectors
 
 
 async def open_chat_page(page: BrowserPage) -> None:
-    """进入 51job 人才沟通页，找不到入口时回工作台重试。"""
+    """进入 51job 人才沟通页。
+
+    51job 的“人才沟通入口”可能跳到 app.51job.com 工作台；自动化只复用或直达
+    ehire 聊天页，避免打开错误域名。
+    """
 
     if await _wait_chat_shell(page, timeout_ms=3000):
         return
     for attempt in range(2):
-        click = await reliable_click(page, selectors.CHAT_ENTRY, label="51job人才沟通入口")
+        try:
+            await page.goto(selectors.CHAT_HOME_URL)
+        except Exception:
+            if await _wait_chat_shell(page, timeout_ms=3000):
+                return
+            raise
         await asyncio.sleep(1)
-        if click.get("ok") and await _wait_chat_shell(page):
+        if await _wait_chat_shell(page):
             return
         if attempt == 0:
-            try:
-                await page.goto(selectors.CHAT_HOME_URL)
-            except Exception:
-                if await _wait_chat_shell(page, timeout_ms=3000):
-                    return
-                raise
             await asyncio.sleep(3)
 
 

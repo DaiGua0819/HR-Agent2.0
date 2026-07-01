@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260701-stitch-resume-summary-actions" />
-    <link rel="stylesheet" href="/assets/auth.css?v=20260701-side-browser-responsive" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260701-stitch-resume-user-card-motion" />
+    <link rel="stylesheet" href="/assets/auth.css?v=20260701-green-feishu-login" />
   </head>
   <body>
     <section id="loginScreen" class="login-screen">
@@ -46,9 +46,11 @@
 
     <div id="app" class="ts-app-shell" hidden>
       <header class="ts-topbar">
-        <div class="ts-brand" aria-label="TalentStream HR">
-          <span class="ts-brand-mark" aria-hidden="true">✣</span>
-          <strong>TalentStream HR</strong>
+        <div class="ts-brand" aria-label="Carh HR">
+          <span class="ts-brand-mark" aria-hidden="true">
+            <img src="/assets/carh-logo.png" alt="长安仁恒科技股份有限公司" />
+          </span>
+          <strong>Carh HR</strong>
         </div>
         <nav class="ts-nav" aria-label="主导航">
           <button class="active" data-view="dashboard" type="button">仪表盘</button>
@@ -59,13 +61,13 @@
           <button data-view="rules" type="button">规则库</button>
         </nav>
         <div class="ts-topbar-actions">
-          <label class="ts-global-search" aria-label="全局搜索">
+          <label class="ts-global-search ts-command-search" role="combobox" aria-label="全局搜索" aria-controls="globalSearchResults" aria-expanded="false">
             <span aria-hidden="true">⌕</span>
-            <input id="globalSearch" placeholder="搜索候选人 / 手机 / 岗位" />
+            <input id="globalSearch" placeholder="搜索候选人 / 手机 / 岗位" autocomplete="off" />
+            <div id="globalSearchResults" class="ts-command-search__panel" role="listbox" hidden></div>
           </label>
           <div class="user-card">
-            <span id="userName">加载中</span>
-            <small id="userScope">读取权限范围</small>
+            <strong id="userName">加载中</strong>
           </div>
           <button id="logoutBtn" class="ts-icon-btn" type="button" title="退出">⎋</button>
         </div>
@@ -192,6 +194,17 @@
                       <option value="created-asc">最早入库</option>
                     </select>
                   </label>
+                  <label class="filter-field--compact import-date-filter-field">
+                    <span class="visually-hidden">入库日期</span>
+                    <select name="import_date_range" multiple>
+                      <option value="">入库日期</option>
+                      <option value="today">今天</option>
+                      <option value="yesterday">昨天</option>
+                      <option value="last_7_days">近7天</option>
+                      <option value="last_30_days">近30天</option>
+                      <option value="last_90_days">近90天</option>
+                    </select>
+                  </label>
                   <div class="filter-actions">
                     <button class="ts-btn ts-btn--primary" type="submit">筛选</button>
                     <button class="ts-btn" type="reset">重置筛选</button>
@@ -292,6 +305,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260701-stitch-resume-summary-actions"></script>
+    <script src="/assets/app.js?v=20260701-stitch-resume-user-card-motion"></script>
   </body>
 </html>

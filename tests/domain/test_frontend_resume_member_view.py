@@ -23,7 +23,8 @@ def test_authenticated_resume_library_uses_stitch_layout() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "TalentStream HR" in html
+    assert "Carh HR" in html
+    assert "TalentStream HR" not in html
     assert 'class="ts-app-shell"' in html
     assert 'class="ts-filter-card"' in html
     assert 'class="ts-resume-surface"' in html
@@ -33,6 +34,36 @@ def test_authenticated_resume_library_uses_stitch_layout() -> None:
     assert "function bindDockEffect" in script
     assert ".candidate-card" in styles
     assert ".ts-resume-surface" in styles
+
+
+def test_authenticated_resume_library_uses_carh_brand_header() -> None:
+    """The authenticated top bar should use the CARH brand and hide scope details."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    auth_script = (ROOT / "frontend" / "auth.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'aria-label="Carh HR"' in html
+    assert '<img src="/assets/carh-logo.png" alt="长安仁恒科技股份有限公司" />' in html
+    assert "<strong>Carh HR</strong>" in html
+    assert (ROOT / "frontend" / "carh-logo.png").exists()
+    assert '<strong id="userName">加载中</strong>' in html
+    assert 'id="userScope"' not in html
+    assert "userScope" not in auth_script
+
+    brand_mark_block = styles.split(".ts-brand-mark {", 1)[1].split("}", 1)[0]
+    brand_img_block = styles.split(".ts-brand-mark img {", 1)[1].split("}", 1)[0]
+    brand_text_block = styles.split(".ts-brand strong {", 1)[1].split("}", 1)[0]
+    user_name_block = styles.split(".user-card strong {", 1)[1].split("}", 1)[0]
+
+    assert "background: #fff" in brand_mark_block
+    assert "object-fit: contain" in brand_img_block
+    assert "color: #2563eb" in brand_text_block
+    assert "font-weight: 900" in user_name_block
+    assert "font-size: 16px" in user_name_block
+    assert "border-radius: 999px" in user_name_block
+    assert "box-shadow: 0 10px 24px" in user_name_block
+    assert "background: rgba(255, 255, 255, 0.9)" in user_name_block
 
 
 def test_frontend_lands_on_resume_library_after_login() -> None:
@@ -77,6 +108,35 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     assert "min-height: 100vh" in shell_block
 
 
+def test_global_search_uses_command_style_realtime_results() -> None:
+    """The topbar search should behave like a command/autocomplete search component."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'class="ts-global-search ts-command-search"' in html
+    assert 'role="combobox"' in html
+    assert 'aria-controls="globalSearchResults"' in html
+    assert 'id="globalSearchResults"' in html
+    assert "function bindGlobalSearchAutocomplete()" in script
+    assert "function searchGlobalResumes(query)" in script
+    assert "function positionGlobalSearchResults()" in script
+    assert "document.body.appendChild(panel)" in script
+    assert "positionGlobalSearchResults()" in script
+    assert 'window.addEventListener("scroll", positionGlobalSearchResults, true)' in script
+    assert "function renderGlobalSearchResults(items, query)" in script
+    assert 'globalSearch.addEventListener("input"' in script
+    assert 'api(`/api/resumes?${params.toString()}`)' in script
+    assert 'page_size", "6"' in script
+    assert "openGlobalSearchResult" in script
+    assert "ts-command-search__panel" in styles
+    assert "ts-command-search__item" in styles
+    panel_block = styles.split(".ts-command-search__panel {", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in panel_block
+    assert "z-index: 1400" in panel_block
+
+
 def test_member_resume_library_has_dock_job_filters_below_status_tabs() -> None:
     """Members choose allowed jobs from the Stitch dock filter row."""
 
@@ -113,7 +173,11 @@ def test_resume_status_and_job_filters_are_collapsible_beside_filter_button() ->
     assert 'id="filterToggleBtn"' in html
     assert html.index('id="segmentToggleBtn"') < html.index('id="filterToggleBtn"')
     assert 'id="segmentPanel"' in html
-    assert html.index('id="segmentPanel"') < html.index('id="statusTabs"') < html.index('id="jobTabsBlock"')
+    assert (
+        html.index('id="segmentPanel"')
+        < html.index('id="statusTabs"')
+        < html.index('id="jobTabsBlock"')
+    )
     assert html.index('id="jobTabsBlock"') < html.index('id="miniList"')
     assert "function toggleSegmentPanel()" in script
     assert '$("segmentToggleBtn").onclick = toggleSegmentPanel' in script
@@ -162,12 +226,15 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
+    filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
     assert "20260701-stitch-resume" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in filters_block
+    assert "grid-column: 1 / -1" not in filter_actions_block
+    assert "align-self: center" in filter_actions_block
     assert "transition: max-height" in styles
 
 
@@ -210,19 +277,74 @@ def test_resume_filter_form_uses_aligned_native_selects_for_compact_fields() -> 
     assert 'class="filter-field--compact education-filter-field"' in filter_form
     assert 'class="filter-field--compact school-level-filter-field"' in filter_form
     assert 'class="filter-field--compact graduation-year-filter-field"' in filter_form
+    assert 'class="filter-field--compact import-date-filter-field"' in filter_form
     assert 'class="filter-field--compact sort-filter-field"' in filter_form
     assert filter_form.index('name="education"') < filter_form.index('name="school_level"')
     assert filter_form.index('name="graduation_year"') < filter_form.index('name="sort"')
+    assert filter_form.index('name="sort"') < filter_form.index('name="import_date_range"')
     assert 'select name="school_level" multiple' not in filter_form
     assert 'select name="graduation_year" multiple' not in filter_form
     assert '<select name="school_level">' in filter_form
     assert '<option value="">院校等级</option>' in filter_form
     assert '<select name="graduation_year">' in filter_form
     assert '<option value="">毕业时间</option>' in filter_form
+    assert '<select name="import_date_range" multiple>' in filter_form
+    assert '<option value="">入库日期</option>' in filter_form
+    assert '<option value="today">今天</option>' in filter_form
+    assert '<option value="last_7_days">近7天</option>' in filter_form
     assert '<span>排序</span>' not in filter_form
     assert '<option value="name">姓名</option>' not in filter_form
     assert ".filter-field--compact" in styles
     assert ".visually-hidden" in styles
+
+
+def test_compact_filter_selects_use_smooth_custom_dropdowns() -> None:
+    """The four compact filter selects should keep form values while opening with smooth motion."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function initializeSmoothFilterSelects()" in script
+    assert 'document.querySelectorAll(".filter-field--compact select")' in script
+    assert 'select.classList.add("smooth-select__native")' in script
+    assert 'wrapper.className = "smooth-select"' in script
+    assert 'button.className = "smooth-select__button"' in script
+    assert 'menu.className = "smooth-select__menu"' in script
+    assert "document.body.appendChild(menu)" in script
+    assert "function positionSmoothSelectMenu(wrapper)" in script
+    assert "positionSmoothSelectMenu(wrapper)" in script
+    assert 'window.addEventListener("scroll", updateOpenSmoothSelectMenuPosition, true)' in script
+    assert 'wrapper.classList.toggle("is-open")' in script
+    assert 'select.value = option.value' in script
+    assert "select.multiple" in script
+    assert "function applyImportDateRangeParams(params, values)" in script
+    assert "function syncImportDateCalendar(select)" in script
+    assert "function addImportDateCalendar(menu, select)" in script
+    assert 'if (key === "import_date_range")' in script
+    assert "select.dataset.dateFrom" in script
+    assert "select.dataset.dateTo" in script
+    assert 'params.set("date_from", range.dateFrom)' in script
+    assert 'params.set("date_to", range.dateTo)' in script
+    assert "select.dispatchEvent(new Event(\"change\", { bubbles: true }))" in script
+    assert "initializeSmoothFilterSelects();" in script
+
+    native_block = styles.split(".smooth-select__native {", 1)[1].split("}", 1)[0]
+    menu_block = styles.split(".smooth-select__menu {", 1)[1].split("}", 1)[0]
+    open_menu_block = styles.split(".smooth-select__menu.is-open {", 1)[1].split(
+        "}",
+        1,
+    )[0]
+
+    assert "position: absolute" in native_block
+    assert "opacity: 0" in native_block
+    assert "position: fixed" in menu_block
+    assert "z-index: 1000" in menu_block
+    assert "transform: translateY(-6px) scale(0.98)" in menu_block
+    assert "transition: opacity 0.18s ease" in menu_block
+    assert "opacity: 1" in open_menu_block
+    assert "transform: translateY(0) scale(1)" in open_menu_block
+    assert ".import-date-filter-field {" not in styles
+    assert ".smooth-select__calendar" in styles
 
 
 def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> None:
@@ -243,6 +365,20 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     assert "button, input, select { font: inherit; }" in styles
     assert '<select name="education">' in html
     assert 'name="manual_review"' not in html
+
+
+def test_serene_talent_theme_uses_blue_white_palette() -> None:
+    """The authenticated workspace should use a blue-white palette instead of purple."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "--ts-surface: #f8fbff" in styles
+    assert "--ts-surface-low: #eff6ff" in styles
+    assert "--ts-primary: #2563eb" in styles
+    assert "--ts-primary-container: #1d4ed8" in styles
+    assert "#3525cd" not in styles
+    assert "#4f46e5" not in styles
+    assert "rgba(53, 37, 205" not in styles
 
 
 def test_stitch_component_layer_styles_dynamic_controls() -> None:
@@ -289,6 +425,7 @@ def test_stitch_migration_preserves_formdata_and_adds_visual_wrappers() -> None:
     assert 'select name="decision" multiple' not in html
     assert '<select name="graduation_year">' in html
     assert 'select name="graduation_year" multiple' not in html
+    assert '<select name="import_date_range" multiple>' in html
     assert 'name="date_from"' not in html
     assert 'name="date_to"' not in html
     for class_name in [
@@ -366,9 +503,8 @@ def test_member_action_dock_only_keeps_suitable_choices_at_bottom_right() -> Non
         block = styles.split(selector, 1)[1].split("}", 1)[0]
         assert "display: none" in block
 
-    summary_markup = html.split('<aside id="summaryContent" class="summary-content ts-summary-stack">', 1)[
-        1
-    ].split("</aside>", 1)[0]
+    summary_start = '<aside id="summaryContent" class="summary-content ts-summary-stack">'
+    summary_markup = html.split(summary_start, 1)[1].split("</aside>", 1)[0]
     assert 'id="summaryCards"' in summary_markup
     assert 'id="actionDock"' in summary_markup
     dock_block = styles.split(".member-resume-mode .ts-action-dock {", 1)[1].split("}", 1)[0]
@@ -401,6 +537,35 @@ def test_resume_image_preview_has_single_scroll_container() -> None:
 
     assert "overflow: auto" not in image_stage_block
     assert "overflow: visible" in image_stage_block
+
+
+def test_collapsed_library_centers_and_expands_resume_preview_image() -> None:
+    """Collapsing the library should let the PDF preview use the remaining centered width."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    collapsed_surface_block = styles.split(
+        ".ts-resume-workspace.is-library-collapsed .ts-resume-surface {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_preview_block = styles.split(
+        ".ts-resume-workspace.is-library-collapsed .image-preview {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_stage_block = styles.split(
+        ".ts-resume-workspace.is-library-collapsed .resume-image-stage {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_link_block = styles.split(
+        ".ts-resume-workspace.is-library-collapsed .resume-download-link {",
+        1,
+    )[1].split("}", 1)[0]
+
+    assert "min-width: 0" in collapsed_surface_block
+    assert "place-items: start center" in collapsed_preview_block
+    assert "justify-items: center" in collapsed_stage_block
+    assert "padding: 10px" in collapsed_stage_block
+    assert "width: min(100%, 1040px)" in collapsed_link_block
+    assert "margin-inline: auto" in collapsed_link_block
 
 
 def test_resume_image_preview_left_click_downloads_file() -> None:
@@ -558,6 +723,62 @@ def test_candidate_card_metadata_uses_aligned_columns() -> None:
     assert "text-overflow: ellipsis" in styles
 
 
+def test_active_candidate_card_uses_blue_gradient_selection() -> None:
+    """The selected candidate card should only add a light blue-white background."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    active_block = styles.split(".candidate-card.active {", 1)[1].split("}", 1)[0]
+
+    active_background = (
+        "background: linear-gradient(135deg, "
+        "rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.72))"
+    )
+    assert active_background in active_block
+    assert "border-color: rgba(147, 197, 253, 0.78)" in active_block
+    assert "border-left-color: rgba(37, 99, 235, 0.72)" in active_block
+    assert "\n  color:" not in active_block
+
+
+def test_active_candidate_card_uses_focus_pop_motion() -> None:
+    """Selecting cards via click or arrow movement should trigger a subtle macOS-like motion."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    focus_block = styles.split(".candidate-card--focus-pop {", 1)[1].split("}", 1)[0]
+
+    assert 'candidate-card--focus-pop' in script
+    assert "resume.id === state.selectedId" in script
+    assert "animation: candidateFocusPop 0.34s" in focus_block
+    assert "@keyframes candidateFocusPop" in styles
+    assert "scale(1.035)" in styles
+
+
+def test_candidate_card_metadata_stays_inside_card_on_narrow_panes() -> None:
+    """The card should clip long school/platform text instead of letting it spill outside."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    card_block = styles.split(".candidate-card {", 1)[1].split("}", 1)[0]
+    meta_block = styles.split(".candidate-card__meta {", 1)[1].split("}", 1)[0]
+    item_block = styles.split(".candidate-card__meta-item {", 1)[1].split("}", 1)[0]
+
+    assert "overflow: hidden" in card_block
+    assert "width: 100%" in meta_block
+    assert "max-width: 100%" in meta_block
+    assert "grid-template-columns: minmax(0, 1fr)" in meta_block
+    assert "overflow: hidden" in item_block
+    assert "text-overflow: ellipsis" in item_block
+
+
+def test_candidate_card_metadata_is_lifted_from_bottom_edge() -> None:
+    """The metadata row should sit above the card edge so descenders are not clipped."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    meta_block = styles.split(".candidate-card__meta {", 1)[1].split("}", 1)[0]
+
+    assert "line-height: 1.35" in meta_block
+    assert "transform: translateY(-2px)" in meta_block
+
+
 def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
     """The right summary column should give more width back to the resume content."""
 
@@ -575,7 +796,7 @@ def test_stitch_workspace_keeps_candidate_list_and_preview_same_viewport() -> No
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     workbench_block = styles.split(".ts-resume-workspace {", 1)[1].split("}", 1)[0]
 
-    assert "grid-template-columns: 378px minmax(0, 1fr)" in workbench_block
+    assert "grid-template-columns: 408px minmax(0, 1fr)" in workbench_block
     assert "height: calc(100vh - 88px)" in workbench_block
 
 
@@ -585,7 +806,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260701-stitch-resume-summary-actions" in html
+    assert "/assets/styles.css?v=20260701-stitch-resume-user-card-motion" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
@@ -621,6 +842,47 @@ def test_stitch_dock_effects_skip_job_tabs() -> None:
     assert ".candidate-card" in styles
     assert ".filter-tag" in styles
     assert ".action-dock-btn" in styles
+
+
+def test_candidate_card_dock_effect_is_subtle() -> None:
+    """Candidate cards should still follow the cursor without growing too aggressively."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.08' in script
+    assert "radius: 120" in script
+    assert "marginFactor: 8" in script
+
+
+def test_resume_pagination_uses_editable_frosted_page_status() -> None:
+    """The page status should be a frosted capsule with an Enter-to-jump page input."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="resumePageInput"' in script
+    assert 'class="pagination-input"' in script
+    assert "data-page-input" in script
+    assert 'type="number"' in script
+    assert 'event.key !== "Enter"' in script
+    target_page_script = (
+        "const targetPage = Math.min("
+        "Math.max(1, Number(pageInput.value) || current), pages)"
+    )
+    assert target_page_script in script
+    assert "state.page = targetPage" in script
+    assert "loadResumes({ preferCache: true })" in script
+
+    status_block = styles.split(".pagination-status {", 1)[1].split("}", 1)[0]
+    input_block = styles.split(".pagination-input {", 1)[1].split("}", 1)[0]
+
+    assert "border-radius: 999px" in status_block
+    assert "background: rgba(31, 41, 55, 0.84)" in status_block
+    assert "color: #f8fafc" in status_block
+    assert "font-weight: 800" in status_block
+    assert "backdrop-filter: blur(12px)" in status_block
+    assert "width: 38px" in input_block
+    assert "text-align: center" in input_block
 
 
 def test_interview_button_uses_preflight_then_live_confirmation() -> None:

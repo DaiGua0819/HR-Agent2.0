@@ -30,18 +30,6 @@ const hrAuth = (() => {
   }
   function updateUserCard(user) {
     document.getElementById("userName").textContent = user.user.name;
-    const scope = user.resumeScope;
-    const displayJob = (value) => {
-      const text = String(value || "").trim();
-      if (text.includes("企业内容运营负责人") || text.includes("运营A")) return "运营A";
-      if (text.includes("B端社交媒体运营") || text.includes("运营B")) return "运营B";
-      return text;
-    };
-    const jobs = (scope.jobTypes || []).includes("*")
-      ? "全部岗位"
-      : [...new Set((scope.jobTypes || []).map(displayJob).filter(Boolean))].join("、") || "暂无岗位权限";
-    document.getElementById("userScope").textContent =
-      `可见：${scope.owners.join("、")} / ${scope.platforms.join("、")} / ${jobs}`;
   }
   function bindLogin(api, afterLogin) {
     document.getElementById("feishuLoginBtn").onclick = () => {

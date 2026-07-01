@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from dataclasses import asdict
 from typing import Any
 from urllib.request import urlopen
@@ -157,6 +158,8 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     else:
         required = {
             "thread list": zhilian_selectors.SESSION_ITEM,
+        }
+        conditional = {
             "chat ready/input": zhilian_selectors.CHAT_READY,
             "message list": zhilian_selectors.MESSAGE_ITEM,
         }
@@ -591,32 +594,54 @@ def _print_summary(platform: Platform, items: list[dict[str, Any]], *, live: boo
     failed = sum(1 for item in items if item.get("action") in {"failed", "send_failed"})
     skipped = sum(1 for item in items if item.get("action") == "skip")
     processed = max(0, len(items) - failed - skipped)
-    print(f"\n===== {platform.value} {mode} summary =====")
-    print(
+    _print_console(f"\n===== {platform.value} {mode} summary =====")
+    _print_console(
         f"processed={processed} skipped={skipped} failed={failed} total={len(items)}",
-        flush=True,
     )
     for index, item in enumerate(items, start=1):
         candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
         decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
-        print(f"\n[{index}] conversation: {item.get('conversationId')}")
-        print(f"session: {item.get('sessionId') or ''}")
-        print(f"candidate: {candidate.get('name') or candidate.get('label') or ''}")
-        print(f"job: {item.get('job') or candidate.get('applied_position') or ''}")
-        print(f"rule source: {item.get('ruleSource') or 'not matched'}")
-        print(f"last message: {json.dumps(_jsonable(item.get('lastMessage')), ensure_ascii=False)}")
-        print(f"intended action: {item.get('action')}")
-        print(f"reason/stage: {item.get('stage')}")
+        _print_console(f"\n[{index}] conversation: {item.get('conversationId')}")
+        _print_console(f"session: {item.get('sessionId') or ''}")
+        _print_console(f"candidate: {candidate.get('name') or candidate.get('label') or ''}")
+        _print_console(f"job: {item.get('job') or candidate.get('applied_position') or ''}")
+        _print_console(f"rule source: {item.get('ruleSource') or 'not matched'}")
+        _print_console(
+            f"last message: {json.dumps(_jsonable(item.get('lastMessage')), ensure_ascii=False)}"
+        )
+        _print_console(f"intended action: {item.get('action')}")
+        _print_console(f"reason/stage: {item.get('stage')}")
         if item.get("sentMessages"):
-            print(f"messages: {json.dumps(_jsonable(item['sentMessages']), ensure_ascii=False)}")
+            _print_console(
+                f"messages: {json.dumps(_jsonable(item['sentMessages']), ensure_ascii=False)}"
+            )
         if item.get("reliableActions"):
-            print(
+            _print_console(
                 "reliable actions: "
                 f"{json.dumps(_jsonable(item['reliableActions']), ensure_ascii=False)}"
             )
-        print(f"artifact written: {bool(item.get('artifactWritten'))}")
-        print(f"candidate status written: {bool(item.get('candidateStatusWritten'))}")
-        print(f"decision: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
+        _print_console(f"artifact written: {bool(item.get('artifactWritten'))}")
+        _print_console(f"candidate status written: {bool(item.get('candidateStatusWritten'))}")
+        _print_console(f"decision: {json.dumps(_jsonable(decision), ensure_ascii=False)}")
+
+
+def _print_console(message: object = "") -> None:
+    """Print summary lines without crashing on legacy Windows console encodings."""
+
+    print(_console_safe_text(str(message)), flush=True)
+
+
+def _console_safe_text(text: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    errors = getattr(sys.stdout, "errors", None) or "strict"
+    try:
+        text.encode(encoding, errors=errors)
+        return text
+    except (LookupError, UnicodeError):
+        try:
+            return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        except (LookupError, UnicodeError):
+            return text.encode("utf-8", errors="replace").decode("utf-8")
 
 
 def _jsonable(value: Any) -> Any:

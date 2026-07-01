@@ -83,6 +83,8 @@ function tsSegmentClass(active) {
   return `ts-segment-button${active ? " active" : ""}`;
 }
 const multiFilterKeys = new Set([]);
+let globalSearchTimer = null;
+let globalSearchRequestId = 0;
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
 function canonicalResumeJobType(value) {
   const text = String(value || "").trim();
@@ -185,6 +187,51 @@ function resumeImportTime(resume) {
   const normalized = String(value).replace(/\//g, "-");
   const match = normalized.match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : String(value).slice(0, 10);
+}
+function dateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+function shiftedDate(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+function importDateRange(value) {
+  if (value === "today") return { dateFrom: dateKey(shiftedDate(0)), dateTo: dateKey(shiftedDate(0)) };
+  if (value === "yesterday") return { dateFrom: dateKey(shiftedDate(-1)), dateTo: dateKey(shiftedDate(-1)) };
+  if (value === "last_7_days") return { dateFrom: dateKey(shiftedDate(-6)), dateTo: dateKey(shiftedDate(0)) };
+  if (value === "last_30_days") return { dateFrom: dateKey(shiftedDate(-29)), dateTo: dateKey(shiftedDate(0)) };
+  if (value === "last_90_days") return { dateFrom: dateKey(shiftedDate(-89)), dateTo: dateKey(shiftedDate(0)) };
+  return null;
+}
+function customImportDateRange() {
+  const select = document.querySelector('select[name="import_date_range"]');
+  const dateFrom = select?.dataset.dateFrom || "";
+  const dateTo = select?.dataset.dateTo || "";
+  if (!dateFrom && !dateTo) return null;
+  const singleDate = dateFrom || dateTo;
+  if (!dateFrom || !dateTo) return { dateFrom: singleDate, dateTo: singleDate };
+  return dateFrom <= dateTo ? { dateFrom, dateTo } : { dateFrom: dateTo, dateTo: dateFrom };
+}
+function applyImportDateRangeParams(params, values) {
+  const customRange = customImportDateRange();
+  if (customRange) {
+    if (customRange.dateFrom) params.set("date_from", customRange.dateFrom);
+    if (customRange.dateTo) params.set("date_to", customRange.dateTo);
+    return;
+  }
+  const ranges = (values || []).map(importDateRange).filter(Boolean);
+  if (!ranges.length) return;
+  const range = {
+    dateFrom: ranges.map((item) => item.dateFrom).sort()[0],
+    dateTo: ranges.map((item) => item.dateTo).sort().at(-1),
+  };
+  if (range.dateFrom) params.set("date_from", range.dateFrom);
+  if (range.dateTo) params.set("date_to", range.dateTo);
 }
 const uiAccess = () => state.user?.uiAccess || { defaultView: "resumes", views: ["resumes"], actions: [] };
 const canView = (view) => hrAuth.canView(state.user, view);
@@ -429,11 +476,17 @@ function buildJobTabs() {
 function queryFromFilters(page = state.page) {
   const data = new FormData($("filters"));
   const params = new URLSearchParams({ page: String(page), page_size: "10" });
+  const importDateValues = [];
   for (const [key, value] of data.entries()) {
     const cleaned = String(value || "").trim();
     if (!cleaned) continue;
+    if (key === "import_date_range") {
+      importDateValues.push(cleaned);
+      continue;
+    }
     params[multiFilterKeys.has(key) ? "append" : "set"](key, cleaned);
   }
+  applyImportDateRangeParams(params, importDateValues);
   if (state.jobType) params.set("job_type", state.jobType);
   if (state.tab === "unread") params.set("read_status", "unread");
   if (state.tab === "viewed") params.set("read_status", "viewed");
@@ -547,7 +600,7 @@ function renderMiniList() {
       const decision = labelDecision(review.decision);
       const imported = resumeImportTime(resume);
       return `
-        <button class="candidate-card ${resume.id === state.selectedId ? "active" : ""}" data-open="${resume.id}" style="transform: scale(1); z-index: 1; margin: 0px;">
+        <button class="candidate-card ${resume.id === state.selectedId ? "active candidate-card--focus-pop" : ""}" data-open="${resume.id}" style="z-index: 1; margin: 0px;">
           <span class="candidate-card__heading">
             <strong>${escapeHtml(resumeName(resume))}</strong>
             <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
@@ -572,7 +625,7 @@ function renderMiniList() {
   $("emptyState").textContent = state.resumes.length ? "" : "当前筛选条件下暂无简历";
   $("emptyState").style.display = state.resumes.length ? "none" : "block";
   bindRowActions();
-  bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.16, radius: 130, marginFactor: 20, vertical: true });
+  bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.08, radius: 120, marginFactor: 8, vertical: true });
   requestAnimationFrame(scrollSelectedCandidateIntoView);
 }
 function scrollSelectedCandidateIntoView() {
@@ -587,12 +640,26 @@ function renderPagination() {
   const pages = Math.max(1, state.pages || 1);
   const current = Math.min(Math.max(1, state.page || 1), pages);
   node.innerHTML = `
-    <span>第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
+    <label class="pagination-status" for="resumePageInput">
+      <span>第</span>
+      <input id="resumePageInput" class="pagination-input" data-page-input type="number" min="1" max="${pages}" value="${current}" aria-label="跳转页码" />
+      <span>/ ${pages} 页，共 ${state.total || 0} 份</span>
+    </label>
     <div class="ts-pagination">
       <button class="${tsButtonClass("default")}" data-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
       <button class="${tsButtonClass("primary")}" data-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
     </div>
   `;
+  const pageInput = node.querySelector("[data-page-input]");
+  pageInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const targetPage = Math.min(Math.max(1, Number(pageInput.value) || current), pages);
+    pageInput.value = String(targetPage);
+    if (targetPage === current) return;
+    state.page = targetPage;
+    loadResumes({ preferCache: true });
+  });
   node.querySelectorAll("[data-page-move]").forEach((button) => {
     button.onclick = () => {
       const nextPage = current + Number(button.dataset.pageMove || 0);
@@ -928,9 +995,361 @@ function bindResumeKeyboardNavigation() {
     }
   });
 }
+function closeSmoothFilterSelects(except = null) {
+  document.querySelectorAll(".smooth-select.is-open").forEach((wrapper) => {
+    if (wrapper === except) return;
+    wrapper.classList.remove("is-open");
+    wrapper.querySelector(".smooth-select__button")?.setAttribute("aria-expanded", "false");
+    smoothMenuForWrapper(wrapper)?.classList.remove("is-open");
+  });
+}
+function smoothMenuForWrapper(wrapper) {
+  const id = wrapper?.dataset.smoothSelectId || "";
+  return id ? document.querySelector(`[data-smooth-select-for="${id}"]`) : null;
+}
+function isImportDateSelect(select) {
+  return select?.name === "import_date_range";
+}
+function smoothWrapperForSelect(select) {
+  return select?.parentElement?.querySelector(".smooth-select") || null;
+}
+function normalizedImportDateRange(dateFrom, dateTo) {
+  const from = dateFrom || "";
+  const to = dateTo || "";
+  if (!from && !to) return { dateFrom: "", dateTo: "" };
+  const singleDate = from || to;
+  if (!from || !to) return { dateFrom: singleDate, dateTo: singleDate };
+  return from <= to ? { dateFrom: from, dateTo: to } : { dateFrom: to, dateTo: from };
+}
+function importDateCalendarText(select) {
+  const range = normalizedImportDateRange(select?.dataset.dateFrom || "", select?.dataset.dateTo || "");
+  if (!range.dateFrom && !range.dateTo) return "";
+  return range.dateFrom === range.dateTo ? range.dateFrom : `${range.dateFrom} - ${range.dateTo}`;
+}
+function clearImportDatePresetOptions(select) {
+  [...(select?.options || [])].forEach((option) => {
+    option.selected = false;
+  });
+}
+function syncImportDateCalendar(select) {
+  if (!isImportDateSelect(select)) return;
+  const menu = smoothMenuForWrapper(smoothWrapperForSelect(select));
+  if (!menu) return;
+  const range = normalizedImportDateRange(select.dataset.dateFrom || "", select.dataset.dateTo || "");
+  const fromInput = menu.querySelector('[data-import-date-boundary="from"]');
+  const toInput = menu.querySelector('[data-import-date-boundary="to"]');
+  if (fromInput) fromInput.value = range.dateFrom || "";
+  if (toInput) toInput.value = range.dateTo || "";
+}
+function setImportDateCalendarRange(select, dateFrom, dateTo) {
+  const range = normalizedImportDateRange(dateFrom, dateTo);
+  if (range.dateFrom || range.dateTo) {
+    select.dataset.dateFrom = range.dateFrom;
+    select.dataset.dateTo = range.dateTo;
+    clearImportDatePresetOptions(select);
+  } else {
+    delete select.dataset.dateFrom;
+    delete select.dataset.dateTo;
+  }
+  syncImportDateCalendar(select);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  syncSmoothSelectLabel(select);
+}
+function addImportDateCalendar(menu, select) {
+  if (!isImportDateSelect(select)) return;
+  const calendar = document.createElement("div");
+  calendar.className = "smooth-select__calendar";
+  calendar.innerHTML = `
+    <div class="smooth-select__calendar-title">精确日期</div>
+    <div class="smooth-select__calendar-grid">
+      <label class="smooth-select__calendar-field">
+        <span>开始</span>
+        <input class="smooth-select__calendar-input" data-import-date-boundary="from" type="date" />
+      </label>
+      <label class="smooth-select__calendar-field">
+        <span>结束</span>
+        <input class="smooth-select__calendar-input" data-import-date-boundary="to" type="date" />
+      </label>
+    </div>
+    <button class="smooth-select__calendar-clear" type="button">清除日期</button>
+  `;
+  const fromInput = calendar.querySelector('[data-import-date-boundary="from"]');
+  const toInput = calendar.querySelector('[data-import-date-boundary="to"]');
+  const updateRange = () => setImportDateCalendarRange(select, fromInput?.value || "", toInput?.value || "");
+  fromInput?.addEventListener("change", updateRange);
+  toInput?.addEventListener("change", updateRange);
+  calendar.querySelector(".smooth-select__calendar-clear")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    setImportDateCalendarRange(select, "", "");
+  });
+  menu.appendChild(calendar);
+  syncImportDateCalendar(select);
+}
+function positionSmoothSelectMenu(wrapper) {
+  const button = wrapper?.querySelector(".smooth-select__button");
+  const menu = smoothMenuForWrapper(wrapper);
+  if (!button || !menu) return;
+  const rect = button.getBoundingClientRect();
+  const viewportPadding = 12;
+  const hasCalendar = wrapper.dataset.smoothSelectCalendar === "true";
+  const menuWidth = hasCalendar ? Math.max(rect.width, 304) : rect.width;
+  const menuHeight = Math.min(hasCalendar ? 330 : 260, menu.scrollHeight || (hasCalendar ? 300 : 220));
+  const left = Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - menuWidth - viewportPadding));
+  const preferAbove = wrapper.dataset.smoothSelectMultiple === "true";
+  const top = preferAbove
+    ? Math.max(viewportPadding, rect.top - menuHeight - 6)
+    : Math.max(viewportPadding, Math.min(rect.bottom + 6, window.innerHeight - menuHeight - viewportPadding));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+  menu.style.transformOrigin = preferAbove ? "bottom center" : "top center";
+}
+function updateOpenSmoothSelectMenuPosition() {
+  document.querySelectorAll(".smooth-select.is-open").forEach(positionSmoothSelectMenu);
+}
+function syncSmoothSelectLabel(select) {
+  const wrapper = select.parentElement?.querySelector(".smooth-select");
+  const menu = smoothMenuForWrapper(wrapper);
+  const button = wrapper?.querySelector(".smooth-select__button");
+  const label = wrapper?.querySelector(".smooth-select__label");
+  if (select.multiple) {
+    const selectedOptions = [...select.selectedOptions].filter((option) => option.value);
+    const placeholder = select.options[0]?.textContent || "";
+    const calendarText = importDateCalendarText(select);
+    const text = calendarText || (selectedOptions.length
+      ? selectedOptions.map((option) => option.textContent).join(" / ")
+      : placeholder);
+    if (label) label.textContent = text;
+    if (button) button.title = text;
+    menu?.querySelectorAll("[data-smooth-select-value]").forEach((optionButton) => {
+      const value = optionButton.dataset.smoothSelectValue || "";
+      const selected = [...select.selectedOptions].some((option) => option.value === value);
+      optionButton.classList.toggle("is-selected", selected);
+    });
+    syncImportDateCalendar(select);
+    return;
+  }
+  const selected = select.selectedOptions?.[0] || select.options[select.selectedIndex];
+  if (label) label.textContent = selected?.textContent || "";
+  if (button) button.title = selected?.textContent || "";
+  menu?.querySelectorAll("[data-smooth-select-value]").forEach((optionButton) => {
+    optionButton.classList.toggle("is-selected", optionButton.dataset.smoothSelectValue === select.value);
+  });
+}
+function syncSmoothFilterSelects() {
+  document.querySelectorAll(".filter-field--compact select").forEach(syncSmoothSelectLabel);
+}
+function initializeSmoothFilterSelects() {
+  document.querySelectorAll(".filter-field--compact select").forEach((select, index) => {
+    if (select.dataset.smoothSelectReady === "true") return;
+    select.dataset.smoothSelectReady = "true";
+    select.classList.add("smooth-select__native");
+    const wrapper = document.createElement("div");
+    wrapper.className = "smooth-select";
+    wrapper.dataset.smoothSelectId = `smooth-select-${select.name || "filter"}-${index}`;
+    wrapper.dataset.smoothSelectMultiple = String(select.multiple);
+    wrapper.dataset.smoothSelectCalendar = String(isImportDateSelect(select));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "smooth-select__button";
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-controls", `${wrapper.dataset.smoothSelectId}-menu`);
+    button.innerHTML = `<span class="smooth-select__label"></span><span class="smooth-select__chevron" aria-hidden="true">⌄</span>`;
+    const menu = document.createElement("div");
+    menu.className = "smooth-select__menu";
+    if (isImportDateSelect(select)) menu.classList.add("smooth-select__menu--calendar");
+    menu.id = `${wrapper.dataset.smoothSelectId}-menu`;
+    menu.dataset.smoothSelectFor = wrapper.dataset.smoothSelectId;
+    menu.setAttribute("role", "listbox");
+    menu.addEventListener("click", (event) => event.stopPropagation());
+    [...select.options].forEach((option) => {
+      const optionButton = document.createElement("button");
+      optionButton.type = "button";
+      optionButton.className = "smooth-select__option";
+      optionButton.dataset.smoothSelectValue = option.value;
+      optionButton.textContent = option.textContent;
+      optionButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (select.multiple) {
+          if (isImportDateSelect(select)) {
+            delete select.dataset.dateFrom;
+            delete select.dataset.dateTo;
+          }
+          if (!option.value) {
+            [...select.options].forEach((item) => {
+              item.selected = false;
+            });
+          } else {
+            option.selected = !option.selected;
+            if (select.options[0]) select.options[0].selected = false;
+          }
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          syncSmoothSelectLabel(select);
+          return;
+        }
+        select.value = option.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        syncSmoothSelectLabel(select);
+        wrapper.classList.remove("is-open");
+        menu.classList.remove("is-open");
+        button.setAttribute("aria-expanded", "false");
+      });
+      menu.appendChild(optionButton);
+    });
+    addImportDateCalendar(menu, select);
+    select.insertAdjacentElement("afterend", wrapper);
+    wrapper.append(button);
+    document.body.appendChild(menu);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const shouldOpen = !wrapper.classList.contains("is-open");
+      closeSmoothFilterSelects(wrapper);
+      if (shouldOpen) {
+        wrapper.classList.toggle("is-open");
+        menu.classList.add("is-open");
+        positionSmoothSelectMenu(wrapper);
+      } else {
+        wrapper.classList.remove("is-open");
+        menu.classList.remove("is-open");
+      }
+      button.setAttribute("aria-expanded", String(shouldOpen));
+    });
+    select.addEventListener("change", () => syncSmoothSelectLabel(select));
+    syncSmoothSelectLabel(select);
+  });
+  if (document.body.dataset.smoothSelectCloseBound === "true") return;
+  document.body.dataset.smoothSelectCloseBound = "true";
+  document.addEventListener("click", () => closeSmoothFilterSelects());
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSmoothFilterSelects();
+  });
+  window.addEventListener("resize", updateOpenSmoothSelectMenuPosition);
+  window.addEventListener("scroll", updateOpenSmoothSelectMenuPosition, true);
+}
+function hideGlobalSearchResults() {
+  const panel = $("globalSearchResults");
+  const root = document.querySelector(".ts-command-search");
+  if (!panel) return;
+  panel.hidden = true;
+  panel.innerHTML = "";
+  root?.setAttribute("aria-expanded", "false");
+}
+function positionGlobalSearchResults() {
+  const panel = $("globalSearchResults");
+  const root = document.querySelector(".ts-command-search");
+  if (!panel || !root || panel.hidden) return;
+  const rect = root.getBoundingClientRect();
+  const viewportPadding = 12;
+  const width = Math.min(420, Math.max(280, rect.width));
+  const left = Math.max(viewportPadding, Math.min(rect.right - width, window.innerWidth - width - viewportPadding));
+  const top = Math.min(rect.bottom + 8, window.innerHeight - viewportPadding);
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  panel.style.width = `${width}px`;
+}
+async function searchGlobalResumes(query) {
+  const params = new URLSearchParams();
+  params.set("q", query);
+  params.set("page", "1");
+  params.set("page_size", "6");
+  const data = await api(`/api/resumes?${params.toString()}`);
+  return data.items || [];
+}
+function renderGlobalSearchResults(items, query) {
+  const panel = $("globalSearchResults");
+  const root = document.querySelector(".ts-command-search");
+  if (!panel || !root) return;
+  const cleaned = String(query || "").trim();
+  if (!cleaned) return hideGlobalSearchResults();
+  panel.hidden = false;
+  root.setAttribute("aria-expanded", "true");
+  positionGlobalSearchResults();
+  if (!items.length) {
+    panel.innerHTML = `<div class="ts-command-search__empty">没有找到相关候选人</div>`;
+    positionGlobalSearchResults();
+    return;
+  }
+  panel.innerHTML = items
+    .map((resume) => {
+      const id = escapeHtml(resume.id || "");
+      const name = escapeHtml(resumeName(resume));
+      const job = escapeHtml(resumeJob(resume) || "岗位待提取");
+      const meta = [resumeSchool(resume), platformName(resumePlatform(resume)), resumeOwner(resume)].filter(Boolean).join(" · ");
+      return `
+        <button class="ts-command-search__item" type="button" role="option" data-global-search-result="${id}">
+          <strong>${name}</strong>
+          <span>${job}</span>
+          <small>${escapeHtml(meta || "简历库候选人")}</small>
+        </button>
+      `;
+    })
+    .join("");
+  panel.querySelectorAll("[data-global-search-result]").forEach((button) => {
+    button.addEventListener("click", () => openGlobalSearchResult(button.dataset.globalSearchResult || ""));
+  });
+  positionGlobalSearchResults();
+}
+async function openGlobalSearchResult(id) {
+  if (!id) return;
+  hideGlobalSearchResults();
+  const input = $("globalSearch");
+  if (input) input.blur();
+  setView("resumes");
+  await openResume(id);
+}
+function bindGlobalSearchAutocomplete() {
+  const globalSearch = $("globalSearch");
+  const panel = $("globalSearchResults");
+  if (!globalSearch || !panel) return;
+  if (panel.parentElement !== document.body) document.body.appendChild(panel);
+  globalSearch.addEventListener("input", () => {
+    const query = globalSearch.value.trim();
+    clearTimeout(globalSearchTimer);
+    if (query.length < 2) {
+      hideGlobalSearchResults();
+      return;
+    }
+    const requestId = ++globalSearchRequestId;
+    globalSearchTimer = setTimeout(async () => {
+      try {
+        const items = await searchGlobalResumes(query);
+        if (requestId !== globalSearchRequestId) return;
+        renderGlobalSearchResults(items, query);
+      } catch (error) {
+        if (requestId !== globalSearchRequestId) return;
+        renderGlobalSearchResults([], query);
+      }
+    }, 180);
+  });
+  globalSearch.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") return hideGlobalSearchResults();
+    if (event.key !== "Enter") return;
+    const first = $("globalSearchResults")?.querySelector("[data-global-search-result]");
+    if (first) {
+      event.preventDefault();
+      openGlobalSearchResult(first.dataset.globalSearchResult || "");
+      return;
+    }
+    $("filters").q.value = globalSearch.value;
+    state.page = 1;
+    clearResumePrefetchCache();
+    setView("resumes");
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target?.closest?.(".ts-command-search")) return;
+    if (event.target?.closest?.("#globalSearchResults")) return;
+    hideGlobalSearchResults();
+  });
+  window.addEventListener("resize", positionGlobalSearchResults);
+  window.addEventListener("scroll", positionGlobalSearchResults, true);
+}
 function bindPageActions() {
   hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
+  initializeSmoothFilterSelects();
+  bindGlobalSearchAutocomplete();
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
   $("filterToggleBtn").onclick = toggleFilterPanel;
@@ -945,18 +1364,12 @@ function bindPageActions() {
     setTimeout(() => {
       state.jobType = "";
       state.page = 1;
+      syncSmoothFilterSelects();
       clearResumePrefetchCache();
       loadResumes();
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
-  $("globalSearch").addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    $("filters").q.value = event.target.value;
-    state.page = 1;
-    clearResumePrefetchCache();
-    setView("resumes");
-  });
   $("viewedBtn").onclick = () => state.selectedId && markViewedAndAdvance(state.selectedId);
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");

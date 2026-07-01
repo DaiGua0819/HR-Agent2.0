@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import importlib
 import json
+import sys
+from pathlib import Path
 
 import pytest
 from app.browser.fake_page import FakePage
@@ -16,6 +20,8 @@ from app.browser.read_once import dry_run_read_once
 from app.browser.selector_validation import detect_login_page, validate_platform_selectors
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
+from app.platforms.zhilian import selectors as zhilian_selectors
+from scripts.platform_once_common import _health_check, _print_summary
 
 
 class TinyPage:
@@ -135,6 +141,67 @@ def test_cdp_job51_lookup_prefers_ready_chat_tab() -> None:
     assert page is ready
 
 
+def test_zhilian_preflight_does_not_require_chat_panel_before_opening_thread() -> None:
+    """智联初始预检只硬性要求会话列表，聊天区在点开候选人后验证。"""
+
+    page = SelectorCountPage(
+        {
+            zhilian_selectors.SESSION_ITEM: 3,
+            zhilian_selectors.CHAT_READY: 0,
+            zhilian_selectors.MESSAGE_ITEM: 0,
+        }
+    )
+    adapter = PreflightAdapter(page)
+
+    missing = asyncio.run(_health_check(Platform.ZHILIAN, adapter))
+
+    assert missing == []
+
+
+def test_boss_confirmed_live_allows_high_limit_for_full_unread_pass(monkeypatch) -> None:
+    """用户确认 live 后，BOSS 单次处理不再限制 3/10 人。"""
+
+    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts_dir))
+    run_boss_once = importlib.import_module("run_boss_once")
+    args = argparse.Namespace(live=True, confirm_live=True, owner="宋峰峰", limit=50)
+
+    assert run_boss_once._resolve_mode(args) is True
+    assert run_boss_once.os.environ["DRY_RUN"] == "false"
+
+
+def test_platform_summary_print_handles_unencodable_console_text(monkeypatch) -> None:
+    """Windows GBK consoles should not crash when a candidate message contains emoji."""
+
+    stdout = StrictGbkStdout()
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    _print_summary(
+        Platform.ZHILIAN,
+        [
+            {
+                "conversationId": "conv-1",
+                "sessionId": "session-1",
+                "candidate": {"name": "候选人"},
+                "job": "AI应用开发实习生",
+                "lastMessage": {"sender": "other", "text": "可以🤝"},
+                "action": "wait",
+                "stage": "resume_already_requested",
+                "ruleSource": "positionReplies",
+                "sentMessages": [],
+                "artifactWritten": False,
+                "candidateStatusWritten": True,
+                "decision": {"action": "wait", "reason": "resume_already_requested"},
+            }
+        ],
+        live=True,
+    )
+
+    output = "".join(stdout.writes)
+    assert "zhilian LIVE summary" in output
+    assert "可以?" in output
+
+
 def test_dry_run_read_once_records_intent_without_side_effect(monkeypatch) -> None:
     """dry-run 读路径会判断下一步，但不会真的写入 FakePage 消息。"""
 
@@ -189,6 +256,42 @@ class FakeConnection:
 
     def is_connected(self) -> bool:
         return True
+
+
+class PreflightAdapter:
+    def __init__(self, page: SelectorCountPage) -> None:
+        self.page = page
+
+    async def select_positions(self, target_position: str | None = None) -> dict[str, object]:
+        _ = target_position
+        return {"selected": True}
+
+    async def select_unread_filter(self) -> dict[str, object]:
+        return {"selected": True}
+
+
+class SelectorCountPage:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self.counts = counts
+
+    async def query_all(self, selector: str) -> list[object]:
+        return [object()] * self.counts.get(selector, 0)
+
+
+class StrictGbkStdout:
+    encoding = "gbk"
+    errors = "strict"
+
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+
+    def write(self, text: str) -> int:
+        text.encode(self.encoding, errors=self.errors)
+        self.writes.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        return None
 
 
 def _conversation(position: str = "销售管培生") -> dict[str, object]:

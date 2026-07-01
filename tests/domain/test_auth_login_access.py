@@ -143,19 +143,20 @@ def test_frontend_has_feishu_only_login_screen_and_ui_access_hooks() -> None:
     assert "/api/auth/login" not in script
 
 
-def test_feishu_login_button_uses_red_visual_treatment() -> None:
-    """The Feishu login CTA should use the requested red button styling."""
+def test_feishu_login_button_uses_green_white_visual_treatment() -> None:
+    """The Feishu login CTA should use the requested green-white button styling."""
 
     root = Path(__file__).resolve().parents[2]
     html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (root / "frontend" / "auth.css").read_text(encoding="utf-8")
 
-    assert "/assets/auth.css?v=20260701-side-browser-responsive" in html
+    assert "/assets/auth.css?v=20260701-green-feishu-login" in html
     assert ".feishu-login {" in styles
     login_block = styles.split(".feishu-login {", 1)[1].split("}", 1)[0]
 
-    assert "linear-gradient(135deg, #ef4444, #b91c1c)" in login_block
-    assert "rgba(185, 28, 28" in login_block
+    assert "linear-gradient(135deg, #ffffff, #dcfce7 52%, #22c55e)" in login_block
+    assert "color: #065f46" in login_block
+    assert "rgba(22, 163, 74" in login_block
 
 
 def test_login_screen_fits_codex_side_browser_viewport() -> None:

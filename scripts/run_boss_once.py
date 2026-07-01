@@ -135,8 +135,8 @@ def _resolve_mode(args: argparse.Namespace) -> bool:
             _fail("live 模式必须同时传 --confirm-live，避免误触真实发送。")
         if args.owner != "宋峰峰":
             _fail("本次 live 只允许处理 owner=宋峰峰。")
-        if args.limit < 1 or args.limit > 10:
-            _fail("live 模式 limit 必须在 1 到 3 之间。")
+        if args.limit < 1:
+            _fail("live 模式 limit 必须为正整数。")
         os.environ["DRY_RUN"] = "false"
         load_settings.cache_clear()
         return True
