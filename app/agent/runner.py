@@ -99,6 +99,9 @@ class ConversationRunner:
                 "candidate_rejected",
                 evidence=last.text,
             )
+        if self._needs_initial_ai_basic_phrase(conversation, rule):
+            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
+
         if is_silent_question(
             last.text,
             self.rules,
@@ -110,9 +113,6 @@ class ConversationRunner:
                 "silent_question",
                 evidence=last.text,
             )
-
-        if self._needs_initial_ai_basic_phrase(conversation, rule):
-            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
 
         if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)

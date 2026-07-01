@@ -89,6 +89,30 @@ def test_ai_basic_flow_send_accept_reject_and_unclear() -> None:
         assert page.resume_requests == 0
 
 
+def test_ai_basic_hiring_status_still_sends_initial_basic_phrase() -> None:
+    """AI 实习生问还招时不答状态，但仍要发基础条件话术推进。"""
+
+    state, page = run_case(
+        conversation(
+            "AI应用开发实习生",
+            [
+                {
+                    "sender": "other",
+                    "text": (
+                        "您发布的AI应用开发实习生职位还在招吗？"
+                        "我很感兴趣，希望可以深聊，期待您的回复！"
+                    ),
+                }
+            ],
+        )
+    )
+
+    assert state["next_action"] == "ask_basic_conditions"
+    assert state["stage"] == "basic_phrase_sent"
+    assert page.sent_messages == ["基础条件确认话术"]
+    assert page.resume_requests == 0
+
+
 def test_sales_screening_flow_ask_accept_and_reject() -> None:
     """销售岗位：未问发岗位问题，通过求简历，不满足跳过。"""
 
@@ -185,6 +209,29 @@ def test_screening_confirmation_is_not_answered_by_short_knowledge_prefix() -> N
 
     assert state["next_action"] == "ask_screening"
     assert page.sent_messages == ["你好，这个岗位需要出差，可以接受吗"]
+
+
+def test_hr_screening_legacy_travel_question_is_not_repeated() -> None:
+    """旧话术“你能接受出差吗”已问且对方接受时，不重复发送新版出差题。"""
+
+    state, page = run_case(
+        conversation(
+            "人力资源管培生",
+            [
+                {"sender": "me", "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"},
+                {"sender": "other", "text": "可以接受"},
+                {"sender": "me", "text": "HR管培生也是线上面试"},
+                {"sender": "other", "text": "okok 可以"},
+                {"sender": "me", "text": "HR管培生也是线上面试"},
+                {"sender": "me", "text": "你能接受出差吗"},
+                {"sender": "other", "text": "可以"},
+            ],
+        )
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert page.sent_messages == []
+    assert page.resume_requests == 1
 
 
 def test_short_confirmation_does_not_match_knowledge_prefix() -> None:

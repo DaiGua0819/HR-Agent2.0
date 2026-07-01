@@ -133,10 +133,13 @@ def select_position_screening_question_text(
 def position_screening_question_matches_any(message_text: str, question: dict[str, Any]) -> bool:
     """判断消息是否命中某个问题的主问法或任意 variant。"""
 
-    return any(
+    variants = screening_question_variant_texts(question)
+    if any(
         _question_text_matches(message_text, item)
-        for item in screening_question_variant_texts(question)
-    )
+        for item in variants
+    ):
+        return True
+    return any(_semantic_question_matches(message_text, item) for item in variants)
 
 
 async def _question_progress(
@@ -312,6 +315,20 @@ def _question_text_matches(message_text: str, question_text: str) -> bool:
     message = _compact(message_text)
     question = _compact(question_text)
     return bool(message and question and (question in message or message in question))
+
+
+def _semantic_question_matches(message_text: str, question_text: str) -> bool:
+    message = _compact(message_text)
+    question = _compact(question_text)
+    if not message or not question:
+        return False
+    if "出差" in message and "出差" in question:
+        accept_terms = ("接受", "可以", "能", "是否")
+        question_terms = (*accept_terms, "需要")
+        return any(term in message for term in accept_terms) and any(
+            term in question for term in question_terms
+        )
+    return False
 
 
 def _compact(value: str) -> str:
