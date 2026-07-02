@@ -209,3 +209,33 @@
   - 当前 `EmptyMeetingSourceClient` 是安全空实现；真实飞书会议/妙记 source 收集需要在 OAuth/status 兼容阶段接入用户 token HTTP client。
   - 当前评价生成器是保守本地 fallback；后续需要替换为旧 `feedbackBackfill.js` 同等 LLM 评价结构。
   - 本轮完成 backfill 核心链路，人工 review/confirm 旧路由仍需继续补齐。
+---
+
+### 快照 0054：迁移面试中心飞书 OAuth 与状态兼容接口
+
+- 修改时间：2026-07-02 23:27:26 +08:00
+- 修改原因：
+  - 旧面试中心前端依赖 `/api/interview-center/feishu/auth-url`、`/api/interview-center/feishu/oauth/callback`、`/api/interview-center/feishu/status`、`/api/interview-center/feishu/disconnect` 四个飞书授权与连接状态接口。
+  - 当前 Python 版 OAuth 服务此前只保留占位 URL/callback，未持久化用户 token，也未返回旧前端需要的授权 scope、连接状态和 Bitable 路由信息。
+  - 后续真实日历、文档、会议/妙记读取都需要复用同一个用户 token 存储边界，因此本轮先补齐 store-backed OAuth 兼容层。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/oauth.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增旧 Node 版一致的默认飞书 OAuth scopes，授权 URL 返回 `authUrl`、`state`、`configured`、`redirectUri`。
+  - 新增可注入的 `FeishuOAuthHttpClientProtocol` 与真实 `FeishuOAuthHttpClient`，支持 code 换 user access token、读取 user info，并通过 store 保存/读取/清理 token。
+  - `InterviewCenterService` 组合 store-backed `FeishuOAuthService`，测试可注入 fake OAuth client，运行时默认使用真实飞书 HTTP client。
+  - `app/api/routes/interview.py` 新增旧前端兼容的 `/api/interview-center/feishu/*` 授权、回调、状态和断开连接接口，同时保留原有 `/api/interview-center/oauth/*` 路径。
+  - 新增测试覆盖授权 URL scope、OAuth callback 持久化 token、status/disconnect 使用已保存 token。
+- 验证结果：
+  - 红灯确认：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q` 初次运行 3 failed，原因是 `InterviewCenterService.__init__()` 尚不支持 `oauth_client`。
+  - 修复后目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：26 passed，1 个既有 StarletteDeprecationWarning。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：39 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/oauth.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/oauth.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前 OAuth token 已入库，但日历、Docx、VC/妙记等真实 HTTP client 仍需继续接入该 token。
+  - 真实飞书接口错误码映射目前只做了基础异常抛出，后续联调时需要按旧前端提示文案细化。

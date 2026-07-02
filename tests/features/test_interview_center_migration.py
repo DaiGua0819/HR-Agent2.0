@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from app.control_plane.main import create_app
@@ -526,6 +527,86 @@ def test_backfill_api_routes_are_compatible() -> None:
     assert status.json()["lastResult"]["sessionId"] == session.id
 
 
+def test_feishu_auth_url_route_includes_old_oauth_scopes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("FEISHU_REDIRECT_URI", "http://localhost/callback")
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get("/api/interview-center/feishu/auth-url")
+
+    query = parse_qs(urlparse(response.json()["authUrl"]).query)
+    scopes = set(query["scope"][0].split())
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["configured"] is True
+    assert query["app_id"] == ["cli_app"]
+    assert query["redirect_uri"] == ["http://localhost/callback"]
+    assert {
+        "offline_access",
+        "calendar:calendar.event:read",
+        "minutes:minutes.transcript:export",
+    } <= scopes
+
+
+def test_feishu_oauth_callback_saves_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    store = InMemoryInterviewStore()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/interview-center/feishu/oauth/callback",
+            params={"code": "code-1", "state": "state-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["connected"] is True
+    assert store.get_token()["accessToken"] == "user-access"
+    assert store.get_token()["userInfo"]["open_id"] == "ou_1"
+
+
+def test_feishu_status_and_disconnect_use_stored_token() -> None:
+    store = InMemoryInterviewStore()
+    store.save_token(
+        {
+            "accessToken": "user-access",
+            "refreshToken": "refresh",
+            "expiresAt": 1_783_100_000_000,
+            "userInfo": {"open_id": "ou_1", "name": "HR"},
+        }
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        before = client.get("/api/interview-center/feishu/status")
+        disconnected = client.post("/api/interview-center/feishu/disconnect")
+        after = client.get("/api/interview-center/feishu/status")
+
+    assert before.json()["connected"] is True
+    assert before.json()["userInfo"]["name"] == "HR"
+    assert disconnected.json()["ok"] is True
+    assert after.json()["connected"] is False
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -732,6 +813,21 @@ class FakeAssetSync:
         _ = session, resume, document, second_round
         self.calls.append("evaluation_document")
         return {"ok": True}
+
+
+class FakeOAuthClient:
+    async def exchange_code(self, code: str) -> dict[str, Any]:
+        assert code == "code-1"
+        return {
+            "access_token": "user-access",
+            "refresh_token": "refresh",
+            "expires_in": 3600,
+            "refresh_expires_in": 7200,
+        }
+
+    async def user_info(self, access_token: str) -> dict[str, Any]:
+        assert access_token == "user-access"
+        return {"open_id": "ou_1", "name": "HR"}
 
 
 def _resume_record() -> ResumeRecord:

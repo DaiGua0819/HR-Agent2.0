@@ -265,15 +265,49 @@ async def feedback_backfill(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/api/interview-center/feishu/auth-url")
+async def feishu_auth_url(request: Request) -> dict[str, object]:
+    """Old interview-center Feishu auth-url endpoint."""
+
+    return _service(request).oauth().auth_url_payload()
+
+
+@router.get("/api/interview-center/feishu/oauth/callback")
+async def feishu_oauth_callback(code: str, state: str, request: Request) -> dict[str, object]:
+    """Old interview-center Feishu OAuth callback endpoint."""
+
+    try:
+        return await _service(request).oauth().handle_callback(code=code, state=state)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/interview-center/feishu/status")
+async def feishu_status(request: Request) -> dict[str, object]:
+    """Old interview-center Feishu connection status endpoint."""
+
+    return _service(request).oauth().status()
+
+
+@router.post("/api/interview-center/feishu/disconnect")
+async def feishu_disconnect(request: Request) -> dict[str, object]:
+    """Old interview-center Feishu disconnect endpoint."""
+
+    return _service(request).oauth().disconnect()
+
+
 @router.get("/api/interview-center/oauth/start")
-async def oauth_start(request: Request) -> dict[str, str]:
+async def oauth_start(request: Request) -> dict[str, object]:
     """生成 OAuth URL；真实授权联调留到最后阶段。"""
 
     return _service(request).oauth().authorization_url()
 
 
 @router.get("/api/interview-center/oauth/callback")
-async def oauth_callback(code: str, state: str, request: Request) -> dict[str, str]:
+async def oauth_callback(code: str, state: str, request: Request) -> dict[str, object]:
     """OAuth 回调结构占位。"""
 
-    return await _service(request).oauth().handle_callback(code=code, state=state)
+    try:
+        return await _service(request).oauth().handle_callback(code=code, state=state)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

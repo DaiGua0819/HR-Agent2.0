@@ -39,7 +39,10 @@ from app.features.interview_center.feishu.docx import (
     build_interview_document_text,
 )
 from app.features.interview_center.feishu.meeting import MeetingSourceClientProtocol
-from app.features.interview_center.feishu.oauth import FeishuOAuthService
+from app.features.interview_center.feishu.oauth import (
+    FeishuOAuthHttpClientProtocol,
+    FeishuOAuthService,
+)
 from app.features.interview_center.question_generator import (
     InterviewQuestionGenerator,
     QuestionLLMProtocol,
@@ -71,6 +74,7 @@ class InterviewCenterService:
         calendar_client: CalendarClientProtocol | None = None,
         doc_client: InterviewDocClientProtocol | None = None,
         meeting_client: MeetingSourceClientProtocol | None = None,
+        oauth_client: FeishuOAuthHttpClientProtocol | None = None,
         evaluation_generator: EvaluationGeneratorProtocol | None = None,
         asset_sync: BitableAssetSync | Any | None = None,
         now: Any | None = None,
@@ -82,6 +86,7 @@ class InterviewCenterService:
         self.store = store or GLOBAL_INTERVIEW_STORE
         self.bitable = bitable or MockFeishuBitableClient()
         self.doc_client = doc_client or MockInterviewDocClient()
+        self.oauth_service = FeishuOAuthService(store=self.store, http_client=oauth_client)
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
         self.asset_sync = asset_sync or BitableAssetSync(
@@ -392,7 +397,7 @@ class InterviewCenterService:
     def oauth(self) -> FeishuOAuthService:
         """返回 OAuth 服务。"""
 
-        return FeishuOAuthService()
+        return self.oauth_service
 
     async def _load_bitable_candidates(self) -> list[dict[str, Any]]:
         records = await self.bitable.list_records(BITABLE_TABLES.candidates)
