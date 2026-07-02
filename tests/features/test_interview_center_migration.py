@@ -497,6 +497,15 @@ def test_sessions_api_uses_old_default_time_window() -> None:
     non_interview.start_time = now + 3_600
     non_interview.end_time = now + 7_200
     store.save(non_interview)
+    unknown_event = store.create(
+        resume_id="resume-unknown",
+        candidate_name="Unknown",
+        job_type="AI应用开发实习生",
+        payload={"title": "未识别日程"},
+    )
+    unknown_event.start_time = now + 3_600
+    unknown_event.end_time = now + 7_200
+    store.save(unknown_event)
     service = InterviewCenterService(
         repository=ResumeRepository.in_memory([_resume_record()]),
         store=store,
@@ -519,6 +528,7 @@ def test_sessions_api_uses_old_default_time_window() -> None:
     assert stale.id in unbounded_ids
     assert far_future.id in unbounded_ids
     assert non_interview.id not in unbounded_ids
+    assert unknown_event.id not in unbounded_ids
 
 
 def test_interview_center_sync_api_routes_are_compatible() -> None:

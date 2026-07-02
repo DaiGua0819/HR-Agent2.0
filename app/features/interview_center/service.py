@@ -149,7 +149,11 @@ class InterviewCenterService:
             resume_id=resume.id,
             candidate_name=resume.name or "",
             job_type=job_type or resume.job_type or resume.applied_position or "",
-            payload={"resume": resume.model_dump(), "dryRun": dry_run},
+            payload={
+                "resume": resume.model_dump(),
+                "dryRun": dry_run,
+                "isInterviewLike": True,
+            },
         )
         return await self.run_session(
             session,
@@ -179,7 +183,11 @@ class InterviewCenterService:
             resume_id=resume.id,
             candidate_name=resume.name or "",
             job_type=resume.job_type or resume.applied_position or "",
-            payload={"resume": resume.model_dump(), "dryRun": True},
+            payload={
+                "resume": resume.model_dump(),
+                "dryRun": True,
+                "isInterviewLike": True,
+            },
         )
         return await self.run_session(
             session,
@@ -737,7 +745,7 @@ class InterviewCenterService:
                 continue
             if status and session.status != status:
                 continue
-            if session.payload.get("isInterviewLike") is False:
+            if not session.payload.get("isInterviewLike"):
                 continue
             session = self._protect_premature_backfill(
                 session,

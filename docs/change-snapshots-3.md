@@ -1526,3 +1526,35 @@
 - 风险 / 待确认：
   - 本轮只恢复提前回灌理由和 token 的入口字符串化，以及 reason 保存裁剪；其它旧 Node 小型类型转换差异仍继续按路由逐项对照。
   - `_legacy_clip_text()` 在 backfill 模块内保持局部实现，后续若多个模块继续需要旧 `clipText`，可以再在有测试覆盖后提取共享 helper。
+
+---
+
+### 快照 0097：恢复会话列表只返回面试日程
+
+- 修改时间：2026-07-03 06:50:34 +08:00
+- 修改原因：
+  - 旧 Node `GET /api/interview-center/sessions` 在返回前执行 `.filter((item) => item.isInterviewLike)`，只有明确识别为面试的日程会进入旧面试中心列表。
+  - 当前 FastAPI 服务层只排除 `isInterviewLike is False`，缺失 `isInterviewLike` 字段的未识别日程仍会被返回。
+  - 该差异会让旧面试中心页面混入未识别日程或普通日程，影响后续绑定、准备和回灌判断。
+- 修改文件：
+  - `app/features/interview_center/service.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `InterviewCenterService.list_sessions()` 改为要求 `session.payload["isInterviewLike"]` 为真才返回，贴齐旧 Node 真值过滤。
+  - `create_session_from_resume()` 和 `create_session_from_payload()` 创建的本地面试中心会话显式写入 `isInterviewLike:true`，避免旧列表过滤误伤现有本地创建流程。
+  - 扩展 `test_sessions_api_uses_old_default_time_window()`，加入时间窗口内但缺失 `isInterviewLike` 的会话，并断言旧 sessions 接口不会返回它。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "sessions_api_uses_old_default_time_window"` 首次 1 failed；默认 sessions 列表多返回了缺失 `isInterviewLike` 的会话。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "sessions_api_uses_old_default_time_window"`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - Sessions/List 切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "sessions_api or list_sessions or bind_and_sessions_api_routes_are_compatible"`：5 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容回归发现：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q` 首次 1 failed；`test_interview_center_api_routes_are_wired` 中本地创建会话后旧列表为空，证明需要给本地创建会话补 `isInterviewLike:true`。
+  - 本地创建回归验证：同一 Python 运行 `-m pytest tests/features/test_phase6_interview_center.py -q -k "interview_center_api_routes_are_wired"`：1 passed，5 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：77 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：90 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：324 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 该行为只影响旧 `/api/interview-center/sessions` 列表语义；如果后续有新入口需要展示所有手工创建会话，应另走新接口或显式标记 `isInterviewLike`。
+  - 本轮没有触碰 calendar sync 的识别规则，后续仍需通过本地服务烟测确认真实日历同步后的旧列表展示。
