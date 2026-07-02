@@ -18,6 +18,8 @@ data/uploads/
 data/profiles/
 profiles/
 work/
+.worktrees/
+worktrees/
 
 # 本地日志与临时文件。
 logs/
