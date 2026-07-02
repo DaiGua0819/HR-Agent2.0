@@ -1279,3 +1279,32 @@
 - 风险 / 待确认：
   - 本轮只恢复 prepare API 的旧 JSON 包裹，不改变 `InterviewCenterService.prepare_session()` 的内部返回结构。
   - 旧前端仍可能依赖其它细小字段顺序或文案；后续继续按旧 Node 路由逐项对照。
+
+---
+
+### 快照 0089：对齐绑定接口旧校验顺序
+
+- 修改时间：2026-07-03 05:30:02 +08:00
+- 修改原因：
+  - 旧 Node `POST /api/interview-center/sessions/{id}/bind` 会先用请求体里的 `resumeId` 查候选人简历，找不到简历时立即返回 `候选人简历不存在`，之后才检查面试日程是否存在。
+  - 当前 FastAPI `InterviewCenterService.bind_session()` 先检查 session，再检查 resume；当旧前端空 body 或缺 resumeId 且 session id 不存在时，会返回 `面试日程不存在`，和旧入口错误优先级不一致。
+  - 旧前端会直接展示 `error` 文案，错误优先级变化会影响用户排查绑定失败原因。
+- 修改文件：
+  - `app/features/interview_center/service.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `bind_session()` 调整为先 `_load_resume(resume_id)`，简历不存在时抛 `resume_not_found`，再 `_require_session(session_id)`。
+  - 扩展 `test_bind_api_accepts_empty_body_like_old_node()`，覆盖空 body 且 session 存在、空 body 且 session 不存在两个场景都返回旧文案 `候选人简历不存在`。
+- 验证结果：
+  - 红灯确认：扩展测试首次运行失败，未知 session + 空 body 实际返回 `面试日程不存在`，证明当前校验顺序和旧 Node 不一致。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k bind_api_accepts_empty_body_like_old_node`：1 passed，67 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 绑定/准备切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "bind_session or bind_and_sessions_api_routes_are_compatible or bind_api_accepts_empty_body_like_old_node or prepare_session_api_route_is_compatible or list_sessions"`：6 passed，62 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：68 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：81 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：315 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只调整 bind 旧入口的校验优先级；service 直接调用方如果传入无效 resume 和无效 session，现在也会按旧入口先报 resume 缺失。
+  - 其它旧入口仍需继续按路由逐项对照错误优先级和响应文案。

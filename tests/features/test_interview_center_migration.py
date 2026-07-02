@@ -776,9 +776,12 @@ def test_bind_api_accepts_empty_body_like_old_node() -> None:
 
     with TestClient(app) as client:
         response = client.post(f"/api/interview-center/sessions/{session.id}/bind")
+        unknown_session = client.post("/api/interview-center/sessions/missing-session/bind")
 
     assert response.status_code == 404
     assert response.json() == {"ok": False, "error": "候选人简历不存在"}
+    assert unknown_session.status_code == 404
+    assert unknown_session.json() == {"ok": False, "error": "候选人简历不存在"}
 
 
 def test_unknown_interview_center_route_uses_old_error_payload() -> None:

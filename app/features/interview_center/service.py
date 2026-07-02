@@ -628,10 +628,10 @@ class InterviewCenterService:
     ) -> dict[str, Any]:
         """Manually bind a resume to a calendar session, matching the old UI flow."""
 
-        session = self._require_session(session_id)
         resume = self._load_resume(resume_id)
         if resume is None:
             raise KeyError("resume_not_found")
+        session = self._require_session(session_id)
         resume_payload = _public_resume_payload(resume)
         matched_resume = {
             "id": resume.id,
