@@ -681,8 +681,10 @@ def test_prepare_session_api_route_is_compatible() -> None:
         )
 
     assert response.status_code == 200
+    assert response.json()["ok"] is True
     assert response.json()["session"]["status"] == "prepared"
     assert response.json()["session"]["feishuDoc"]["documentId"] == "doc-1"
+    assert isinstance(response.json()["logs"], list)
 
 
 def test_bind_session_persists_manual_resume_binding() -> None:

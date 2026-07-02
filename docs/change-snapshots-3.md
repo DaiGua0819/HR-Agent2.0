@@ -1250,3 +1250,32 @@
 - 风险 / 待确认：
   - 本轮恢复的是提前回灌失败审计字段；真实飞书会议/妙记来源读取失败时的端到端审计仍需在授权环境中联调确认。
   - 旧 Node 空会议来源失败只保留 requested payload、不写 failedAt；当前实现保持这一点，未把空来源失败扩大为异常失败审计。
+
+---
+
+### 快照 0088：恢复准备接口旧响应包裹
+
+- 修改时间：2026-07-03 05:17:20 +08:00
+- 修改原因：
+  - 旧 Node `POST /api/interview-center/sessions/{id}/prepare` 返回 `{ ok:true, session, logs }`，旧前端的请求层会按 `ok` 和 `logs` 展示操作结果。
+  - 当前 FastAPI prepare 路由直接返回 service payload，只有 `session`，缺少旧协议中的 `ok` 和 `logs`；这会让旧页面和其它旧调用方无法用统一方式判断准备动作成功。
+  - bind/backfill/review 等相邻旧接口已经恢复了 `ok/logs` 包裹，prepare 需要保持同一协议形态。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `prepare_session()` 路由改为先调用 service，再返回 `{ ok:true, ...result, logs: store.list_logs("", 50) }`。
+  - 扩展 `test_prepare_session_api_route_is_compatible()`，断言 prepare API 响应包含 `ok:true` 和 `logs` 数组，同时继续校验 `session.status` 与 `feishuDoc`。
+- 验证结果：
+  - 红灯确认：扩展测试首次运行失败，`response.json()["ok"]` 抛出 `KeyError`，证明当前 prepare API 缺少旧协议字段。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k prepare_session_api_route_is_compatible`：1 passed，67 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - API 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "prepare_session or bind_and_sessions_api_routes_are_compatible or backfill_api_routes_are_compatible or review_confirm_and_logs_api_routes_are_compatible"`：7 passed，61 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：68 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：81 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：315 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复 prepare API 的旧 JSON 包裹，不改变 `InterviewCenterService.prepare_session()` 的内部返回结构。
+  - 旧前端仍可能依赖其它细小字段顺序或文案；后续继续按旧 Node 路由逐项对照。

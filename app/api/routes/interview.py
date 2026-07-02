@@ -276,7 +276,8 @@ async def prepare_session(
 
     resolved = payload or InterviewPrepareRequest()
     try:
-        return await _service(request).prepare_session(session_id, force=resolved.force)
+        result = await _service(request).prepare_session(session_id, force=resolved.force)
+        return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except ValueError as exc:
         return _legacy_error_response(409, exc)
     except KeyError as exc:
