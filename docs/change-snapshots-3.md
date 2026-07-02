@@ -1308,3 +1308,33 @@
 - 风险 / 待确认：
   - 本轮只调整 bind 旧入口的校验优先级；service 直接调用方如果传入无效 resume 和无效 session，现在也会按旧入口先报 resume 缺失。
   - 其它旧入口仍需继续按路由逐项对照错误优先级和响应文案。
+
+---
+
+### 快照 0090：恢复回灌来源旧回退
+
+- 修改时间：2026-07-03 05:45:14 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `GET /api/interview-center/sessions/{id}/backfill-source` 会按 `session.backfillSource || session.interviewEvaluation?.source || {}` 返回来源，并同时返回 `lastBackfillError`。
+  - 当前 FastAPI 迁移实现只读取 `session.backfill_source`，当历史 session 只有 `interviewEvaluation.source` 时，旧前端无法看到已回灌来源；同时接口缺少旧协议中的 `lastBackfillError` 字段。
+  - 该差异会影响旧页面展示回灌来源和排查最近一次回灌失败原因，需要与旧服务响应保持一致。
+- 修改文件：
+  - `app/features/interview_center/service.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `InterviewCenterService.backfill_source()` 现在优先返回 `session.backfill_source`，为空时回退到 `session.interview_evaluation.source`，最后才返回空来源，并继续通过 `public_backfill_source()` 归一化旧前端需要的字段。
+  - `/backfill-source` 服务 payload 新增 `lastBackfillError`，由路由继续包裹 `ok:true` 后返回，贴齐旧 Node 协议。
+  - 新增 `test_backfill_source_falls_back_to_evaluation_source_like_old_node()`，覆盖 `backfillSource` 为空、历史 `interviewEvaluation.source` 存在时的 fallback、字段归一化和 `lastBackfillError` 返回。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k backfill_source_falls_back` 首次失败，`payload["source"]["source"]` 抛 `KeyError`，证明当前实现没有旧来源回退。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k backfill_source_falls_back`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill_source_falls_back or backfill_source_payload_is_normalized_like_old_node or backfill_api_routes_are_compatible"`：3 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：69 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：82 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：316 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复旧 `backfill-source` 读取优先级和错误字段，不改变真实回灌、面评生成、Bitable 或飞书会议来源读取链路。
+  - 真实 Feishu/妙记/Bitable 授权环境下的端到端回灌来源展示仍需后续联调确认。

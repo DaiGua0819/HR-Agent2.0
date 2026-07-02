@@ -1530,6 +1530,57 @@ def test_backfill_source_payload_is_normalized_like_old_node() -> None:
         assert source_response.json()["source"][key] == value
 
 
+def test_backfill_source_falls_back_to_evaluation_source_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.backfill_source = {}
+    session.interview_evaluation = {
+        "summary": "stored evaluation",
+        "source": {
+            "source": "evaluation_source",
+            "types": ("doc",),
+            "rawTextLength": "123",
+            "linkedDocIds": ("doc-1",),
+            "minuteTokens": ("minute-1",),
+            "sources": [
+                {
+                    "type": "doc",
+                    "id": "doc-1",
+                    "url": "https://example.test/doc",
+                    "length": "123",
+                }
+            ],
+            "errors": ("source warning",),
+        },
+    }
+    session.last_backfill_error = "source warning"
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/interview-center/sessions/{session.id}/backfill-source")
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["source"]["source"] == "evaluation_source"
+    assert payload["source"]["types"] == ["doc"]
+    assert payload["source"]["rawTextLength"] == 123
+    assert payload["source"]["linkedDocIds"] == ["doc-1"]
+    assert payload["source"]["minuteTokens"] == ["minute-1"]
+    assert payload["source"]["sources"] == [
+        {"type": "doc", "id": "doc-1", "url": "https://example.test/doc", "length": 123}
+    ]
+    assert payload["source"]["errors"] == ["source warning"]
+    assert payload["lastBackfillError"] == "source warning"
+
+
 def test_auto_calendar_tick_skips_when_feishu_is_not_connected() -> None:
     calendar_client = FakeCalendarClient(
         [

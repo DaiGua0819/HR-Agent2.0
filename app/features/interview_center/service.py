@@ -617,7 +617,17 @@ class InterviewCenterService:
         """Return the stored public backfill source for a session."""
 
         session = self._require_session(session_id)
-        return {"sessionId": session.id, "source": public_backfill_source(session.backfill_source)}
+        evaluation_source = (
+            session.interview_evaluation.get("source")
+            if isinstance(session.interview_evaluation, dict)
+            else {}
+        )
+        source = session.backfill_source or evaluation_source or {}
+        return {
+            "sessionId": session.id,
+            "source": public_backfill_source(source),
+            "lastBackfillError": session.last_backfill_error,
+        }
 
     async def bind_session(
         self,
