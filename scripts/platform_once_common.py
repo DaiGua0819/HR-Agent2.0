@@ -203,14 +203,15 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 continue
             print(f"[{platform.value}] preparing candidate: {label[:120]}", flush=True)
             before_actions = len(getattr(adapter.page, "reliable_actions", []))
-            click = await reliable_click_element(
-                adapter.page,
-                row,
-                label=f"{platform.value}候选人会话",
-                verify=lambda: _verify_chat_ready(adapter, platform),
-            )
             if platform == Platform.JOB51:
-                click = await _ensure_job51_thread_opened(adapter, row_state, click)
+                click = await _open_job51_thread(adapter, row_state)
+            else:
+                click = await reliable_click_element(
+                    adapter.page,
+                    row,
+                    label=f"{platform.value}候选人会话",
+                    verify=lambda: _verify_chat_ready(adapter, platform),
+                )
             if not click.get("ok"):
                 summaries.append(
                     _failure_summary(
@@ -277,6 +278,17 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
         scrolls += 1
         idle_scans = 0 if scrolled else idle_scans + 1
     return summaries
+
+
+async def _open_job51_thread(adapter: Any, row_state: dict[str, object]) -> dict[str, Any]:
+    """Open a 51job thread via the platform-specific guarded DOM path."""
+
+    await job51_chat.install_app_download_blocker(adapter.page)
+    return await _ensure_job51_thread_opened(
+        adapter,
+        row_state,
+        {"ok": False, "action": "job51_safe_open", "reason": "dom_open_required"},
+    )
 
 
 async def _ensure_job51_thread_opened(

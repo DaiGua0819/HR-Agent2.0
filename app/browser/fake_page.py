@@ -244,6 +244,23 @@ class FakePage:
                 "chatReady": True,
                 "reason": "" if opened else "candidate_identity_mismatch",
             }
+        if "thread_row_not_found" in script and "#conversation-list .list-item" in script:
+            expected = arg if isinstance(arg, dict) else {}
+            label = str(expected.get("label") or "")
+            row_id = str(expected.get("id") or "")
+            index = int(expected.get("index") or 0)
+            for current_index, item in enumerate(self.conversations):
+                current_label = str(
+                    item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"
+                )
+                current_id = str(item.get("id") or current_index)
+                if (row_id and row_id == current_id) or (label and label == current_label):
+                    self.selected_index = current_index
+                    return {"clicked": True, "source": "fake_dom_click", "label": current_label}
+            if 0 <= index < len(self.conversations):
+                self.selected_index = index
+                return {"clicked": True, "source": "fake_dom_click", "index": index}
+            return {"clicked": False, "reason": "thread_row_not_found"}
         if script == "zhilian.inspect_resume_request_state":
             convo = self.current_conversation()
             return {

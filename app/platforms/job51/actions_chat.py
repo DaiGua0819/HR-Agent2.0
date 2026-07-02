@@ -36,17 +36,20 @@ from app.platforms.types import (
 
 SKIP_TERMS = ("平台推荐", "为你推荐的人才", "系统提示", "广告")
 REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
+APP_DOWNLOAD_URL_PART = "app.51job.com/51job"
 
 
 async def open_chat_page(page: BrowserPage) -> None:
     """进入 51job 人才沟通页。"""
 
+    await install_app_download_blocker(page)
     await navigate_chat_page(page)
 
 
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """刷新并切换 51job 未读筛选。"""
 
+    await install_app_download_blocker(page)
     return await refresh_unread_filter(page)
 
 
@@ -55,6 +58,7 @@ async def select_positions(
 ) -> dict[str, object]:
     """选择全部岗位或目标岗位。"""
 
+    await install_app_download_blocker(page)
     selector = selectors.POSITION_MENU if target_position else selectors.ALL_POSITION_MENU
     click = await reliable_click(page, selector, label="51job职位筛选")
     clicked = bool(click.get("ok"))
@@ -129,12 +133,7 @@ async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef 
             "name": await row.attr("name") or "",
             "position": await row.attr("position") or "",
         }
-        click = await reliable_click_element(
-            page,
-            row,
-            label="51job候选人会话",
-            verify=lambda: _verify_chat_ready(page),
-        )
+        click = await click_thread_by_state(page, state)
         ready = bool(click.get("ok")) or await wait_chat_ready(page, timeout_ms=6500)
         opened = await verify_opened_candidate(page, expected, chat_ready=ready)
         if opened.get("opened"):
@@ -148,6 +147,7 @@ async def click_thread_by_state(
 ) -> dict[str, object]:
     """Click a 51job conversation row with a JS fallback for virtual-list rows."""
 
+    await install_app_download_blocker(page)
     payload = {
         "id": str(state.get("id") or "").lstrip("_"),
         "label": str(state.get("label") or "").strip(),
@@ -192,15 +192,66 @@ async def click_thread_by_state(
     )
     if result.get("clicked"):
         return result
-    rows = await page.query_all(selectors.THREAD_ITEM)
-    index = payload["index"]
-    if isinstance(index, int) and 0 <= index < len(rows):
+    return result or {"clicked": False, "reason": "thread_row_dom_click_failed"}
+
+
+async def install_app_download_blocker(page: BrowserPage) -> dict[str, object]:
+    """Install guards that prevent 51job app-download tabs from lingering."""
+
+    script_result = await _safe_eval_dict(
+        page,
+        """
+        () => {
+          const key = "__job51AppDownloadBlockerInstalled";
+          const blockedPart = "app.51job.com/51job";
+          const shouldBlock = (url) => String(url || "").includes(blockedPart);
+          if (window[key]) return { installed: true, alreadyInstalled: true };
+          window[key] = true;
+          window.__job51BlockedAppDownloadUrls = window.__job51BlockedAppDownloadUrls || [];
+          const originalOpen = window.open;
+          window.open = function job51BlockedOpen(url, ...args) {
+            if (shouldBlock(url)) {
+              window.__job51BlockedAppDownloadUrls.push(String(url || ""));
+              return null;
+            }
+            return originalOpen.call(window, url, ...args);
+          };
+          const preventBlockedNavigation = (event) => {
+            const path = event.composedPath ? event.composedPath() : [];
+            const link = path.find((node) => {
+              return node && typeof node.href === "string" && shouldBlock(node.href);
+            });
+            if (!link) return;
+            window.__job51BlockedAppDownloadUrls.push(link.href);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          };
+          document.addEventListener("click", preventBlockedNavigation, true);
+          document.addEventListener("auxclick", preventBlockedNavigation, true);
+          const originalAnchorClick = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function job51BlockedAnchorClick(...args) {
+            if (shouldBlock(this.href)) {
+              window.__job51BlockedAppDownloadUrls.push(this.href);
+              return undefined;
+            }
+            return originalAnchorClick.apply(this, args);
+          };
+          return { installed: true, source: "page_script" };
+        }
+        """,
+    )
+    context_result: dict[str, object] = {}
+    installer = getattr(page, "install_url_popup_blocker", None)
+    if callable(installer):
         try:
-            await rows[index].click(timeout_ms=3000)
-            return {"clicked": True, "source": "element_click", "index": index}
+            context_result = await installer(APP_DOWNLOAD_URL_PART)
         except Exception as error:
-            return {"clicked": False, "reason": "element_click_failed", "error": str(error)}
-    return result or {"clicked": False, "reason": "thread_row_not_found"}
+            context_result = {"installed": False, "error": str(error)}
+    return {
+        "installed": bool(script_result.get("installed") or context_result.get("installed")),
+        "script": script_result,
+        "context": context_result,
+    }
 
 
 async def verify_opened_candidate(

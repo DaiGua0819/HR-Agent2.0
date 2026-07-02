@@ -17,9 +17,13 @@ from app.platforms.job51.actions_chat import (
     click_thread_by_state,
     find_next_thread,
     read_unread_conversations,
+    select_positions,
     select_unread_filter,
     should_skip_thread_label,
     verify_opened_candidate,
+)
+from app.platforms.job51.actions_chat import (
+    open_chat_page as open_job51_chat_page,
 )
 from app.platforms.job51.actions_navigation import _wait_chat_shell, open_chat_page
 from app.platforms.job51.actions_resume import (
@@ -31,7 +35,11 @@ from app.platforms.job51.actions_resume import (
 )
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
-from scripts.platform_once_common import _find_candidate_row, _seen_keys_for_processed_item
+from scripts.platform_once_common import (
+    _find_candidate_row,
+    _process,
+    _seen_keys_for_processed_item,
+)
 
 
 def test_job51_reuses_shared_graph_and_runner() -> None:
@@ -129,6 +137,21 @@ def test_job51_open_chat_page_never_clicks_app_entry_when_chat_shell_is_slow() -
     assert page.clicks == []
     assert page.gotos == ["https://ehire.51job.com/Revision/chat"]
     assert page.url == "https://ehire.51job.com/Revision/chat"
+
+
+def test_job51_open_chat_page_installs_app_blocker_before_filter_click() -> None:
+    """51job preflight clicks must be guarded before any position/unread action."""
+
+    page = GuardedPreflightClickPage(
+        conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])]
+    )
+
+    asyncio.run(open_job51_chat_page(page))
+    asyncio.run(select_positions(page))
+
+    assert page.app_download_blocker_installed is True
+    assert page.context_popup_blocker_installed is True
+    assert page.app_download_popups == 0
 
 
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:
@@ -324,6 +347,46 @@ def test_job51_find_candidate_row_skips_slow_virtual_rows() -> None:
     )
 
     assert row is target
+
+
+def test_job51_processing_uses_guarded_dom_open_without_native_row_click(
+    monkeypatch,
+) -> None:
+    """Unread processing should not use native 51job row clicks."""
+
+    page = GuardedProcessingClickPage(
+        conversations=[
+            {
+                **conversation(
+                    "销售管培生",
+                    [{"sender": "me", "text": "已回复"}],
+                    label="已回复候选人 [送达]",
+                ),
+                "id": "skip-conv",
+            },
+            {
+                **conversation(
+                    "AI应用开发实习生",
+                    [{"sender": "other", "text": "您好，我想进一步沟通"}],
+                    label="候选人A AI应用开发实习生",
+                ),
+                "id": "target-conv",
+            },
+        ]
+    )
+    adapter = Job51Adapter(page, owner="宋峰峰", dry_run=True)
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+
+    summaries = asyncio.run(_process(adapter, Platform.JOB51, 1))
+
+    assert len(summaries) == 1
+    assert summaries[0]["action"] == "ask_basic_conditions"
+    assert page.native_row_clicks == 0
+    assert page.guarded_dom_clicks == 1
+    assert page.selected_index == 1
 
 
 def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
@@ -577,6 +640,57 @@ class DelayedJob51ContextPage:
         index = min(self.dom_context_reads, len(self.contexts) - 1)
         self.dom_context_reads += 1
         return self.contexts[index]
+
+
+class GuardedPreflightClickPage(FakePage):
+    """Position filter clicks simulate opening app tabs unless the guard is installed."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.app_download_popups = 0
+        self.app_download_blocker_installed = False
+        self.context_popup_blocker_installed = False
+
+    async def install_url_popup_blocker(self, blocked_url_part: str) -> dict[str, object]:
+        if blocked_url_part == "app.51job.com/51job":
+            self.context_popup_blocker_installed = True
+        return {"installed": self.context_popup_blocker_installed}
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "job51AppDownloadBlockerInstalled" in script:
+            self.app_download_blocker_installed = True
+            return {"installed": True, "source": "fake_page"}
+        return await super().eval_js(script, arg)
+
+    async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
+        if "position-menu" in element.selector or "menu-item-all" in element.selector:
+            if not self.app_download_blocker_installed:
+                self.app_download_popups += 1
+        await super().handle_element_click(element)
+
+
+class GuardedProcessingClickPage(GuardedPreflightClickPage):
+    """Native thread clicks are unsafe; guarded DOM clicks are acceptable."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.native_row_clicks = 0
+        self.guarded_dom_clicks = 0
+
+    async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
+        if element.selector.startswith("conversation:"):
+            self.native_row_clicks += 1
+        await super().handle_element_click(element)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "thread_row_not_found" in script and "#conversation-list .list-item" in script:
+            if not self.app_download_blocker_installed:
+                self.app_download_popups += 1
+            payload = arg if isinstance(arg, dict) else {}
+            self.selected_index = int(payload.get("index") or 0)
+            self.guarded_dom_clicks += 1
+            return {"clicked": True, "source": "fake_guarded_dom_click"}
+        return await super().eval_js(script, arg)
 
 
 class InterceptedAttachmentPage:

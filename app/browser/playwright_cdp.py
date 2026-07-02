@@ -46,6 +46,7 @@ class PlaywrightCDPPage:
         self.page = page
         self.name = name
         self.reliable_actions: list[dict[str, object]] = []
+        self._blocked_popup_url_parts: set[str] = set()
 
     async def goto(self, url: str) -> None:
         await self.page.goto(url, wait_until="domcontentloaded")
@@ -133,6 +134,33 @@ class PlaywrightCDPPage:
                 "reason": "download_not_captured",
                 "error": str(error),
             }
+
+    async def install_url_popup_blocker(self, blocked_url_part: str) -> dict[str, Any]:
+        """Close future popup tabs whose URL contains ``blocked_url_part``."""
+
+        part = str(blocked_url_part or "").strip()
+        if not part:
+            return {"installed": False, "reason": "empty_blocked_url_part"}
+        if part in self._blocked_popup_url_parts:
+            return {"installed": True, "alreadyInstalled": True, "blockedUrlPart": part}
+        self._blocked_popup_url_parts.add(part)
+
+        def on_page(popup: Any) -> None:
+            asyncio.create_task(self._close_blocked_popup(popup))
+
+        self.page.context.on("page", on_page)
+        return {"installed": True, "blockedUrlPart": part}
+
+    async def _close_blocked_popup(self, popup: Any) -> None:
+        for _ in range(50):
+            try:
+                url = str(popup.url or "")
+                if any(part in url for part in self._blocked_popup_url_parts):
+                    await popup.close()
+                    return
+                await popup.wait_for_timeout(100)
+            except Exception:
+                return
 
     async def _click_zhilian_attachment_resume_download(self, timeout_ms: int) -> dict[str, Any]:
         """Click Zhilian attachment card and capture opened PDF bytes."""
