@@ -82,3 +82,37 @@
 - 风险 / 待确认：
   - 当前完成的是路由、匹配、字段过滤的纯逻辑边界；后续 Task 5 需要把这些 helper 接入真实资产同步写入路径。
   - 旧系统支持环境变量覆盖 Bitable 路由，本轮暂按迁移计划落地默认路由；如线上仍依赖自定义路由，后续 OAuth/status 或配置兼容阶段需要补环境变量解析。
+
+---
+
+### 快照 0050：迁移面试中心日历同步与自动候选人匹配骨架
+
+- 修改时间：2026-07-02 22:47:23 +08:00
+- 修改原因：
+  - 旧面试中心通过 `/api/interview-center/sync` 拉取飞书日历、标准化事件、按 `feishuEventId` 幂等写入 session，并只对面试类日程做候选人自动匹配；当前 Python 版缺少该同步入口。
+  - 旧系统返回 `/sync/status`、同步结果、日志和面试类 session 列表，前端依赖这些旧接口形状。
+  - 迁移需要先接入日历同步骨架，后续再继续接自动准备文档、资产同步和回填。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/calendar.py`
+  - `app/features/interview_center/calendar_sync.py`
+  - `app/features/interview_center/candidate_matcher.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `normalize_calendar_event()` 与面试类事件识别，保留旧字段：`calendarId`、`feishuEventId`、`title`、`description`、`location`、`attendees`、`meetingUrl`、`startTime`、`endTime`、`isInterviewLike`、`status`。
+  - 新增 `CalendarSyncService`，支持拉取事件、幂等 upsert、面试类过滤、全局日志、同步状态和旧结果 payload。
+  - 在 `candidate_matcher.py` 新增日历事件候选人评分与自动绑定决策，支持唯一姓名命中、高置信分数和歧义状态。
+  - `InterviewCenterService` 新增 `sync_calendar()` 与 `calendar_sync_status()`；`app/api/routes/interview.py` 新增 `POST /api/interview-center/sync` 和 `GET /api/interview-center/sync/status`。
+  - 新增测试覆盖事件标准化、同步 upsert、自动匹配、非面试日程不进入结果、旧 API 兼容返回。
+- 验证结果：
+  - 红灯确认：新增测试初次运行失败，原因是 `app.features.interview_center.feishu.calendar` 模块不存在；修正测试导入后继续由新增模块和接口补齐。
+  - 修复后：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：11 passed，1 个既有 StarletteDeprecationWarning。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：24 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/calendar.py app/features/interview_center/calendar_sync.py app/features/interview_center/candidate_matcher.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/calendar.py app/features/interview_center/calendar_sync.py app/features/interview_center/candidate_matcher.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前 `EmptyCalendarClient` 是安全默认空实现；真实 OAuth 用户 token 驱动的飞书日历 HTTP client 将在后续 OAuth/status 兼容阶段接入。
+  - 本轮按计划先保留 `autoPrepare` 参数但不执行文档准备，Task 4 会实现真正的 prepare session 和飞书 docx 边界。
+  - 本轮未触发 Bitable 简历图同步，Task 5 会把路由和幂等记录匹配接入资产同步。

@@ -13,6 +13,10 @@ from app.domain.conversation.models import ConversationSession
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
+from app.features.interview_center.calendar_sync import (
+    CalendarClientProtocol,
+    CalendarSyncService,
+)
 from app.features.interview_center.candidate_matcher import match_candidates
 from app.features.interview_center.feedback_backfill import FeedbackBackfillService
 from app.features.interview_center.feishu.assets import (
@@ -52,6 +56,7 @@ class InterviewCenterService:
         llm: QuestionLLMProtocol | None = None,
         output_dir: str | Path | None = None,
         conversation_repository: ConversationRepository | None = None,
+        calendar_client: CalendarClientProtocol | None = None,
     ) -> None:
         self.repository = repository or ResumeRepository.from_settings()
         self.conversation_repository = (
@@ -62,6 +67,11 @@ class InterviewCenterService:
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
         self.feedback_backfill = FeedbackBackfillService(store=self.store, bitable=self.bitable)
+        self.calendar_sync = CalendarSyncService(
+            store=self.store,
+            repository=self.repository,
+            calendar_client=calendar_client,
+        )
 
     async def create_session_from_resume(
         self,
@@ -183,6 +193,27 @@ class InterviewCenterService:
             feedback=feedback,
             interviewer=interviewer,
         )
+
+    async def sync_calendar(
+        self,
+        *,
+        calendar_id: str = "primary",
+        auto_prepare: bool = False,
+        auto_prepare_limit: int = 12,
+    ) -> dict[str, Any]:
+        """Sync Feishu calendar events into interview-center sessions."""
+
+        return await self.calendar_sync.sync(
+            calendar_id=calendar_id,
+            auto_prepare=auto_prepare,
+            auto_prepare_limit=auto_prepare_limit,
+            source="manual",
+        )
+
+    def calendar_sync_status(self) -> dict[str, Any]:
+        """Return calendar sync status for old-compatible endpoints."""
+
+        return self.calendar_sync.status()
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """列出会话。"""

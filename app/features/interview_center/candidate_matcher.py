@@ -74,3 +74,136 @@ def score_candidate(query: dict[str, Any], candidate: dict[str, Any]) -> tuple[i
         score += 5
         reasons.append("source_platform")
     return min(100, score), reasons
+
+
+def match_calendar_event_candidates(
+    event: dict[str, Any],
+    resumes: list[Any],
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Score resume records against a calendar event for auto binding."""
+
+    event_text = _normalize_event_text(
+        [
+            event.get("title"),
+            event.get("description"),
+            event.get("location"),
+            " ".join(event.get("attendees") or []),
+            event.get("meetingUrl"),
+        ]
+    )
+    results: list[dict[str, Any]] = []
+    for resume in resumes:
+        resume_id = _resume_value(resume, "id")
+        if not resume_id:
+            continue
+        name = _resume_value(resume, "name", "candidateName", "parsed_name")
+        phone = normalize_phone(_resume_value(resume, "phone", "phone_key"))
+        job_type = _resume_value(resume, "job_type", "jobType", "applied_position", "position")
+        score = 0
+        reasons: list[str] = []
+        exact_identity_match = False
+        if name and _normalize_event_text([name]) in event_text:
+            score += 90
+            exact_identity_match = True
+            reasons.append("event_exact_candidate_name")
+        if phone and phone in event_text:
+            score += 45
+            reasons.append("event_phone")
+        if job_type and _normalize_event_text([job_type]) in event_text:
+            score += 24
+            reasons.append("event_job_type")
+        if score <= 0:
+            continue
+        results.append(
+            {
+                "resumeId": resume_id,
+                "name": name,
+                "jobType": job_type,
+                "score": min(100, score),
+                "reasons": reasons,
+                "exactIdentityMatch": exact_identity_match,
+            }
+        )
+    return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
+
+
+def decide_calendar_auto_binding(
+    matches: list[dict[str, Any]],
+    *,
+    min_score: int = 85,
+    lead_score: int = 15,
+) -> dict[str, Any]:
+    """Decide whether a calendar event should auto-bind to one resume."""
+
+    best = matches[0] if matches else None
+    second = matches[1] if len(matches) > 1 else None
+    if not best:
+        return {
+            "bind": False,
+            "reason": "no_match",
+            "status": "needs_match",
+            "match": None,
+            "lead": 0,
+        }
+    exact_matches = [item for item in matches if item.get("exactIdentityMatch")]
+    if len(exact_matches) == 1:
+        exact = exact_matches[0]
+        closest_other = next(
+            (item for item in matches if item["resumeId"] != exact["resumeId"]),
+            None,
+        )
+        return {
+            "bind": True,
+            "reason": "unique_exact_identity",
+            "status": "matched",
+            "match": exact,
+            "lead": exact["score"] - (closest_other["score"] if closest_other else 0),
+        }
+    if len(exact_matches) > 1:
+        return {
+            "bind": False,
+            "reason": "duplicate_exact_identity",
+            "status": "needs_confirmation",
+            "match": exact_matches[0],
+            "lead": exact_matches[0]["score"] - exact_matches[1]["score"],
+        }
+    lead = best["score"] - (second["score"] if second else 0)
+    if best["score"] >= min_score and lead >= lead_score:
+        return {
+            "bind": True,
+            "reason": "high_confidence",
+            "status": "matched",
+            "match": best,
+            "lead": lead,
+        }
+    return {
+        "bind": False,
+        "reason": "low_confidence",
+        "status": "needs_confirmation",
+        "match": best,
+        "lead": lead,
+    }
+
+
+def _normalize_event_text(values: list[Any]) -> str:
+    return "".join(clean_text(value).lower() for value in values if clean_text(value))
+
+
+def _resume_value(resume: Any, *keys: str) -> str:
+    payload = getattr(resume, "payload", None)
+    if not isinstance(payload, dict):
+        payload = resume if isinstance(resume, dict) else {}
+    for key in keys:
+        value = getattr(resume, key, None)
+        if value not in (None, ""):
+            return str(value)
+        value = payload.get(key)
+        if value not in (None, ""):
+            return str(value)
+    if "name" in keys:
+        candidate_name = getattr(resume, "candidate_name", None)
+        if candidate_name:
+            return str(candidate_name)
+    return ""

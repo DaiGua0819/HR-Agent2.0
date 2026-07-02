@@ -38,6 +38,14 @@ class InterviewSessionCreateRequest(BaseModel):
     resume_pdf_path: str | None = Field(default=None, alias="resumePdfPath")
 
 
+class InterviewCenterSyncRequest(BaseModel):
+    """Old interview-center calendar sync request."""
+
+    calendar_id: str = Field(default="primary", alias="calendarId")
+    auto_prepare: bool = Field(default=False, alias="autoPrepare")
+    auto_prepare_limit: int = Field(default=12, alias="autoPrepareLimit")
+
+
 class FeedbackBackfillRequest(BaseModel):
     """面试反馈回填请求。"""
 
@@ -123,6 +131,29 @@ async def list_sessions(request: Request) -> dict[str, object]:
     """列出面试会话。"""
 
     return {"items": _service(request).list_sessions()}
+
+
+@router.post("/api/interview-center/sync")
+async def sync_calendar(
+    payload: InterviewCenterSyncRequest,
+    request: Request,
+) -> dict[str, object]:
+    """Old interview-center Feishu calendar sync entry point."""
+
+    service = _service(request)
+    result = await service.sync_calendar(
+        calendar_id=payload.calendar_id,
+        auto_prepare=payload.auto_prepare,
+        auto_prepare_limit=payload.auto_prepare_limit,
+    )
+    return {"ok": True, **result, "logs": service.store.list_logs("", 30)}
+
+
+@router.get("/api/interview-center/sync/status")
+async def sync_calendar_status(request: Request) -> dict[str, object]:
+    """Old interview-center Feishu calendar sync status entry point."""
+
+    return {"ok": True, **_service(request).calendar_sync_status()}
 
 
 @router.get("/api/interview-center/sessions/{session_id}")

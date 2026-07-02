@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Any
 
+from app.control_plane.main import create_app
+from app.domain.resume.models import ResumeRecord
+from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.feishu.bitable import (
     find_existing_bitable_record,
     pick_existing_bitable_fields,
 )
+from app.features.interview_center.feishu.calendar import normalize_calendar_event
 from app.features.interview_center.feishu.routes import resolve_bitable_target
-from app.features.interview_center.store import SQLiteInterviewStore
+from app.features.interview_center.service import InterviewCenterService
+from app.features.interview_center.store import InMemoryInterviewStore, SQLiteInterviewStore
+from fastapi.testclient import TestClient
 
 
 def test_bitable_route_resolution_uses_old_default_tables() -> None:
@@ -90,6 +98,113 @@ def test_pick_existing_bitable_fields_filters_to_field_map() -> None:
     }
 
 
+def test_normalize_calendar_event_detects_interview_like_event() -> None:
+    normalized = normalize_calendar_event(
+        "primary",
+        {
+            "event_id": "event-1",
+            "summary": "Alice AI应用开发实习生一面",
+            "description": "候选人电话 13800138000",
+            "location": {"name": "线上会议"},
+            "start_time": {"timestamp": "1783000000"},
+            "end_time": {"timestamp": "1783003600"},
+            "attendees": [
+                {"user": {"name": "HR"}},
+                {"attendee": {"email": "alice@example.com"}},
+            ],
+            "vchat": {"meeting_url": "https://meet.example/abc"},
+        },
+    )
+
+    assert normalized["calendarId"] == "primary"
+    assert normalized["feishuEventId"] == "event-1"
+    assert normalized["title"] == "Alice AI应用开发实习生一面"
+    assert normalized["location"] == "线上会议"
+    assert normalized["attendees"] == ["HR", "alice@example.com"]
+    assert normalized["meetingUrl"] == "https://meet.example/abc"
+    assert normalized["startTime"] == 1_783_000_000
+    assert normalized["endTime"] == 1_783_003_600
+    assert normalized["isInterviewLike"] is True
+    assert normalized["status"] == "synced"
+
+
+def test_calendar_sync_upserts_matches_and_ignores_non_interviews() -> None:
+    store = InMemoryInterviewStore()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-1",
+                    "summary": "Alice AI应用开发实习生面试",
+                    "description": "候选人 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                },
+                {
+                    "event_id": "event-2",
+                    "summary": "部门周会",
+                    "start_time": {"timestamp": "1783086400"},
+                    "end_time": {"timestamp": "1783090000"},
+                },
+            ]
+        ),
+    )
+
+    first = asyncio.run(service.sync_calendar(calendar_id="primary", auto_prepare=False))
+    second = asyncio.run(service.sync_calendar(calendar_id="primary", auto_prepare=False))
+
+    assert first["total"] == 2
+    assert first["interviewLike"] == 1
+    assert len(first["sessions"]) == 1
+    assert first["sessions"][0]["resumeId"] == "resume-1"
+    assert first["sessions"][0]["candidateName"] == "Alice"
+    assert first["sessions"][0]["status"] == "matched"
+    assert first["sessions"][0]["payload"]["isInterviewLike"] is True
+    assert len(store.list()) == 2
+    assert second["sessions"][0]["id"] == first["sessions"][0]["id"]
+
+
+def test_interview_center_sync_api_routes_are_compatible() -> None:
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-api",
+                    "summary": "Alice 面试",
+                    "description": "AI应用开发实习生",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+
+        synced = client.post(
+            "/api/interview-center/sync",
+            json={"calendarId": "primary", "autoPrepare": False},
+        )
+        status = client.get("/api/interview-center/sync/status")
+
+    assert synced.status_code == 200
+    assert synced.json()["ok"] is True
+    assert synced.json()["total"] == 1
+    assert synced.json()["interviewLike"] == 1
+    assert synced.json()["sessions"][0]["resumeId"] == "resume-1"
+    assert synced.json()["logs"][0]["message"] == "manual calendar sync completed"
+    assert status.status_code == 200
+    assert status.json()["ok"] is True
+    assert status.json()["running"] is False
+    assert status.json()["lastResult"]["total"] == 1
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -170,3 +285,41 @@ def test_sqlite_store_appends_and_lists_interview_logs(tmp_path: Path) -> None:
     all_logs = store.list_logs("", limit=2)
     assert len(all_logs) == 2
     assert all_logs[0]["message"] == "global event"
+
+
+class FakeCalendarClient:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.events = events
+        self.calls: list[dict[str, Any]] = []
+
+    async def list_events(
+        self,
+        *,
+        calendar_id: str,
+        start_time: int,
+        end_time: int,
+    ) -> list[dict[str, Any]]:
+        self.calls.append(
+            {
+                "calendarId": calendar_id,
+                "startTime": start_time,
+                "endTime": end_time,
+            }
+        )
+        return list(self.events)
+
+
+def _resume_record() -> ResumeRecord:
+    return ResumeRecord(
+        id="resume-1",
+        payload={
+            "name": "Alice",
+            "phone": "13800138000",
+            "job_type": "AI应用开发实习生",
+            "rawText": "Alice 13800138000 Python LLM Agent",
+        },
+        phone_key="13800138000",
+        job_type="AI应用开发实习生",
+        match_score=90,
+        updated_at="2026-01-01",
+    )
