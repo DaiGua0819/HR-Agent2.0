@@ -365,6 +365,49 @@ class InterviewCenterService:
         session = self._require_session(session_id)
         return {"sessionId": session.id, "source": session.backfill_source}
 
+    async def bind_session(
+        self,
+        session_id: str,
+        *,
+        resume_id: str,
+        prepare: bool = False,
+    ) -> dict[str, Any]:
+        """Manually bind a resume to a calendar session, matching the old UI flow."""
+
+        session = self._require_session(session_id)
+        resume = self._load_resume(resume_id)
+        if resume is None:
+            raise KeyError("resume_not_found")
+        resume_payload = _public_resume_payload(resume)
+        matched_resume = {
+            "id": resume.id,
+            "name": resume_payload.get("name") or "",
+            "jobType": resume_payload.get("jobType") or "",
+        }
+        session.resume_id = resume.id
+        session.candidate_name = session.candidate_name or str(
+            resume_payload.get("name") or ""
+        )
+        session.job_type = session.job_type or str(resume_payload.get("jobType") or "")
+        session.status = "prepared" if session.question_set else "matched"
+        session.payload = {
+            **session.payload,
+            "resume": resume_payload,
+            "matchedResume": matched_resume,
+            "matchMode": "manual",
+            "manualBoundAt": now_iso(),
+        }
+        saved = self.store.save(session)
+        self.store.append_log(
+            saved.id,
+            "info",
+            "已人工绑定候选人",
+            {"resumeId": resume.id, "name": matched_resume["name"]},
+        )
+        if prepare:
+            return await self.prepare_session(saved.id)
+        return {"session": saved.to_dict()}
+
     async def review_session(
         self,
         session_id: str,
@@ -412,10 +455,27 @@ class InterviewCenterService:
         )
         return {"session": saved.to_dict()}
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(
+        self,
+        *,
+        start_time: int = 0,
+        end_time: int = 0,
+        status: str = "",
+    ) -> list[dict[str, Any]]:
         """列出会话。"""
 
-        return [session.to_dict() for session in self.store.list()]
+        sessions = []
+        for session in self.store.list():
+            if start_time and session.start_time and session.start_time < start_time:
+                continue
+            if end_time and session.start_time and session.start_time > end_time:
+                continue
+            if status and session.status != status:
+                continue
+            if session.payload.get("isInterviewLike") is False:
+                continue
+            sessions.append(session.to_dict())
+        return sessions
 
     def get_session(self, session_id: str) -> dict[str, Any]:
         """读取会话。"""
@@ -541,6 +601,20 @@ def _document_title(session: InterviewSession, resume: dict[str, Any]) -> str:
         resume.get("job_type") or resume.get("applied_position") or "面试"
     )
     return f"{candidate_name}-{job_type}-面试问题"
+
+
+def _public_resume_payload(resume: Resume) -> dict[str, Any]:
+    payload = resume.model_dump(mode="json")
+    name = resume.name or resume.parsed_name or ""
+    job_type = resume.job_type or resume.applied_position or ""
+    if name:
+        payload["name"] = name
+    if job_type:
+        payload["jobType"] = job_type
+        payload["job_type"] = job_type
+    if resume.phone or resume.phone_key:
+        payload["phone"] = resume.phone or resume.phone_key
+    return payload
 
 
 def _normalize_review_decision(value: str) -> str:

@@ -393,3 +393,32 @@
 - 风险 / 待确认：
   - 本轮补齐的是人工复核和日志兼容入口；旧 Node 的自动 calendar/backfill scheduler 仍是后续端到端运行审计时需要确认的剩余差异。
   - 当前 `humanReview` 通过 payload 兼容输出，若后续前端需要按字段查询/筛选人工复核状态，再考虑新增持久化列。
+
+---
+
+### 快照 0060：补齐面试中心手动绑定与会话列表兼容
+
+- 修改时间：2026-07-03 00:45:10 +08:00
+- 修改原因：
+  - 旧 Node 面试中心提供 `POST /api/interview-center/sessions/{id}/bind`，旧前端通过该入口把日历面试手动绑定到简历；当前 FastAPI 版缺少该路由，调用会返回 404。
+  - 旧前端刷新会话列表时读取 `payload.sessions`，而当前 FastAPI `GET /api/interview-center/sessions` 只返回 `items`，会导致旧面试中心页面拿不到会话列表。
+  - 旧 store 会把 session payload 展平到响应顶层，前端直接读取 `resume`、`matchedResume`、`matchMode`、`manualBoundAt`、`isInterviewLike` 等字段；当前响应只把这些放在 `payload` 里，手动绑定后旧页面仍可能显示未绑定。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/store.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `InterviewSession.to_dict()` 改为旧 store 兼容的 payload 展平输出，同时让数据库核心列字段覆盖 payload 中可能存在的旧值。
+  - `InterviewCenterService` 新增 `bind_session()`，校验 session 与简历，写入 `resumeId`、`resume`、`matchedResume`、`matchMode=manual`、`manualBoundAt`，并记录“已人工绑定候选人”日志；传入 `prepare=true` 时继续复用 `prepare_session()`。
+  - `list_sessions()` 支持 `start_time`、`end_time`、`status` 过滤，并默认跳过明确标记为 `isInterviewLike=false` 的非面试日程，避免旧页面混入普通会议。
+  - `app/api/routes/interview.py` 新增 `POST /api/interview-center/sessions/{session_id}/bind`；`GET /api/interview-center/sessions` 改为返回 `ok`、`status`、`sessions`、`items` 和 `logs`，保留当前 `items` 兼容。
+  - 新增测试覆盖 service 手动绑定持久化、旧 API bind 返回、旧 API sessions 返回和非面试日程过滤。
+- 验证结果：
+  - 红灯确认：新增切片测试首次运行 2 failed，原因是 `InterviewCenterService.bind_session` 不存在且 `/api/interview-center/sessions/{id}/bind` 返回 404。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "bind_session or bind_and_sessions"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：38 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮补齐旧页面立即依赖的绑定和列表响应；自动 calendar/backfill scheduler 仍需继续审计并补齐状态与 tick 行为。
+  - sessions 响应保留 `items`，同时新增旧前端使用的 `sessions`，若后续有新前端按 `items` 读取仍可兼容。

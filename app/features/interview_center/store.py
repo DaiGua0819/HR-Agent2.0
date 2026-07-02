@@ -67,7 +67,8 @@ class InterviewSession:
     def to_dict(self) -> dict[str, Any]:
         """Serialize for API responses."""
 
-        return {
+        data = {
+            **self.payload,
             "id": self.id,
             "feishuEventId": self.feishu_event_id,
             "calendarId": self.calendar_id,
@@ -103,6 +104,7 @@ class InterviewSession:
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
+        return data
 
 
 class InterviewStoreProtocol(Protocol):

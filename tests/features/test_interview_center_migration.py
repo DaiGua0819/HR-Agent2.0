@@ -430,6 +430,78 @@ def test_prepare_session_api_route_is_compatible() -> None:
     assert response.json()["session"]["feishuDoc"]["documentId"] == "doc-1"
 
 
+def test_bind_session_persists_manual_resume_binding() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="",
+        candidate_name="",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 一面"},
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+    )
+
+    result = asyncio.run(service.bind_session(session.id, resume_id="resume-1"))
+
+    bound = result["session"]
+    assert bound["resumeId"] == "resume-1"
+    assert bound["status"] == "matched"
+    assert bound["resume"]["name"] == "Alice"
+    assert bound["resume"]["jobType"] == "AI应用开发实习生"
+    assert bound["matchedResume"] == {
+        "id": "resume-1",
+        "name": "Alice",
+        "jobType": "AI应用开发实习生",
+    }
+    assert bound["matchMode"] == "manual"
+    assert bound["manualBoundAt"]
+    assert store.list_logs(session.id, limit=1)[0]["message"] == "已人工绑定候选人"
+
+
+def test_bind_and_sessions_api_routes_are_compatible() -> None:
+    store = InMemoryInterviewStore()
+    interview_session = store.create(
+        resume_id="",
+        candidate_name="",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 面试"},
+    )
+    ignored_session = store.create(
+        resume_id="",
+        candidate_name="Bob",
+        job_type="运营",
+        payload={"isInterviewLike": False, "title": "Bob 周会"},
+    )
+    ignored_session.start_time = interview_session.start_time + 1
+    store.save(ignored_session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        bound = client.post(
+            f"/api/interview-center/sessions/{interview_session.id}/bind",
+            json={"resumeId": "resume-1", "prepare": False},
+        )
+        listed = client.get("/api/interview-center/sessions")
+
+    assert bound.status_code == 200
+    assert bound.json()["ok"] is True
+    assert bound.json()["session"]["resumeId"] == "resume-1"
+    assert bound.json()["session"]["matchedResume"]["name"] == "Alice"
+    assert bound.json()["logs"][0]["message"] == "已人工绑定候选人"
+    assert listed.status_code == 200
+    assert listed.json()["ok"] is True
+    assert [item["id"] for item in listed.json()["sessions"]] == [interview_session.id]
+    assert listed.json()["items"] == listed.json()["sessions"]
+    assert listed.json()["status"]["connected"] is False
+    assert listed.json()["logs"][0]["message"] == "已人工绑定候选人"
+
+
 def test_bitable_asset_sync_skips_existing_resume_attachment() -> None:
     store = InMemoryInterviewStore()
     session = store.create(

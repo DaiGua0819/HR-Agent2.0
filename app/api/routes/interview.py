@@ -60,6 +60,13 @@ class InterviewPrepareRequest(BaseModel):
     force: bool = False
 
 
+class InterviewBindRequest(BaseModel):
+    """Old interview-center manual resume binding request."""
+
+    resume_id: str = Field(default="", alias="resumeId")
+    prepare: bool = False
+
+
 class InterviewBackfillRequest(BaseModel):
     """Old interview-center backfill request."""
 
@@ -148,10 +155,27 @@ async def create_session(
 
 
 @router.get("/api/interview-center/sessions")
-async def list_sessions(request: Request) -> dict[str, object]:
-    """列出面试会话。"""
+async def list_sessions(
+    request: Request,
+    startTime: int = 0,
+    endTime: int = 0,
+    status: str = "",
+) -> dict[str, object]:
+    """Old interview-center sessions list endpoint."""
 
-    return {"items": _service(request).list_sessions()}
+    service = _service(request)
+    sessions = service.list_sessions(
+        start_time=startTime,
+        end_time=endTime,
+        status=status,
+    )
+    return {
+        "ok": True,
+        "status": service.oauth().status(),
+        "sessions": sessions,
+        "items": sessions,
+        "logs": service.store.list_logs("", 50),
+    }
 
 
 @router.post("/api/interview-center/sync")
@@ -183,6 +207,25 @@ async def get_session(session_id: str, request: Request) -> dict[str, object]:
 
     try:
         return _service(request).get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/interview-center/sessions/{session_id}/bind")
+async def bind_session(
+    session_id: str,
+    payload: InterviewBindRequest,
+    request: Request,
+) -> dict[str, object]:
+    """Old interview-center manual resume binding endpoint."""
+
+    try:
+        result = await _service(request).bind_session(
+            session_id,
+            resume_id=payload.resume_id,
+            prepare=payload.prepare,
+        )
+        return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
