@@ -21,6 +21,7 @@ from app.features.interview_center.backfill import (
 from app.features.interview_center.calendar_sync import (
     CalendarClientProtocol,
     CalendarSyncService,
+    FeishuCalendarClient,
 )
 from app.features.interview_center.candidate_matcher import match_candidates
 from app.features.interview_center.feedback_backfill import FeedbackBackfillService
@@ -33,9 +34,10 @@ from app.features.interview_center.feishu.bitable import (
     BitableClientProtocol,
     MockFeishuBitableClient,
 )
+from app.features.interview_center.feishu.client import FeishuStoredUserTokenProvider
 from app.features.interview_center.feishu.docx import (
+    FeishuInterviewDocClient,
     InterviewDocClientProtocol,
-    MockInterviewDocClient,
     build_interview_document_text,
 )
 from app.features.interview_center.feishu.meeting import MeetingSourceClientProtocol
@@ -85,7 +87,10 @@ class InterviewCenterService:
         )
         self.store = store or GLOBAL_INTERVIEW_STORE
         self.bitable = bitable or MockFeishuBitableClient()
-        self.doc_client = doc_client or MockInterviewDocClient()
+        self.user_token_provider = FeishuStoredUserTokenProvider(store=self.store)
+        self.doc_client = doc_client or FeishuInterviewDocClient(
+            token_provider=self.user_token_provider
+        )
         self.oauth_service = FeishuOAuthService(store=self.store, http_client=oauth_client)
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
@@ -106,7 +111,8 @@ class InterviewCenterService:
         self.calendar_sync = CalendarSyncService(
             store=self.store,
             repository=self.repository,
-            calendar_client=calendar_client,
+            calendar_client=calendar_client
+            or FeishuCalendarClient(token_provider=self.user_token_provider),
         )
 
     async def create_session_from_resume(

@@ -6,17 +6,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 from app.control_plane.main import create_app
 from app.domain.resume.models import ResumeRecord
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
+from app.features.interview_center.calendar_sync import FeishuCalendarClient
 from app.features.interview_center.feishu.bitable import (
     MockFeishuBitableClient,
     find_existing_bitable_record,
     pick_existing_bitable_fields,
 )
 from app.features.interview_center.feishu.calendar import normalize_calendar_event
+from app.features.interview_center.feishu.client import FeishuStoredUserTokenProvider
+from app.features.interview_center.feishu.docx import FeishuInterviewDocClient
 from app.features.interview_center.feishu.routes import resolve_bitable_target
 from app.features.interview_center.service import InterviewCenterService
 from app.features.interview_center.store import InMemoryInterviewStore, SQLiteInterviewStore
@@ -607,6 +611,92 @@ def test_feishu_status_and_disconnect_use_stored_token() -> None:
     assert after.json()["connected"] is False
 
 
+def test_feishu_user_token_provider_refreshes_expired_token() -> None:
+    store = InMemoryInterviewStore()
+    store.save_token(
+        {
+            "accessToken": "old-user-access",
+            "refreshToken": "refresh-1",
+            "expiresAt": 1_000,
+            "userInfo": {"open_id": "ou_1"},
+        }
+    )
+    provider = FeishuStoredUserTokenProvider(
+        store=store,
+        refresh_client=FakeTokenRefreshClient(),
+        now_ms=lambda: 10_000,
+    )
+
+    token = asyncio.run(provider.user_access_token())
+
+    assert token == "new-user-access"
+    assert store.get_token()["accessToken"] == "new-user-access"
+    assert store.get_token()["refreshToken"] == "refresh-2"
+    assert store.get_token()["userInfo"]["open_id"] == "ou_1"
+
+
+def test_feishu_calendar_client_uses_stored_user_token_and_paginates() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer user-access"
+        assert request.url.path == "/open-apis/calendar/v4/calendars/primary/events"
+        if request.url.params.get("page_token") == "next":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"items": [{"event_id": "event-2"}], "has_more": False}},
+            )
+        assert request.url.params["start_time"] == "100"
+        assert request.url.params["end_time"] == "200"
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [{"event_id": "event-1"}],
+                    "has_more": True,
+                    "page_token": "next",
+                },
+            },
+        )
+
+    store = InMemoryInterviewStore()
+    store.save_token({"accessToken": "user-access", "expiresAt": 999_999_999_999})
+    client = FeishuCalendarClient(
+        token_provider=FeishuStoredUserTokenProvider(store=store),
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = asyncio.run(client.list_events(calendar_id="primary", start_time=100, end_time=200))
+
+    assert [event["event_id"] for event in events] == ["event-1", "event-2"]
+    assert len(requests) == 2
+
+
+def test_feishu_doc_client_returns_dry_run_metadata_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"dry-run doc client must not call network: {request.url}")
+
+    monkeypatch.setenv("DRY_RUN", "true")
+    store = InMemoryInterviewStore()
+    store.save_token({"accessToken": "user-access", "expiresAt": 999_999_999_999})
+    client = FeishuInterviewDocClient(
+        token_provider=FeishuStoredUserTokenProvider(store=store),
+        transport=httpx.MockTransport(handler),
+        dry_run=True,
+    )
+
+    result = asyncio.run(client.create_document_from_text("Alice 面试问题", "问题正文"))
+
+    assert result["dryRun"] is True
+    assert result["documentId"].startswith("dry-run-doc:")
+    assert result["contentSynced"] is True
+    assert result["contentLength"] == len("问题正文")
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -828,6 +918,17 @@ class FakeOAuthClient:
     async def user_info(self, access_token: str) -> dict[str, Any]:
         assert access_token == "user-access"
         return {"open_id": "ou_1", "name": "HR"}
+
+
+class FakeTokenRefreshClient:
+    async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        assert refresh_token == "refresh-1"
+        return {
+            "access_token": "new-user-access",
+            "refresh_token": "refresh-2",
+            "expires_in": 3600,
+            "refresh_expires_in": 7200,
+        }
 
 
 def _resume_record() -> ResumeRecord:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
+
+import httpx
 
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.candidate_matcher import (
@@ -12,6 +15,10 @@ from app.features.interview_center.candidate_matcher import (
     match_calendar_event_candidates,
 )
 from app.features.interview_center.feishu.calendar import normalize_calendar_event
+from app.features.interview_center.feishu.client import (
+    FEISHU_BASE_URL,
+    FeishuUserTokenProvider,
+)
 from app.features.interview_center.store import InterviewSession, InterviewStoreProtocol, now_iso
 
 DAY_SECONDS = 24 * 60 * 60
@@ -42,6 +49,59 @@ class EmptyCalendarClient:
     ) -> list[dict[str, Any]]:
         _ = calendar_id, start_time, end_time
         return []
+
+
+@dataclass
+class FeishuCalendarClient:
+    """OAuth-backed Feishu calendar reader."""
+
+    token_provider: FeishuUserTokenProvider
+    base_url: str = FEISHU_BASE_URL
+    transport: httpx.AsyncBaseTransport | None = None
+    skip_without_token: bool = True
+
+    async def list_events(
+        self,
+        *,
+        calendar_id: str,
+        start_time: int,
+        end_time: int,
+    ) -> list[dict[str, Any]]:
+        user_token = await self.token_provider.user_access_token()
+        if not user_token:
+            if self.skip_without_token:
+                return []
+            raise ValueError("feishu_user_token_required")
+        events: list[dict[str, Any]] = []
+        page_token = ""
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=30,
+            transport=self.transport,
+        ) as client:
+            while True:
+                params = {
+                    "page_size": "50",
+                    "start_time": str(start_time),
+                    "end_time": str(end_time),
+                }
+                if page_token:
+                    params["page_token"] = page_token
+                response = await client.get(
+                    f"/calendar/v4/calendars/{calendar_id}/events",
+                    headers={"Authorization": f"Bearer {user_token}"},
+                    params=params,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if int(payload.get("code") or 0) != 0:
+                    raise ValueError(str(payload.get("msg") or "feishu_calendar_list_failed"))
+                data = payload.get("data") or {}
+                events.extend(list(data.get("items") or data.get("events") or []))
+                page_token = str(data.get("page_token") or data.get("next_page_token") or "")
+                if not data.get("has_more") or not page_token:
+                    break
+        return events
 
 
 class CalendarSyncService:

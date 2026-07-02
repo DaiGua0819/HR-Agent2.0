@@ -265,3 +265,36 @@
 - 风险 / 待确认：
   - 本轮 18080 smoke test 使用临时空库验证路由和默认安全空实现；真实飞书日历、Docx、VC/妙记联调仍需要有效 OAuth token 和飞书线上权限。
   - `/health` 中 worker 状态因本轮未启动 worker 进程而显示 unavailable，不影响面试中心 API smoke test。
+
+---
+
+### 快照 0056：接入面试中心飞书用户 Token 与真实客户端边界
+
+- 修改时间：2026-07-03 00:03:23 +08:00
+- 修改原因：
+  - Task 8 后面试中心仍使用 `EmptyCalendarClient`、`MockInterviewDocClient` 等安全空/mock 边界，无法复用已入库的飞书 OAuth 用户 token 拉取日历或创建面试文档。
+  - 旧 Node 面试中心会在用户 token 临近过期时刷新 token，并用该 token 调用 `/calendar/v4/calendars/{calendarId}/events` 分页读取日历事件；Python 版需要补齐同等边界。
+  - 飞书 Docx 写入必须保留 dry-run 安全保护，测试和调用方需要能显式注入 dry-run，避免被全局 settings 缓存影响。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/client.py`
+  - `app/features/interview_center/calendar_sync.py`
+  - `app/features/interview_center/feishu/docx.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `FeishuStoredUserTokenProvider`，从面试中心 store 读取用户 token，临近过期时通过 `FeishuAuthClient.refresh_token()` 刷新并回写 store。
+  - `FeishuAuthClient` 新增 app access token 与 OAuth refresh token 调用，作为用户 token 刷新的默认真实 HTTP client。
+  - 新增 `FeishuCalendarClient`，使用 OAuth 用户 token 调用飞书日历事件接口，支持 `page_token` 分页、无 token 安全跳过和可注入 `httpx` transport。
+  - 新增 `FeishuInterviewDocClient`，dry-run 时只记录意图并返回文档元数据；非 dry-run 时创建飞书 Docx 并写入文本块，保留内容写入失败信息。
+  - `InterviewCenterService` 默认组合 store-backed 用户 token provider，并将默认日历/文档边界切到真实飞书客户端；测试或调用方传入的注入对象仍优先生效。
+  - 新增测试覆盖用户 token 刷新持久化、飞书日历分页读取和 Docx dry-run 不触网。
+- 验证结果：
+  - 红灯确认：新增 Docx dry-run 测试曾复现 1 failed，原因是客户端只读全局 `is_dry_run()`，在 settings 已缓存后仍尝试访问飞书 Docx 网络接口。
+  - 目标验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：29 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：42 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/client.py app/features/interview_center/calendar_sync.py app/features/interview_center/feishu/docx.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/client.py app/features/interview_center/calendar_sync.py app/features/interview_center/feishu/docx.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前已接入日历与 Docx 真实 HTTP 边界，但真实 VC/妙记来源读取、真实 Bitable 上传/字段过滤仍需后续继续迁移和联调。
+  - 飞书真实接口的错误码映射目前只做基础异常抛出，后续联调时还需要按旧前端提示文案细化错误返回。

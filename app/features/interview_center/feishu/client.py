@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
 
+from app.features.interview_center.store import InterviewStoreProtocol
 from app.settings import FeishuConfig, load_settings
 
 FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
@@ -21,6 +23,20 @@ class FeishuTokenProvider(Protocol):
 
     async def tenant_access_token(self) -> str:
         """返回 tenant access token。"""
+
+
+class FeishuUserTokenProvider(Protocol):
+    """Provides a Feishu user access token for OAuth-scoped APIs."""
+
+    async def user_access_token(self) -> str:
+        """Return a valid user access token, or an empty string when disconnected."""
+
+
+class FeishuTokenRefreshClient(Protocol):
+    """Refreshes a Feishu OAuth user token."""
+
+    async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        """Refresh a user access token."""
 
 
 @dataclass
@@ -55,6 +71,76 @@ class FeishuAuthClient:
         return {"Authorization": f"Bearer {await self.tenant_access_token()}"}
 
 
+    async def app_access_token(self) -> str:
+        """Return an app access token for OAuth user-token operations."""
+
+        assert self.config is not None
+        if not self.config.app_id or not self.config.app_secret:
+            raise ValueError("missing_feishu_app_credentials")
+        payload = {"app_id": self.config.app_id, "app_secret": self.config.app_secret}
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            response = await client.post("/auth/v3/app_access_token/internal", json=payload)
+            response.raise_for_status()
+        data = response.json()
+        token = data.get("app_access_token")
+        if not token:
+            raise ValueError(f"missing_app_access_token: {data}")
+        return str(token)
+
+    async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        """Refresh an OAuth user access token."""
+
+        app_token = await self.app_access_token()
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=30) as client:
+            response = await client.post(
+                "/authen/v1/refresh_access_token",
+                headers={"Authorization": f"Bearer {app_token}"},
+                json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            )
+            response.raise_for_status()
+        return dict(response.json().get("data") or {})
+
+
+@dataclass
+class FeishuStoredUserTokenProvider:
+    """Store-backed user token provider with refresh support."""
+
+    store: InterviewStoreProtocol
+    refresh_client: FeishuTokenRefreshClient | None = None
+    now_ms: Any | None = None
+
+    def __post_init__(self) -> None:
+        self.refresh_client = self.refresh_client or FeishuAuthClient()
+        self.now_ms = self.now_ms or (lambda: int(time.time() * 1000))
+
+    async def user_access_token(self) -> str:
+        token = self.store.get_token()
+        if not token or not token.get("accessToken"):
+            return ""
+        expires_at = int(token.get("expiresAt") or 0)
+        refresh_token = str(token.get("refreshToken") or "")
+        assert self.now_ms is not None
+        if expires_at and expires_at <= int(self.now_ms()) + 60_000 and refresh_token:
+            assert self.refresh_client is not None
+            raw = await self.refresh_client.refresh_token(refresh_token)
+            refreshed = {
+                "accessToken": raw.get("access_token") or raw.get("accessToken") or "",
+                "refreshToken": (
+                    raw.get("refresh_token") or raw.get("refreshToken") or refresh_token
+                ),
+                "expiresAt": _expires_at(raw.get("expires_in") or raw.get("expire")),
+                "refreshExpiresAt": _expires_at(
+                    raw.get("refresh_expires_in"),
+                    default=token.get("refreshExpiresAt") or 0,
+                ),
+                "userInfo": token.get("userInfo"),
+                "updatedAt": int(time.time() * 1000),
+            }
+            self.store.save_token(refreshed)
+            return str(refreshed["accessToken"])
+        return str(token.get("accessToken") or "")
+
+
 class StaticTokenProvider:
     """测试和本地 dry-run 使用的固定 token provider。"""
 
@@ -73,3 +159,10 @@ def compact_feishu_response(data: dict[str, Any]) -> dict[str, Any]:
         "msg": data.get("msg", ""),
         "data": data.get("data", {}),
     }
+
+
+def _expires_at(value: Any, *, default: Any = 0) -> int:
+    if value in (None, ""):
+        return int(default or 0)
+    seconds = max(0, int(value) - 120)
+    return int(time.time() * 1000) + seconds * 1000
