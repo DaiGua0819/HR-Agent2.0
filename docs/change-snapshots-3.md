@@ -849,3 +849,32 @@
 - 风险 / 待确认：
   - 本次只兼容 backfill 空 body；旧 Node 的 review/confirm 也采用空对象默认解析，后续仍需继续逐项审计这些交互入口。
   - 空 body 会按默认非强制回灌执行，因此仍受 10 分钟保护和数据源校验约束，不会绕过原有业务保护。
+---
+
+### 快照 0075：兼容复核确认接口空请求体
+
+- 修改时间：2026-07-03 03:04:45 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `POST /api/interview-center/sessions/{id}/review` 和 `/confirm` 会把请求体解析失败当作空对象，并通过 `normalizeReviewDecision(body.decision)` 默认把空 decision 视为 `passed`。
+  - 当前 FastAPI 路由要求 `InterviewReviewRequest` 请求体必须存在，旧前端或手动确认按钮如果不带 JSON body 会直接返回 422。
+  - 需要保持显式 decision/note 行为不变，同时兼容空 body 的旧复核/确认入口。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_review_and_confirm_api_accept_empty_body_like_old_node()`，覆盖无 body 调用 `/review` 和 `/confirm` 都会默认按 `passed` 完成人工复核，note 为空字符串。
+  - `review_session()` 路由 payload 改为可选，缺省时构造 `InterviewReviewRequest()` 并复用已有 service review 逻辑。
+  - `confirm_session()` 同样允许 payload 缺省，并按新签名正确复用 `review_session()`。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，`/review` 无 body 返回 `422 Unprocessable Entity`，证明当前实现不兼容旧 review/confirm 入口。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "review_confirm or empty_body_like_old_node"`，结果 `3 passed, 52 deselected`，仅有既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`，结果 `55 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`，结果 `68 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`，结果 `All checks passed!`。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`，通过。
+  - 空白检查：`git diff --check` 无空白错误，仅有 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`，结果 `302 passed`，仅有既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 空 body 复核会默认通过，这是旧 Node 行为；如果后续需要强制人工填写决策，应新增受控入口，而不是改变旧兼容 API。
+  - 本次仍未替代真实浏览器 smoke，后续需要继续在 18080 本地服务里验证旧前端点击复核/确认按钮的请求形态。

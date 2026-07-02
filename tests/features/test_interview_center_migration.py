@@ -1297,6 +1297,49 @@ def test_review_confirm_and_logs_api_routes_are_compatible() -> None:
     assert logs.json()["logs"][0]["message"] == "interview review completed"
 
 
+def test_review_and_confirm_api_accept_empty_body_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    review_session_record = _backfill_session(store)
+    review_session_record.status = "needs_review"
+    review_session_record.interview_evaluation = {
+        "summary": "候选人项目扎实",
+        "humanReviewRequired": True,
+    }
+    store.save(review_session_record)
+    confirm_session_record = _backfill_session(store)
+    confirm_session_record.status = "needs_review"
+    confirm_session_record.interview_evaluation = {
+        "summary": "候选人表达清晰",
+        "humanReviewRequired": True,
+    }
+    store.save(confirm_session_record)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        reviewed = client.post(
+            f"/api/interview-center/sessions/{review_session_record.id}/review"
+        )
+        confirmed = client.post(
+            f"/api/interview-center/sessions/{confirm_session_record.id}/confirm"
+        )
+
+    assert reviewed.status_code == 200
+    assert reviewed.json()["ok"] is True
+    assert reviewed.json()["session"]["status"] == "completed"
+    assert reviewed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
+    assert reviewed.json()["session"]["interviewEvaluation"]["review"]["note"] == ""
+    assert confirmed.status_code == 200
+    assert confirmed.json()["ok"] is True
+    assert confirmed.json()["session"]["status"] == "completed"
+    assert confirmed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
+
+
 def test_feishu_auth_url_route_includes_old_oauth_scopes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
     monkeypatch.setenv("FEISHU_APP_SECRET", "secret")

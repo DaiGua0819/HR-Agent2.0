@@ -296,16 +296,17 @@ async def backfill_status(request: Request) -> dict[str, object]:
 @router.post("/api/interview-center/sessions/{session_id}/review")
 async def review_session(
     session_id: str,
-    payload: InterviewReviewRequest,
     request: Request,
+    payload: InterviewReviewRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center human review endpoint."""
 
+    resolved = payload or InterviewReviewRequest()
     try:
         result = await _service(request).review_session(
             session_id,
-            decision=payload.decision,
-            note=payload.note,
+            decision=resolved.decision,
+            note=resolved.note,
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except KeyError as exc:
@@ -315,12 +316,12 @@ async def review_session(
 @router.post("/api/interview-center/sessions/{session_id}/confirm")
 async def confirm_session(
     session_id: str,
-    payload: InterviewReviewRequest,
     request: Request,
+    payload: InterviewReviewRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center confirm endpoint; same behavior as review."""
 
-    return await review_session(session_id, payload, request)
+    return await review_session(session_id, request, payload)
 
 
 @router.get("/api/interview-center/logs")
