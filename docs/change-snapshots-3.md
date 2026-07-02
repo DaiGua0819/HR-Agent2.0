@@ -1606,3 +1606,35 @@
   - Playwright + 系统 Chrome 烟测：标题为“面试中心”，飞书状态为“飞书未授权”，会话数为 `1`，`bad_responses=[]`，`console_errors=[]`，截图写入 `data/diagnostics/interview-center-smoke.png`。
 - 风险 / 待确认：
   - 本轮只影响独立面试中心 HTML 的浏览器资源加载，不改变业务 API 或面试中心状态流。
+
+---
+
+### 快照 0100：修正飞书 OAuth 缺回调地址时的配置状态
+
+- 修改时间：2026-07-03 07:53:23 +08:00
+- 修改原因：
+  - 本地运行态烟测发现 `/api/interview-center/feishu/auth-url` 返回 `configured:true`，但 `redirectUri` 为空。
+  - 旧面试中心的飞书授权链路需要 app id、app secret 和 redirect URI 三项同时可用；只凭 app id/secret 就提示已配置，会让旧页面展示一个实际不可用的授权入口。
+  - 需要让 `/feishu/auth-url` 和 `/feishu/status` 对“OAuth 是否配置完整”使用同一口径。
+- 修改文件：
+  - `app/features/interview_center/feishu/oauth.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `_is_oauth_configured()`，要求 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_REDIRECT_URI` 都存在时才返回 `configured:true`。
+  - `/api/interview-center/feishu/auth-url` 和 `/api/interview-center/feishu/status` 共用该判断。
+  - 新增 `test_feishu_oauth_reports_unconfigured_without_redirect_uri()`，覆盖 app id/secret 存在但 redirect URI 缺失时两个旧接口都返回 `configured:false`。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "oauth_reports_unconfigured_without_redirect_uri"` 首次失败，实际 `auth_url.json()["configured"]` 为 `True`。
+  - 绿灯验证：同一命令再次运行：`1 passed, 77 deselected`，1 个既有 `StarletteDeprecationWarning`。
+  - OAuth 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "feishu_oauth or feishu_auth_url or feishu_status or disconnect or oauth_reports"`：`8 passed, 70 deselected`，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py -q`：`84 passed`，1 个既有 `StarletteDeprecationWarning`。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：`325 passed`，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 前端语法检查：`node --check frontend/app.js`、`node --check frontend/interview-center/app.js`、`node --check frontend/interview-center/api.js`、`node --check frontend/interview-center/state.js` 均通过。
+  - 本地 HTTP smoke：用 `CONTROL_PLANE_PORT=18182` 和临时 `DATABASE_PATH=%TEMP%\hr-agent-interview-center-smoke-18182.sqlite` 启动服务，真实 HTTP 覆盖 `/health`、`/interview-center.html`、`/assets/interview-center/*`、`/api/interview-center/sessions`、`/sync/status`、`POST /sync`、`/backfill/status`、`/feishu/auth-url`、`/feishu/status`、`POST /feishu/disconnect`、未知旧路径 404；全部符合预期，其中空 `redirectUri` 时 `configured=False`。
+  - Playwright + 系统 Chrome 烟测：打开 `http://127.0.0.1:18182/interview-center.html`，`.interview-shell` 存在，`bad_responses=[]`，`console_errors=[]`，`page_errors=[]`。服务已关闭。
+- 风险 / 待确认：
+  - 本轮只修正 OAuth 配置完整性展示，不改变授权码交换、token 保存、日历读取、Docx 写入或 Bitable 写入逻辑。
+  - 真实飞书 OAuth 端到端仍需要在设置了有效 `FEISHU_REDIRECT_URI` 且飞书应用后台已登记同一回调地址的环境中联调确认。

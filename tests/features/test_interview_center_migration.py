@@ -2162,6 +2162,30 @@ def test_feishu_auth_url_route_includes_old_oauth_scopes(monkeypatch: pytest.Mon
     } <= scopes
 
 
+def test_feishu_oauth_reports_unconfigured_without_redirect_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.delenv("FEISHU_REDIRECT_URI", raising=False)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        auth_url = client.get("/api/interview-center/feishu/auth-url")
+        status = client.get("/api/interview-center/feishu/status")
+
+    assert auth_url.status_code == 200
+    assert auth_url.json()["configured"] is False
+    assert auth_url.json()["redirectUri"] == ""
+    assert status.status_code == 200
+    assert status.json()["configured"] is False
+
+
 def test_feishu_oauth_callback_saves_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
     monkeypatch.setenv("FEISHU_APP_SECRET", "secret")

@@ -127,7 +127,7 @@ class FeishuOAuthService:
         auth = self.authorization_url(state=state)
         return {
             "ok": True,
-            "configured": bool(self.config.app_id and self.config.app_secret),
+            "configured": _is_oauth_configured(self.config),
             "redirectUri": self.config.redirect_uri,
             "authUrl": auth["url"],
             "state": auth["state"],
@@ -168,7 +168,7 @@ class FeishuOAuthService:
         assert self.config is not None
         token = self.store.get_token() if self.store is not None else None
         return {
-            "configured": bool(self.config.app_id and self.config.app_secret),
+            "configured": _is_oauth_configured(self.config),
             "connected": bool(token and token.get("accessToken")),
             "userInfo": token.get("userInfo") if token else None,
             "expiresAt": token.get("expiresAt") if token else 0,
@@ -195,3 +195,7 @@ def _expires_at(value: Any, *, default: int | None = None) -> int:
         return int(default or 0)
     seconds = max(0, int(value) - 120)
     return int(time.time() * 1000) + seconds * 1000
+
+
+def _is_oauth_configured(config: FeishuConfig) -> bool:
+    return bool(config.app_id and config.app_secret and config.redirect_uri)
