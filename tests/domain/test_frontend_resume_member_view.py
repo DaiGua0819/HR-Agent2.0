@@ -104,7 +104,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260702-auto-filter-apply" in html
+    assert "20260702-resume-fill-frame" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -228,7 +228,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260702-auto-filter-apply" in html
+    assert "20260702-resume-fill-frame" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -378,7 +378,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-auto-filter-apply" in html
+    assert "20260702-resume-fill-frame" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -526,8 +526,8 @@ def test_resume_action_dock_removes_viewed_and_more_info_actions() -> None:
     assert ".member-resume-mode #moreInfoBtn" not in styles
 
 
-def test_action_dock_uses_member_style_and_members_keep_suitable_choices() -> None:
-    """The shared action dock should use the member-style sticky horizontal layout."""
+def test_action_dock_stacks_admin_actions_while_members_keep_horizontal_choices() -> None:
+    """Admins stack three review actions, while members keep the two-choice horizontal layout."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
@@ -542,12 +542,17 @@ def test_action_dock_uses_member_style_and_members_keep_suitable_choices() -> No
     assert 'id="actionDock"' in summary_markup
     dock_block = styles.split(".ts-action-dock {", 1)[1].split("}", 1)[0]
     button_block = styles.split(".action-dock-btn {", 1)[1].split("}", 1)[0]
+    member_dock_block = styles.split(".member-resume-mode .ts-action-dock {", 1)[1].split("}", 1)[0]
+    member_button_block = styles.split(".member-resume-mode .action-dock-btn {", 1)[1].split("}", 1)[0]
 
     assert "position: sticky" in dock_block
     assert "bottom: 0" in dock_block
+    assert "flex-direction: column" in dock_block
     assert "justify-content: stretch" in dock_block
     assert "padding: 10px 0 0" in dock_block
-    assert "flex: 1 1 0" in button_block
+    assert "width: 100%" in button_block
+    assert "flex-direction: row" in member_dock_block
+    assert "flex: 1 1 0" in member_button_block
 
 
 def test_interview_action_uses_pale_blue_white_style() -> None:
@@ -774,7 +779,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-auto-filter-apply" in html
+    assert "20260702-resume-fill-frame" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -906,6 +911,7 @@ def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
     assert 'id="summaryResizeHandle"' in html
     assert 'role="separator"' in html
     assert 'aria-controls="summaryContent"' in html
+    assert 'aria-valuemin="180"' in html
     assert "grid-template-columns: minmax(0, 1fr) 10px var(--summary-panel-width)" in preview_grid_block
     assert "--summary-panel-width: 276px" in preview_grid_block
     assert "cursor: col-resize" in resize_handle_block
@@ -914,11 +920,110 @@ def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
     assert "padding: 10px" in card_block
     assert "function bindSummaryPanelResize()" in script
     assert "SUMMARY_PANEL_STORAGE_KEY" in script
+    assert "const SUMMARY_PANEL_MIN_WIDTH = 180" in script
     assert "setSummaryPanelWidth" in script
     assert 'localStorage.setItem(SUMMARY_PANEL_STORAGE_KEY' in script
     assert 'handle.addEventListener("pointerdown"' in script
     assert 'window.addEventListener("pointermove"' in script
     assert "bindSummaryPanelResize();" in script
+
+
+def test_resume_summary_panel_collapses_with_floating_actions() -> None:
+    """The summary panel should collapse smoothly and keep admin actions floating near the resume."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    preview_grid_block = styles.split(".ts-preview-grid {", 1)[1].split("}", 1)[0]
+    collapse_button_block = styles.split(".summary-collapse-btn {", 1)[1].split("}", 1)[0]
+    collapsed_grid_block = styles.split(".ts-preview-grid.is-summary-collapsed {", 1)[1].split("}", 1)[0]
+    collapsed_handle_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .summary-resize-handle {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_summary_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .summary-content {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_cards_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .ts-summary-cards {",
+        1,
+    )[1].split("}", 1)[0]
+    floating_dock_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .ts-action-dock {",
+        1,
+    )[1].split("}", 1)[0]
+    floating_dock_hover_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .ts-action-dock:hover,",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_preview_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .resume-preview {",
+        1,
+    )[1].split("}", 1)[0]
+
+    assert 'id="summaryCollapseBtn"' in html
+    assert 'aria-controls="summaryContent actionDock"' in html
+    assert 'aria-expanded="true"' in html
+    assert "transition: grid-template-columns 0.28s" in preview_grid_block
+    assert "grid-template-rows: minmax(0, 1fr)" in preview_grid_block
+    assert "position: absolute" in collapse_button_block
+    assert "grid-template-columns: minmax(0, 1fr) 0px 0px" in collapsed_grid_block
+    assert "grid-column: 2" in collapsed_handle_block
+    assert "grid-row: 1" in collapsed_handle_block
+    assert "grid-column: 1 / -1" in collapsed_summary_block
+    assert "grid-row: 1" in collapsed_summary_block
+    assert "overflow: visible" in collapsed_summary_block
+    assert "opacity: 0" in collapsed_cards_block
+    assert "pointer-events: none" in collapsed_cards_block
+    assert "position: absolute" in floating_dock_block
+    assert "top: 54px" in floating_dock_block
+    assert "right: 14px" in floating_dock_block
+    assert "transform-origin: top right" in floating_dock_block
+    assert "scale(0.5)" in floating_dock_block
+    assert "scale(1)" in floating_dock_hover_block
+    assert "grid-column: 1 / -1" in collapsed_preview_block
+    assert "grid-row: 1" in collapsed_preview_block
+    assert "SUMMARY_PANEL_COLLAPSED_STORAGE_KEY" in script
+    assert "function setSummaryPanelCollapsed(collapsed" in script
+    assert "function bindSummaryPanelCollapse()" in script
+    assert "summaryCollapseBtn" in script
+    assert "is-summary-collapsed" in script
+
+
+def test_collapsed_summary_resume_image_fills_preview_frame_width() -> None:
+    """Collapsed summary mode should enlarge the resume to fill the preview frame width."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    collapsed_image_preview_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .image-preview {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_stage_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .resume-image-stage {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_link_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .resume-download-link {",
+        1,
+    )[1].split("}", 1)[0]
+    collapsed_image_block = styles.split(
+        ".ts-preview-grid.is-summary-collapsed .resume-image-stage img {",
+        1,
+    )[1].split("}", 1)[0]
+
+    assert "grid-template-rows: minmax(0, 1fr)" in collapsed_image_preview_block
+    assert "min-height: 0" in collapsed_image_preview_block
+    assert "display: block" in collapsed_stage_block
+    assert "height: 100%" in collapsed_stage_block
+    assert "align-content: start" in collapsed_stage_block
+    assert "overflow: auto" in collapsed_stage_block
+    assert "display: block" in collapsed_link_block
+    assert "height: auto" in collapsed_link_block
+    assert "\n  width: 100%;" in collapsed_image_block
+    assert "\n  height: auto;" in collapsed_image_block
+    assert "max-height: none" in collapsed_image_block
+    assert "object-fit: contain" in collapsed_image_block
 
 
 def test_stitch_workspace_keeps_candidate_list_and_preview_same_viewport() -> None:
@@ -937,7 +1042,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260702-auto-filter-apply" in html
+    assert "/assets/styles.css?v=20260702-resume-fill-frame" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

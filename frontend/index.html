@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260702-auto-filter-apply" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260702-resume-fill-frame" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260701-green-feishu-login" />
   </head>
   <body>
@@ -234,12 +234,22 @@
                   role="separator"
                   aria-orientation="vertical"
                   aria-controls="summaryContent"
-                  aria-valuemin="220"
+                  aria-valuemin="180"
                   aria-valuemax="460"
                   aria-valuenow="276"
                   tabindex="0"
                   title="拖动调整摘要栏宽度"
                 ></div>
+                <button
+                  id="summaryCollapseBtn"
+                  class="summary-collapse-btn"
+                  type="button"
+                  aria-controls="summaryContent actionDock"
+                  aria-expanded="true"
+                  title="收纳摘要栏"
+                >
+                  <span id="summaryCollapseIcon" aria-hidden="true">›</span>
+                </button>
                 <aside id="summaryContent" class="summary-content ts-summary-stack">
                   <div id="summaryCards" class="ts-summary-cards">
                     <p class="muted">选择候选人后显示摘要和评分。</p>
@@ -310,6 +320,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260702-auto-filter-apply"></script>
+    <script src="/assets/app.js?v=20260702-resume-fill-frame"></script>
   </body>
 </html>

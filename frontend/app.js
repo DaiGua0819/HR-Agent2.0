@@ -27,8 +27,9 @@ const state = {
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
 const SUMMARY_PANEL_STORAGE_KEY = "resumeSummaryPanelWidth";
+const SUMMARY_PANEL_COLLAPSED_STORAGE_KEY = "resumeSummaryPanelCollapsed";
 const SUMMARY_PANEL_DEFAULT_WIDTH = 276;
-const SUMMARY_PANEL_MIN_WIDTH = 220;
+const SUMMARY_PANEL_MIN_WIDTH = 180;
 const SUMMARY_PANEL_MAX_WIDTH = 460;
 const SUMMARY_PANEL_MIN_PREVIEW_WIDTH = 380;
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
@@ -1359,6 +1360,39 @@ function setSummaryPanelWidth(width, { persist = false } = {}) {
   }
   return next;
 }
+function setSummaryPanelCollapsed(collapsed, { persist = false } = {}) {
+  const grid = $("previewGrid");
+  const button = $("summaryCollapseBtn");
+  const icon = $("summaryCollapseIcon");
+  if (!grid) return;
+  const next = Boolean(collapsed);
+  grid.classList.toggle("is-summary-collapsed", next);
+  if (button) {
+    button.setAttribute("aria-expanded", String(!next));
+    button.title = next ? "展开摘要栏" : "收纳摘要栏";
+  }
+  if (icon) icon.textContent = next ? "‹" : "›";
+  if (persist) {
+    try {
+      localStorage.setItem(SUMMARY_PANEL_COLLAPSED_STORAGE_KEY, String(next));
+    } catch (error) {
+      console.debug("summary panel collapsed state was not persisted", error);
+    }
+  }
+}
+function bindSummaryPanelCollapse() {
+  const grid = $("previewGrid");
+  const button = $("summaryCollapseBtn");
+  if (!grid || !button) return;
+  try {
+    setSummaryPanelCollapsed(localStorage.getItem(SUMMARY_PANEL_COLLAPSED_STORAGE_KEY) === "true");
+  } catch (error) {
+    setSummaryPanelCollapsed(false);
+  }
+  button.addEventListener("click", () => {
+    setSummaryPanelCollapsed(!grid.classList.contains("is-summary-collapsed"), { persist: true });
+  });
+}
 function bindSummaryPanelResize() {
   const grid = $("previewGrid");
   const handle = $("summaryResizeHandle");
@@ -1387,6 +1421,7 @@ function bindSummaryPanelResize() {
     setSummaryPanelWidth(startWidth - delta);
   }
   handle.addEventListener("pointerdown", (event) => {
+    if (grid.classList.contains("is-summary-collapsed")) return;
     if (event.button !== 0) return;
     event.preventDefault();
     startX = event.clientX;
@@ -1417,6 +1452,7 @@ function bindPageActions() {
   bindGlobalSearchToFilters();
   bindAutoApplyResumeFilters();
   bindSummaryPanelResize();
+  bindSummaryPanelCollapse();
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
   $("filterToggleBtn").onclick = toggleFilterPanel;
