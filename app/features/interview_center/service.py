@@ -14,6 +14,10 @@ from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
+from app.features.interview_center.backfill import (
+    BackfillService,
+    EvaluationGeneratorProtocol,
+)
 from app.features.interview_center.calendar_sync import (
     CalendarClientProtocol,
     CalendarSyncService,
@@ -34,6 +38,7 @@ from app.features.interview_center.feishu.docx import (
     MockInterviewDocClient,
     build_interview_document_text,
 )
+from app.features.interview_center.feishu.meeting import MeetingSourceClientProtocol
 from app.features.interview_center.feishu.oauth import FeishuOAuthService
 from app.features.interview_center.question_generator import (
     InterviewQuestionGenerator,
@@ -65,6 +70,10 @@ class InterviewCenterService:
         conversation_repository: ConversationRepository | None = None,
         calendar_client: CalendarClientProtocol | None = None,
         doc_client: InterviewDocClientProtocol | None = None,
+        meeting_client: MeetingSourceClientProtocol | None = None,
+        evaluation_generator: EvaluationGeneratorProtocol | None = None,
+        asset_sync: BitableAssetSync | Any | None = None,
+        now: Any | None = None,
     ) -> None:
         self.repository = repository or ResumeRepository.from_settings()
         self.conversation_repository = (
@@ -75,12 +84,20 @@ class InterviewCenterService:
         self.doc_client = doc_client or MockInterviewDocClient()
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
-        self.asset_sync = BitableAssetSync(
+        self.asset_sync = asset_sync or BitableAssetSync(
             store=self.store,
             bitable=self.bitable,
             output_dir=self.output_dir,
         )
         self.feedback_backfill = FeedbackBackfillService(store=self.store, bitable=self.bitable)
+        self.backfill_service = BackfillService(
+            store=self.store,
+            repository=self.repository,
+            meeting_client=meeting_client,
+            evaluation_generator=evaluation_generator,
+            asset_sync=self.asset_sync,
+            now=now,
+        )
         self.calendar_sync = CalendarSyncService(
             store=self.store,
             repository=self.repository,
@@ -303,6 +320,34 @@ class InterviewCenterService:
             session.payload = {**session.payload, "prepareErrors": []}
         self.store.save(session)
         return {"session": session.to_dict(), "feishuDoc": feishu_doc}
+
+    async def backfill_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        early_override: bool = False,
+        early_override_token: str = "",
+    ) -> dict[str, Any]:
+        """Backfill interview evaluation from meeting/minutes sources."""
+
+        return await self.backfill_service.backfill(
+            session_id,
+            force=force,
+            early_override=early_override,
+            early_override_token=early_override_token,
+        )
+
+    def backfill_status(self) -> dict[str, Any]:
+        """Return backfill scheduler/service status."""
+
+        return self.backfill_service.status()
+
+    def backfill_source(self, session_id: str) -> dict[str, Any]:
+        """Return the stored public backfill source for a session."""
+
+        session = self._require_session(session_id)
+        return {"sessionId": session.id, "source": session.backfill_source}
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """列出会话。"""

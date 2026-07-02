@@ -430,6 +430,102 @@ def test_bitable_asset_sync_uses_second_interview_evaluation_field() -> None:
     assert saved.bitable_second_interview_evaluation_document["field"] == "复试结果评价"
 
 
+def test_backfill_blocks_until_ten_minutes_after_interview_end() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True},
+    )
+    session.end_time = 1_783_003_600
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="面试记录"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+
+    with pytest.raises(ValueError, match="backfill_not_available"):
+        asyncio.run(service.backfill_session(session.id))
+
+
+def test_backfill_fails_when_sources_are_empty() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text=""),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=True))
+
+    assert result["session"]["status"] == "backfill_failed"
+    assert result["session"]["lastBackfillError"] == "no_valid_interview_record"
+    assert result["session"]["backfillSource"]["source"] == "fake_meeting"
+
+
+def test_backfill_persists_evaluation_updates_resume_and_calls_assets() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    repository = ResumeRepository.in_memory([_resume_record()])
+    asset_sync = FakeAssetSync()
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=asset_sync,
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=True))
+
+    assert result["session"]["status"] == "needs_review"
+    assert result["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
+    assert result["session"]["interviewEvaluation"]["humanReviewRequired"] is True
+    assert repository.get("resume-1").payload["interviewEvaluation"]["sessionId"] == session.id
+    assert asset_sync.calls == ["interview_record_image", "evaluation_document"]
+
+
+def test_backfill_api_routes_are_compatible() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={"force": True},
+        )
+        source = client.get(f"/api/interview-center/sessions/{session.id}/backfill-source")
+        status = client.get("/api/interview-center/backfill/status")
+
+    assert backfilled.status_code == 200
+    assert backfilled.json()["ok"] is True
+    assert backfilled.json()["session"]["status"] == "needs_review"
+    assert source.status_code == 200
+    assert source.json()["source"]["source"] == "fake_meeting"
+    assert status.status_code == 200
+    assert status.json()["lastResult"]["sessionId"] == session.id
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -579,6 +675,65 @@ class FakeLLM:
         }
 
 
+class FakeMeetingClient:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    async def collect_sources(self, session: Any) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "source": {
+                "source": "fake_meeting",
+                "sessionId": session.id,
+                "errors": [],
+            },
+        }
+
+
+class FakeEvaluationGenerator:
+    async def generate(
+        self,
+        *,
+        resume: dict[str, Any],
+        session: Any,
+        interview_text: str,
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        _ = resume, session, interview_text, source
+        return {
+            "summary": "候选人项目扎实",
+            "overallRecommendation": "pass",
+            "risks": [],
+            "suggestedRuleChanges": [],
+        }
+
+
+class FakeAssetSync:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def ensure_interview_record_image(
+        self,
+        session: Any,
+        resume: dict[str, Any],
+    ) -> dict[str, Any]:
+        _ = session, resume
+        self.calls.append("interview_record_image")
+        return {"ok": True}
+
+    async def ensure_evaluation_document(
+        self,
+        session: Any,
+        resume: dict[str, Any],
+        document: dict[str, Any],
+        *,
+        second_round: bool = False,
+    ) -> dict[str, Any]:
+        _ = session, resume, document, second_round
+        self.calls.append("evaluation_document")
+        return {"ok": True}
+
+
 def _resume_record() -> ResumeRecord:
     return ResumeRecord(
         id="resume-1",
@@ -603,3 +758,14 @@ def _resume_payload() -> dict[str, Any]:
         "jobType": "AI应用开发实习生",
         "job_type": "AI应用开发实习生",
     }
+
+
+def _backfill_session(store: InMemoryInterviewStore) -> Any:
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True},
+    )
+    session.end_time = 1_783_003_600
+    return store.save(session)

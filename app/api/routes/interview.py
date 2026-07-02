@@ -60,6 +60,14 @@ class InterviewPrepareRequest(BaseModel):
     force: bool = False
 
 
+class InterviewBackfillRequest(BaseModel):
+    """Old interview-center backfill request."""
+
+    force: bool = False
+    early_override: bool = Field(default=False, alias="earlyOverride")
+    early_override_token: str = Field(default="", alias="earlyOverrideToken")
+
+
 def _service(request: Request) -> InterviewCenterService:
     service = getattr(request.app.state, "interview_center_service", None)
     if service is None:
@@ -187,6 +195,45 @@ async def prepare_session(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/interview-center/sessions/{session_id}/backfill")
+async def backfill_session(
+    session_id: str,
+    payload: InterviewBackfillRequest,
+    request: Request,
+) -> dict[str, object]:
+    """Old interview-center backfill endpoint."""
+
+    try:
+        result = await _service(request).backfill_session(
+            session_id,
+            force=payload.force,
+            early_override=payload.early_override,
+            early_override_token=payload.early_override_token,
+        )
+        return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/interview-center/sessions/{session_id}/backfill-source")
+async def backfill_source(session_id: str, request: Request) -> dict[str, object]:
+    """Old interview-center backfill source endpoint."""
+
+    try:
+        return {"ok": True, **_service(request).backfill_source(session_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/interview-center/backfill/status")
+async def backfill_status(request: Request) -> dict[str, object]:
+    """Old interview-center backfill status endpoint."""
+
+    return {"ok": True, **_service(request).backfill_status()}
 
 
 @router.post("/api/interview-center/sessions/{session_id}/sync-bitable")

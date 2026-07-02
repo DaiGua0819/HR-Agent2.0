@@ -176,3 +176,36 @@
 - 风险 / 待确认：
   - 当前真实 Bitable 字段过滤仍以 Task 2 helper 为边界，`BitableAssetSync` 直接使用当前 client 写入；后续真实 HTTP client 接入字段列表后需要在写入路径统一调用字段过滤。
   - 当前资产同步服务已组合到主服务，但 backfill 尚未调用；Task 6 会把评价生成、source 收集、resume update 与 Bitable 资产同步串起来。
+
+---
+
+### 快照 0053：迁移面试中心 Backfill 来源收集与评价回填核心链路
+
+- 修改时间：2026-07-02 23:14:48 +08:00
+- 修改原因：
+  - 旧面试中心在面试结束 10 分钟后读取飞书会议/妙记来源，生成面试评价，写回 session 和简历库，并进入人工复核状态；当前 Python 版只有简单 feedback-backfill。
+  - 旧系统要求无有效来源时保存失败状态，不应生成空评价；有有效来源时需要调用 Bitable 资产同步。
+  - 旧前端依赖 `/backfill`、`/backfill-source`、`/backfill/status` 这些旧接口。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/meeting.py`
+  - `app/features/interview_center/backfill.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `MeetingSourceClientProtocol` 与 `EmptyMeetingSourceClient`，为后续真实飞书 VC/妙记来源读取提供可替换边界。
+  - 新增 `BackfillService`，实现 10 分钟保护、空 source 失败、评价生成、session 持久化、简历库 `interviewEvaluation` 更新、资产同步调用、backfill 状态。
+  - `InterviewCenterService` 新增 backfill 注入项和 `backfill_session()`、`backfill_status()`、`backfill_source()`。
+  - `app/api/routes/interview.py` 新增 `POST /api/interview-center/sessions/{session_id}/backfill`、`GET /api/interview-center/sessions/{session_id}/backfill-source`、`GET /api/interview-center/backfill/status`。
+  - 新增测试覆盖 10 分钟保护、空来源失败、评价持久化、简历库更新、资产同步调用和旧 API 兼容。
+- 验证结果：
+  - 红灯确认：新增测试初次运行 4 failed，原因是 `InterviewCenterService.__init__()` 尚不支持 `meeting_client` 等 backfill 依赖。
+  - 修复后：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：23 passed，1 个既有 StarletteDeprecationWarning。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：36 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/backfill.py app/features/interview_center/feishu/meeting.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/backfill.py app/features/interview_center/feishu/meeting.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前 `EmptyMeetingSourceClient` 是安全空实现；真实飞书会议/妙记 source 收集需要在 OAuth/status 兼容阶段接入用户 token HTTP client。
+  - 当前评价生成器是保守本地 fallback；后续需要替换为旧 `feedbackBackfill.js` 同等 LLM 评价结构。
+  - 本轮完成 backfill 核心链路，人工 review/confirm 旧路由仍需继续补齐。
