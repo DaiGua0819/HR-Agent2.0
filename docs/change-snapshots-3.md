@@ -1065,3 +1065,36 @@
 - 风险 / 待确认：
   - 本轮恢复的是提前回灌授权保护和错误响应形状，不替代真实飞书会议/妙记来源读取的端到端联调。
   - 普通 10 分钟保护的 `error` 文案仍使用当前映射中的稳定中文短句；旧 Node 会追加本地化预计可回灌时间，当前通过 `availableAt/endTime` 提供机器可读时间信息。
+
+---
+
+### 快照 0082：保存旧提前回灌原因
+
+- 修改时间：2026-07-03 04:26:01 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `POST /api/interview-center/sessions/{id}/backfill` 会读取请求体中的 `earlyOverrideReason`，并在一次性提前回灌成功后写入 `earlyBackfillOverride.reason`。
+  - 当前 FastAPI 请求模型、service 方法和 backfill 编排都没有传递该字段，导致即使旧前端提交了人工提前回灌原因，最终仍保留 session 中已有的旧 reason。
+  - 提前回灌原因是人工越过 10 分钟保护的重要审计信息，迁移后需要保留旧行为。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `app/features/interview_center/service.py`
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `InterviewBackfillRequest` 新增 `earlyOverrideReason` alias，并在旧 backfill API 中传给 service。
+  - `InterviewCenterService.backfill_session()` 和 `BackfillService.backfill()` 新增 `early_override_reason` 参数，保持默认空字符串以兼容已有调用。
+  - `_used_early_override_payload()` 现在优先使用请求传入的 reason，其次使用 session 中已有 reason，最后回退 `one_off_manual_override`，并继续按旧 Node 行为截断到 300 字。
+  - 新增 `test_backfill_api_persists_old_early_override_reason_from_body()`，覆盖请求体 reason 覆盖已存 reason 并在成功提前回灌后持久化。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，实际 `earlyBackfillOverride.reason` 为 `stored reason`，证明请求体 `earlyOverrideReason` 未被读取和传递。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k old_early_override_reason_from_body`：1 passed，63 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 提前回灌边界验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "old_one_off_early_override_token or invalid_old_early_override or requires_force_for_old_early_override or old_early_override_reason"`：4 passed，60 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：64 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：77 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：311 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复提前回灌审计原因的传递和保存；真实飞书会议/妙记文本读取仍需端到端授权环境验证。
+  - 当前 reason 仍只保存在 session payload 的 `earlyBackfillOverride` 中，和旧 Node 数据结构一致；如果后续需要单独审计表，应作为新需求另行设计。

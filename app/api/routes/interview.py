@@ -74,6 +74,7 @@ class InterviewBackfillRequest(BaseModel):
 
     force: bool = False
     early_override: bool = Field(default=False, alias="earlyOverride")
+    early_override_reason: str = Field(default="", alias="earlyOverrideReason")
     early_override_token: str = Field(default="", alias="earlyOverrideToken")
 
 
@@ -296,6 +297,7 @@ async def backfill_session(
             session_id,
             force=resolved.force,
             early_override=resolved.early_override,
+            early_override_reason=resolved.early_override_reason,
             early_override_token=resolved.early_override_token,
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}

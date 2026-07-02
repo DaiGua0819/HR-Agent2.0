@@ -125,6 +125,7 @@ class BackfillService:
         *,
         force: bool = False,
         early_override: bool = False,
+        early_override_reason: str = "",
         early_override_token: str = "",
     ) -> dict[str, Any]:
         """Backfill one interview session and return an API-compatible payload."""
@@ -187,6 +188,7 @@ class BackfillService:
                     "earlyBackfillOverride": _used_early_override_payload(
                         session,
                         available_at=_backfill_available_at(session),
+                        reason=early_override_reason,
                     ),
                 }
             saved = self.store.save(session)
@@ -484,6 +486,7 @@ def _used_early_override_payload(
     session: InterviewSession,
     *,
     available_at: int,
+    reason: str = "",
 ) -> dict[str, Any]:
     override = (
         dict(session.payload.get("earlyBackfillOverride"))
@@ -495,7 +498,7 @@ def _used_early_override_payload(
         "allowed": True,
         "usedAt": now_iso(),
         "availableAt": available_at,
-        "reason": str(override.get("reason") or "one_off_manual_override")[:300],
+        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
     }
 
 

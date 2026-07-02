@@ -582,6 +582,7 @@ class InterviewCenterService:
         *,
         force: bool = False,
         early_override: bool = False,
+        early_override_reason: str = "",
         early_override_token: str = "",
     ) -> dict[str, Any]:
         """Backfill interview evaluation from meeting/minutes sources."""
@@ -590,6 +591,7 @@ class InterviewCenterService:
             session_id,
             force=force,
             early_override=early_override,
+            early_override_reason=early_override_reason,
             early_override_token=early_override_token,
         )
 
