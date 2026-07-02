@@ -299,6 +299,44 @@ def test_calendar_sync_upserts_matches_and_ignores_non_interviews() -> None:
     assert second["sessions"][0]["id"] == first["sessions"][0]["id"]
 
 
+def test_calendar_sync_auto_prepare_generates_docs_for_matched_sessions() -> None:
+    store = InMemoryInterviewStore()
+    doc_client = FakeDocClient()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-auto-prepare",
+                    "summary": "Alice interview",
+                    "description": "phone 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+
+    result = asyncio.run(
+        service.sync_calendar(
+            calendar_id="primary",
+            auto_prepare=True,
+            auto_prepare_limit=1,
+        )
+    )
+
+    assert result["prepared"] == 1
+    assert result["prepareErrors"] == []
+    assert result["sessions"][0]["status"] == "prepared"
+    assert result["sessions"][0]["questionSet"]["questions"][0]["question"] == "请介绍 Agent 项目"
+    assert result["sessions"][0]["feishuDoc"]["documentId"] == "doc-1"
+    assert len(doc_client.created) == 1
+    assert service.calendar_sync_status()["lastResult"]["prepared"] == 1
+
+
 def test_interview_center_sync_api_routes_are_compatible() -> None:
     service = InterviewCenterService(
         repository=ResumeRepository.in_memory([_resume_record()]),

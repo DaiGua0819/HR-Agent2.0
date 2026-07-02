@@ -521,3 +521,33 @@
 - 风险 / 待确认：
   - 本轮验证覆盖页面文件和静态资源可访问性，但尚未在真实浏览器中完成旧面试中心 UI 的端到端点击验收；后续需要结合真实飞书授权、真实日历事件、Docx、VC/妙记和 Bitable 写入做完整联调。
   - 前端资源为旧 Node 页面机械迁入，后续如继续收敛到 FastAPI 新前端体系，需要再检查全局样式冲突、缓存版本号策略和旧 API 字段使用情况。
+
+---
+
+### 快照 0064：补齐面试中心日历同步自动准备
+
+- 修改时间：2026-07-03 01:22:15 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在 `POST /api/interview-center/sync` 收到 `autoPrepare=true` 时，会对本次同步后已自动匹配候选人且尚未创建飞书文档的面试日程执行 `prepareSession`，并在响应中返回 `prepared` 和 `prepareErrors`。
+  - 当前 FastAPI `InterviewCenterService.sync_calendar()` 虽然接收 `auto_prepare` 和 `auto_prepare_limit`，但底层 `CalendarSyncService` 实际忽略该参数，导致同步结果里 `prepared` 永远为 0，旧自动日历同步链路无法在拉取日程后自动生成面试问题文档。
+  - 该编排需要同时访问日历同步结果、简历库、LLM 问题生成和 Docx 客户端，因此应放在 `InterviewCenterService` 层，而不是让 `CalendarSyncService` 反向依赖 prepare 逻辑。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_calendar_sync_auto_prepare_generates_docs_for_matched_sessions()`，覆盖日历同步自动匹配候选人后，`autoPrepare=true` 会生成问题、创建飞书文档、返回 `prepared=1`，并更新 `/sync/status` 的 `lastResult.prepared`。
+  - `InterviewCenterService.sync_calendar()` 在底层日历同步完成后，按 `auto_prepare_limit` 选择已绑定简历且未创建 `feishuDoc.documentId` 的面试日程，逐个复用既有 `prepare_session()`。
+  - 自动准备失败时记录 `prepareErrors` 和 session 日志；成功后刷新响应里的 `sessions`，确保旧前端拿到的 session 状态已是 `prepared`，并同步更新 `calendar_sync.last_result`。
+- 验证结果：
+  - 红灯确认：新增自动准备测试首次运行 1 failed，原因为 `result["prepared"]` 仍为 0。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k auto_prepare_generates_docs`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：44 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：57 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：291 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮补齐的是旧 `autoPrepare` 编排；旧 Node 在日历同步中还会尝试把已绑定候选人的简历图同步到 Bitable 并返回 `bitableResumeResults`，当前 FastAPI 结果保留该字段但尚未在 sync 阶段触发真实简历图同步，后续还需要继续审计并补齐。
+  - 自动准备复用现有 `prepare_session()`，真实飞书 Docx 写入仍受 dry-run 和 OAuth token 配置保护；端到端联调时需要用有效飞书授权验证真实文档创建。

@@ -253,17 +253,67 @@ class InterviewCenterService:
     ) -> dict[str, Any]:
         """Sync Feishu calendar events into interview-center sessions."""
 
-        return await self.calendar_sync.sync(
+        result = await self.calendar_sync.sync(
             calendar_id=calendar_id,
             auto_prepare=auto_prepare,
             auto_prepare_limit=auto_prepare_limit,
             source="manual",
         )
+        if auto_prepare:
+            result = await self._auto_prepare_synced_sessions(
+                result,
+                limit=auto_prepare_limit,
+            )
+        return result
 
     def calendar_sync_status(self) -> dict[str, Any]:
         """Return calendar sync status for old-compatible endpoints."""
 
         return self.calendar_sync.status()
+
+    async def _auto_prepare_synced_sessions(
+        self,
+        result: dict[str, Any],
+        *,
+        limit: int,
+    ) -> dict[str, Any]:
+        prepared = []
+        prepare_errors = []
+        max_count = max(0, int(limit or 0))
+        for session_payload in list(result.get("sessions") or []):
+            if len(prepared) >= max_count:
+                break
+            if not session_payload.get("resumeId"):
+                continue
+            if session_payload.get("feishuDoc", {}).get("documentId"):
+                continue
+            try:
+                prepared_result = await self.prepare_session(str(session_payload["id"]))
+                prepared.append(prepared_result["session"])
+            except Exception as exc:
+                error = {
+                    "sessionId": str(session_payload.get("id") or ""),
+                    "error": str(exc) or "auto_prepare_failed",
+                }
+                prepare_errors.append(error)
+                self.store.append_log(error["sessionId"], "error", error["error"], {})
+        range_payload = result.get("range") or {}
+        next_result = {
+            **result,
+            "prepared": len(prepared),
+            "prepareErrors": prepare_errors,
+            "sessions": self.list_sessions(
+                start_time=int(range_payload.get("startTime") or 0),
+                end_time=int(range_payload.get("endTime") or 0),
+            ),
+        }
+        if self.calendar_sync.last_result is not None:
+            self.calendar_sync.last_result = {
+                **self.calendar_sync.last_result,
+                "prepared": len(prepared),
+                "prepareErrors": len(prepare_errors),
+            }
+        return next_result
 
     @property
     def scheduler_running(self) -> bool:
