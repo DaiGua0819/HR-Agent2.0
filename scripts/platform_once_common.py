@@ -344,19 +344,6 @@ async def _process_zhilian(
     scrolls = 0
     idle_scans = 0
     while len(summaries) < max_items and idle_scans < 3:
-        unread = await adapter.select_unread_filter()
-        if not unread.get("selected"):
-            summaries.append(
-                _failure_summary(
-                    {"id": "zhilian_unread_filter", "label": "智联未读筛选"},
-                    action="failed",
-                    stage="unread_filter_not_active",
-                    reason=str(unread.get("reason") or "unread_filter_not_active"),
-                    reliable_actions=getattr(adapter.page, "reliable_actions", []),
-                    extra={"unreadFilter": unread},
-                )
-            )
-            break
         before_actions = len(getattr(adapter.page, "reliable_actions", []))
         ref = await adapter.find_next_unread_thread(exclude_ids=seen)
         if ref is None:

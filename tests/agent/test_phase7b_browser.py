@@ -176,8 +176,8 @@ def test_zhilian_preflight_requires_unread_filter_click() -> None:
     assert any("unread filter not active" in item for item in missing)
 
 
-def test_zhilian_batch_reselects_unread_before_each_candidate(monkeypatch) -> None:
-    """智联批处理每次取下一个候选人前都必须强制切到未读列表。"""
+def test_zhilian_batch_does_not_reselect_unread_after_preflight(monkeypatch) -> None:
+    """智联启动预检后，批处理候选人循环不能再检测或点击未读按钮。"""
 
     class FakeRunner:
         def __init__(self, adapter: object, **kwargs: object) -> None:
@@ -209,7 +209,7 @@ def test_zhilian_batch_reselects_unread_before_each_candidate(monkeypatch) -> No
     )
 
     assert [item["conversationId"] for item in summaries] == ["conv-1", "conv-2"]
-    assert adapter.events == ["select", "find", "select", "find"]
+    assert adapter.events == ["find", "find"]
 
 
 def test_boss_confirmed_live_allows_high_limit_for_full_unread_pass(monkeypatch) -> None:
