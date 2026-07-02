@@ -85,8 +85,16 @@ def is_direct_resume_rule(rule: dict[str, Any] | None) -> bool:
     return bool(rule and rule.get("directResume"))
 
 
+def is_operation_direct_resume_rule(rule: dict[str, Any] | None) -> bool:
+    """判断是否运营 A/B 直求简历岗位。"""
+
+    resume_type = str((rule or {}).get("resumeJobType") or "").strip()
+    category = str((rule or {}).get("category") or "").strip()
+    return resume_type in OPERATION_RESUME_TYPES or category == "operation_direct_resume"
+
+
 def should_skip_prompt_before_resume(rule: dict[str, Any] | None) -> bool:
-    """运营 A/B 在智联不发送前置话术，直接要附件简历。"""
+    """历史兼容：判断是否运营 A/B 直求简历岗位。"""
 
     resume_type = str((rule or {}).get("resumeJobType") or "")
     category = str((rule or {}).get("category") or "")
@@ -210,6 +218,8 @@ def find_knowledge_answer(
             elif len(compact_question) >= 4 and compact_question in key:
                 question_match_len = max(question_match_len, len(compact_question))
         if question_match_len:
+            if _is_hiring_status_question(compact_question) and _is_hiring_status_answer(item):
+                continue
             score = 5 + position_bonus
             scored.append((question_match_len, score, item["answer"]))
     if not scored:
@@ -243,7 +253,13 @@ def _collect_answer_candidates(value: Any) -> list[dict[str, Any]]:
         )
         if answer and keys:
             key_list = keys if isinstance(keys, list) else [str(keys)]
-            out.append({"keys": key_list, "answer": str(answer)})
+            out.append(
+                {
+                    "keys": key_list,
+                    "answer": str(answer),
+                    "topic": str(value.get("topic") or ""),
+                }
+            )
         for key, child in value.items():
             child_items = _collect_answer_candidates(child)
             for item in child_items:
@@ -296,22 +312,7 @@ def _collect_named_string_list(value: Any, field_name: str) -> list[str]:
 def _is_pure_hiring_status_question(compact_text: str) -> bool:
     if not compact_text:
         return False
-    status_terms = (
-        "还在招",
-        "还招",
-        "还招聘",
-        "还招人",
-        "招人吗",
-        "招吗",
-        "招聘吗",
-        "还缺人",
-        "还要人",
-        "招实习生",
-        "还招实习生",
-        "还可以聊",
-        "还能聊",
-    )
-    if not any(term in compact_text for term in status_terms):
+    if not _is_hiring_status_question(compact_text):
         return False
     detail_terms = (
         "细节",
@@ -332,6 +333,35 @@ def _is_pure_hiring_status_question(compact_text: str) -> bool:
         "base",
     )
     return not any(term in compact_text for term in detail_terms)
+
+
+def _is_hiring_status_question(compact_text: str) -> bool:
+    if not compact_text:
+        return False
+    status_terms = (
+        "还在招",
+        "还招",
+        "还招聘",
+        "还招人",
+        "招人吗",
+        "招吗",
+        "招聘吗",
+        "还缺人",
+        "还要人",
+        "招实习生",
+        "还招实习生",
+        "还可以聊",
+        "还能聊",
+    )
+    return any(term in compact_text for term in status_terms)
+
+
+def _is_hiring_status_answer(item: dict[str, Any]) -> bool:
+    if str(item.get("topic") or "").strip() == "hiringStatus":
+        return True
+    answer = _compact(str(item.get("answer") or ""))
+    keys = [_compact(value) for value in item.get("keys", []) if value]
+    return answer == "还在招的" and any(_is_hiring_status_question(key) for key in keys)
 
 
 def _compact(value: str) -> str:

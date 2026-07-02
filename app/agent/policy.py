@@ -11,8 +11,8 @@ import random
 from app.agent.rules import is_ai_basic_rule, resume_request_prompt
 from app.core.constants import Platform
 
-BOSS_OPERATION_PREPHRASE = "你好可以发一份简历过来吗"
 OPERATION_RESUME_TYPES = {"运营A", "运营B"}
+OPERATION_DIRECT_RESUME_PROMPT_POOL = ("你好可以看看简历吗", "你好，方便发一份简历过来吗")
 DIRECT_RESUME_PROMPT_POOL = ("你好，方便发一份简历过来吗", "你好，可以看看简历吗")
 ALL_PLATFORM_DIRECT_RESUME_TYPES = {
     "外部财务产品顾问",
@@ -43,14 +43,16 @@ def should_send_prephrase(
     """判断直求简历前是否需要先发文字话术。
 
     复刻旧 `prepare_direct_resume_request_prompt` 的核心平台门控：
-    BOSS 运营 A/B 先发固定话术；51job/智联运营 A/B 不发；财务 AI 直求
-    简历岗位三平台都先发岗位配置的 `resumeRequestPrompt`。
+    运营 A/B 三平台都先发运营专用要简历话术；财务 AI 直求简历岗位三平台
+    都先发岗位配置的 `resumeRequestPrompt`。
     """
 
     resume_type = _resume_job_type(position, rule)
+    if resume_type in OPERATION_RESUME_TYPES:
+        return True
     if resume_type in ALL_PLATFORM_DIRECT_RESUME_ALIASES:
         return bool(prephrase_candidates(platform, position, rule))
-    return _platform(platform) == Platform.BOSS and resume_type in OPERATION_RESUME_TYPES
+    return False
 
 
 def prephrase_candidates(
@@ -62,10 +64,11 @@ def prephrase_candidates(
 
     resume_type = _resume_job_type(position, rule)
     prompts = _rule_prompt_values(rule)
+    if resume_type in OPERATION_RESUME_TYPES:
+        values = [*OPERATION_DIRECT_RESUME_PROMPT_POOL, *prompts]
+        return _dedupe_prompts(values)
     if resume_type in ALL_PLATFORM_DIRECT_RESUME_ALIASES:
         return prompts or list(DIRECT_RESUME_PROMPT_POOL)
-    if _platform(platform) == Platform.BOSS and resume_type in OPERATION_RESUME_TYPES:
-        return prompts or [BOSS_OPERATION_PREPHRASE]
     return []
 
 
@@ -77,6 +80,8 @@ def prephrase_text(
     """返回需要发送的直求简历前置话术。"""
 
     candidates = prephrase_candidates(platform, position, rule)
+    if _resume_job_type(position, rule) in OPERATION_RESUME_TYPES:
+        return random.choice(OPERATION_DIRECT_RESUME_PROMPT_POOL)
     return random.choice(candidates) if candidates else ""
 
 
@@ -112,6 +117,10 @@ def _rule_prompt_values(rule: dict[str, object] | None) -> list[str]:
     prompt = resume_request_prompt(rule)
     if prompt:
         values.append(prompt)
+    return _dedupe_prompts(values)
+
+
+def _dedupe_prompts(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for item in values:

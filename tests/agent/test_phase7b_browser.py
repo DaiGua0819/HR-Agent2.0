@@ -158,6 +158,23 @@ def test_zhilian_preflight_does_not_require_chat_panel_before_opening_thread() -
     assert missing == []
 
 
+def test_zhilian_preflight_requires_unread_filter_click() -> None:
+    """智联处理前必须确认未读筛选可点击，不能因列表为空继续处理。"""
+
+    page = SelectorCountPage(
+        {
+            zhilian_selectors.SESSION_ITEM: 3,
+            zhilian_selectors.CHAT_READY: 0,
+            zhilian_selectors.MESSAGE_ITEM: 0,
+        }
+    )
+    adapter = UnreadFilterFailedAdapter(page)
+
+    missing = asyncio.run(_health_check(Platform.ZHILIAN, adapter))
+
+    assert any("unread filter not active" in item for item in missing)
+
+
 def test_boss_confirmed_live_allows_high_limit_for_full_unread_pass(monkeypatch) -> None:
     """用户确认 live 后，BOSS 单次处理不再限制 3/10 人。"""
 
@@ -270,12 +287,34 @@ class PreflightAdapter:
         return {"selected": True}
 
 
+class UnreadFilterFailedAdapter(PreflightAdapter):
+    async def select_unread_filter(self) -> dict[str, object]:
+        return {
+            "selected": False,
+            "reason": "unread_filter_not_found",
+            "click": {"selected": False},
+            "fallbackRows": 0,
+        }
+
+
 class SelectorCountPage:
     def __init__(self, counts: dict[str, int]) -> None:
         self.counts = counts
 
     async def query_all(self, selector: str) -> list[object]:
-        return [object()] * self.counts.get(selector, 0)
+        count = self.counts.get(selector, 0)
+        if selector == zhilian_selectors.SESSION_ITEM:
+            return [PreflightRow() for _ in range(count)]
+        return [object()] * count
+
+
+class PreflightRow:
+    async def attr(self, name: str) -> str:
+        _ = name
+        return "0"
+
+    async def text(self) -> str:
+        return "候选人"
 
 
 class StrictGbkStdout:

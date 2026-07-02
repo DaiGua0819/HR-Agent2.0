@@ -229,11 +229,14 @@ def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
     ]
 
 
-def test_job51_operation_no_prephrase_and_finance_has_prompt() -> None:
-    """运营 A/B 在 51job 不发前置话术；财务 AI 直求简历会发配置话术。"""
+def test_job51_operation_and_finance_have_prompt() -> None:
+    """运营 A/B 和财务 AI 直求简历岗位都会先发要简历话术。"""
 
     _, page = run_case(conversation("运营A", [{"sender": "other", "text": "你好"}]))
-    assert page.sent_messages == []
+    assert page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert page.resume_requests == 1
 
     _, page = run_case(

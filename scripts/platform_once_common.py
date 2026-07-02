@@ -141,14 +141,7 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     unread = await adapter.select_unread_filter()
     missing: list[str] = []
     if not unread.get("selected"):
-        row_states = await _candidate_row_states(adapter, platform)
-        if row_states:
-            missing.append(f"unread filter not active: {unread}")
-        else:
-            print(
-                f"preflight unread filter inactive but no real unread rows: {unread}",
-                flush=True,
-            )
+        missing.append(f"unread filter not active: {unread}")
     if platform == Platform.JOB51:
         required = {"thread list": job51_selectors.THREAD_ITEM}
         conditional = {

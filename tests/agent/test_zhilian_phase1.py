@@ -145,17 +145,44 @@ def test_sales_screening_flow_ask_accept_and_reject() -> None:
     assert page.resume_requests == 0
 
 
-def test_operation_direct_resume_has_no_prompt() -> None:
-    """运营 A/B 在智联不发前置话术，直接要附件简历。"""
+def test_operation_direct_resume_sends_prompt_and_requests_resume() -> None:
+    """运营 A/B 在智联不答疑，先发要简历话术，再要附件简历。"""
 
     state, page = run_case(conversation("运营A", [{"sender": "other", "text": "你好"}]))
     assert state["next_action"] == "request_resume"
-    assert page.sent_messages == []
+    assert page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert page.resume_requests == 1
 
     state, page = run_case(conversation("外部财务产品顾问", [{"sender": "other", "text": "你好"}]))
     assert state["next_action"] == "request_resume"
     assert page.sent_messages == ["你好，方便发一份简历过来吗"]
+    assert page.resume_requests == 1
+
+
+def test_operation_hiring_status_question_still_requests_resume() -> None:
+    """B端运营问还招/细节时不回答问题，直接求简历。"""
+
+    state, page = run_case(
+        conversation(
+            "B端社交媒体运营",
+            [
+                {
+                    "sender": "other",
+                    "text": "您发布的B端社交媒体运营职位还在招吗？我很感兴趣，希望可以深聊",
+                }
+            ],
+        )
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert page.resume_requests == 1
 
 
@@ -191,6 +218,29 @@ def test_pure_hiring_status_question_is_silent() -> None:
     assert state["next_action"] == "wait"
     assert state["stage"] == "silent_question"
     assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_hr_hiring_status_with_detail_question_sends_screening_without_status_answer() -> None:
+    """筛选岗位问还招和细节时，不答“还在招”，直接发送岗位筛选问题。"""
+
+    state, page = run_case(
+        conversation(
+            "人力资源管培生",
+            [
+                {
+                    "sender": "other",
+                    "text": (
+                        "您好，请问人力资源管培生职位还在招人吗？"
+                        "方便介绍一下岗位的细节要求吗？"
+                    ),
+                }
+            ],
+        )
+    )
+
+    assert state["next_action"] == "ask_screening"
+    assert page.sent_messages == ["你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"]
     assert page.resume_requests == 0
 
 
@@ -748,7 +798,11 @@ def sample_rules() -> dict[str, object]:
                 "category": "operation_direct_resume",
                 "directResume": True,
                 "resumeJobType": "运营A",
-                "resumeRequestPrompt": "可以发一份简历过来吗",
+            },
+            "B端社交媒体运营": {
+                "category": "operation_direct_resume",
+                "directResume": True,
+                "resumeJobType": "运营B",
             },
             "外部财务产品顾问": {
                 "category": "finance_ai_direct_resume",

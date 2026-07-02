@@ -192,21 +192,27 @@ def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
 
 
 def test_boss_operation_direct_resume_sends_prephrase_before_request() -> None:
-    """BOSS 运营 A/B 先发“可以发一份简历过来吗”，再执行求简历。"""
+    """运营 A/B 先发要简历话术，再执行求简历。"""
 
     state, page = run_case(
         Platform.BOSS,
         conversation("运营A", [{"sender": "other", "text": "你好"}]),
     )
     assert state["next_action"] == "request_resume"
-    assert page.sent_messages == ["可以发一份简历过来吗"]
+    assert page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert page.resume_requests == 1
 
     _, zhilian_page = run_case(
         Platform.ZHILIAN,
         conversation("运营A", [{"sender": "other", "text": "你好"}]),
     )
-    assert zhilian_page.sent_messages == []
+    assert zhilian_page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert zhilian_page.resume_requests == 1
 
 
@@ -240,7 +246,10 @@ def test_boss_direct_resume_exchange_resume_intent_requests_resume() -> None:
 
     assert state["next_action"] == "request_resume"
     assert state["stage"] == "direct_resume"
-    assert page.sent_messages == ["可以发一份简历过来吗"]
+    assert page.sent_messages in (
+        ["你好可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
     assert page.resume_requests == 1
 
 
