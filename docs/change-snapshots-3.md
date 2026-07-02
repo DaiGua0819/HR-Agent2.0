@@ -1098,3 +1098,33 @@
 - 风险 / 待确认：
   - 本轮只恢复提前回灌审计原因的传递和保存；真实飞书会议/妙记文本读取仍需端到端授权环境验证。
   - 当前 reason 仍只保存在 session payload 的 `earlyBackfillOverride` 中，和旧 Node 数据结构一致；如果后续需要单独审计表，应作为新需求另行设计。
+
+---
+
+### 快照 0083：避免无 force 重复覆盖已有面评
+
+- 修改时间：2026-07-03 04:34:49 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在 `session.interviewEvaluation && !force` 时不会重新读取会议纪要和重算面评，只会尝试补同步缺失的评价文档后返回已有 session。
+  - 当前 FastAPI `BackfillService.backfill()` 即使 session 已有 `interview_evaluation`，只要再次调用且 `force=false`，仍会采集会议记录、调用评价生成器并覆盖已有面评。
+  - 重复覆盖已有面评会影响人工复核后的结果稳定性，也可能误读后续变更的会议/妙记内容，和旧服务安全边界不一致。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 在 backfill 已通过 session、简历绑定和候选人简历存在校验后，新增 `session.interview_evaluation and not force` 的早返回分支，直接返回当前 session。
+  - 新增 `test_backfill_returns_existing_evaluation_without_force_like_old_node()`，覆盖已有面评、`force=false` 时不采集会议源、不调用评价生成器、不触发资产同步，也不覆盖简历库中的面评。
+  - 为 `FakeMeetingClient` 和 `FakeEvaluationGenerator` 增加调用计数，便于测试确认早返回未触发采集和生成。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，返回的 `interviewEvaluation.summary` 被覆盖为新生成摘要，证明当前实现会重复回灌已有面评。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k existing_evaluation_without_force`：1 passed，64 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill_persists_evaluation or backfill_keeps_evaluation or existing_evaluation_without_force or backfill_api"`：8 passed，57 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：65 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：78 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：312 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮恢复的是旧 Node 的“不 force 不覆盖已有面评”保护；旧 Node 同时会尝试补同步缺失的 Bitable 评价文档，当前 FastAPI 仍需后续继续审计补同步链路是否完全等价。
+  - 如果业务方需要在已有面评情况下强制重读会议纪要，仍可通过 `force=true` 走完整回灌链路。

@@ -1099,6 +1099,41 @@ def test_backfill_keeps_evaluation_when_asset_sync_fails() -> None:
     )
 
 
+def test_backfill_returns_existing_evaluation_without_force_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.interview_evaluation = {
+        "summary": "已有面评",
+        "humanReviewRequired": True,
+        "sessionId": session.id,
+    }
+    store.save(session)
+    repository = ResumeRepository.in_memory(
+        [_resume_record({"interviewEvaluation": dict(session.interview_evaluation)})]
+    )
+    meeting_client = FakeMeetingClient(text="新的会议记录不应被读取")
+    evaluation_generator = FakeEvaluationGenerator()
+    asset_sync = FakeAssetSync()
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        meeting_client=meeting_client,
+        evaluation_generator=evaluation_generator,
+        asset_sync=asset_sync,
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=False))
+
+    assert result["session"]["interviewEvaluation"]["summary"] == "已有面评"
+    assert result["session"]["status"] == "needs_review"
+    assert repository.get("resume-1").payload["interviewEvaluation"]["summary"] == "已有面评"
+    assert meeting_client.calls == 0
+    assert evaluation_generator.calls == 0
+    assert asset_sync.calls == []
+
+
 def test_review_session_updates_session_and_resume_evaluation() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
@@ -2127,8 +2162,10 @@ class FakeLLM:
 class FakeMeetingClient:
     def __init__(self, text: str) -> None:
         self.text = text
+        self.calls = 0
 
     async def collect_sources(self, session: Any) -> dict[str, Any]:
+        self.calls += 1
         return {
             "text": self.text,
             "source": {
@@ -2140,6 +2177,9 @@ class FakeMeetingClient:
 
 
 class FakeEvaluationGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def generate(
         self,
         *,
@@ -2149,6 +2189,7 @@ class FakeEvaluationGenerator:
         source: dict[str, Any],
     ) -> dict[str, Any]:
         _ = resume, session, interview_text, source
+        self.calls += 1
         return {
             "summary": "候选人项目扎实",
             "overallRecommendation": "pass",

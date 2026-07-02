@@ -142,6 +142,8 @@ class BackfillService:
         resume_record = self.repository.get(session.resume_id)
         if resume_record is None:
             raise KeyError("bound_resume_not_found")
+        if session.interview_evaluation and not force:
+            return {"session": session.to_dict()}
         if session.id in self.running:
             return {"session": session.to_dict()}
         self.running.add(session.id)
