@@ -8,6 +8,7 @@ surface: Feishu calendar event upsert, OAuth token storage, and session logs.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +97,7 @@ class InterviewSession:
             "feedback": self.feedback,
             "interviewEvaluation": self.interview_evaluation,
             "humanReview": self.payload.get("humanReview") or {},
+            "interviewFlow": _interview_flow(self),
             "backfillSource": self.backfill_source,
             "ruleSuggestionIds": self.rule_suggestion_ids,
             "lastBackfillError": self.last_backfill_error,
@@ -562,6 +564,69 @@ def _session_from_event(
         created_at=existing.created_at if existing else now_iso(),
         updated_at=now_iso(),
     )
+
+
+def _interview_flow(session: InterviewSession) -> dict[str, Any]:
+    stage_text = _stage_text(session)
+    group = _interview_group(session, stage_text)
+    round_payload = _interview_round(session, stage_text)
+    return {
+        "groupKey": group["key"],
+        "groupLabel": group["label"],
+        "roundKey": round_payload["key"],
+        "roundLabel": round_payload["label"],
+        "stageText": stage_text,
+        "source": "calendar",
+        "recordId": session.bitable_record_id,
+        "error": "",
+    }
+
+
+def _stage_text(session: InterviewSession) -> str:
+    for key in ("stageText", "interviewStage", "stage", "面试阶段"):
+        value = session.payload.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _interview_group(session: InterviewSession, stage_text: str) -> dict[str, str]:
+    if stage_text:
+        if re.search(r"简历通过|待面试|待初面|待一面|待二面|待复试|已约|约面|邀约", stage_text):
+            return {"key": "waiting", "label": "等待面试"}
+        if re.search(
+            r"初面|初试|一面|二面|二试|复试|复面|终面|面试|通过|未通过|淘汰|不合适|完成|结束",
+            stage_text,
+        ):
+            return {"key": "completed", "label": "已经面试"}
+    if (
+        session.interview_evaluation
+        or session.bitable_interview_record_image.get("fileToken")
+        or session.status in {"needs_review", "completed", "backfill_failed"}
+    ):
+        return {"key": "completed", "label": "已经面试"}
+    end_time = int(session.end_time or session.start_time or 0)
+    now_seconds = int(datetime.now(UTC).timestamp())
+    if end_time and end_time < now_seconds:
+        return {"key": "completed", "label": "已经面试"}
+    return {"key": "waiting", "label": "等待面试"}
+
+
+def _interview_round(session: InterviewSession, stage_text: str) -> dict[str, str]:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            stage_text,
+            session.payload.get("title"),
+            session.payload.get("description"),
+            session.job_type,
+        )
+    )
+    if re.search(r"二面|二试|复试|复面|second|2面|2试", text, flags=re.IGNORECASE):
+        return {"key": "second", "label": "二面"}
+    if re.search(r"终面|三面|三试", text):
+        return {"key": "other", "label": "其他轮次"}
+    return {"key": "first", "label": "初面"}
 
 
 def _event_text(event: dict[str, Any], *keys: str) -> str:

@@ -582,3 +582,34 @@
 - 风险 / 待确认：
   - 当前同步阶段会在简历 payload 没有本地 PDF 路径时安全跳过；真实线上数据需要继续确认智联/51job 同步入库后的字段是否统一落在这些路径键中。
   - 真实 Bitable 写入仍依赖飞书配置、OAuth/tenant token、字段列表和 dry-run 设置；本轮用 FakeAssetSync 验证编排，真实 multipart 上传和字段过滤已由前置 Bitable client/asset sync 测试覆盖，仍需端到端联调。
+
+---
+
+### 快照 0066：补齐面试中心旧前端 InterviewFlow 字段
+
+- 修改时间：2026-07-03 01:39:28 +08:00
+- 修改原因：
+  - 旧面试中心前端会读取 `session.interviewFlow.groupKey/groupLabel/roundKey/roundLabel/stageText/source/recordId/error` 来分组展示“等待面试/已经面试”、初面/二面和阶段标签。
+  - 旧 Node 服务在返回 sessions 前会调用 `enrichSessionsWithInterviewFlow()`；当前 FastAPI session 响应没有 `interviewFlow` 字段，旧页面只能走前端 fallback，缺少后端兼容的 source/recordId/阶段判断形状。
+  - 该字段属于 session API 的旧响应契约，最合适在 `InterviewSession.to_dict()` 序列化层统一补齐，避免每个路由单独拼装。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/store.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_list_sessions_includes_old_interview_flow_payload()`，覆盖 `list_sessions()` 返回旧前端需要的 `interviewFlow` 形状，并从标题“二面面试”和未来时间推导出“等待面试 / 二面”。
+  - `InterviewSession.to_dict()` 新增 `interviewFlow` 输出；默认 `source=calendar`，`recordId` 使用当前 session 的 `bitable_record_id`，`error` 默认为空。
+  - 新增 `_interview_flow()`、`_stage_text()`、`_interview_group()`、`_interview_round()`，按旧 Node 规则的核心关键词推导等待/已面试分组和初面/二面/其他轮次。
+  - 已有 `interviewEvaluation`、`bitableInterviewRecordImage.fileToken`、`needs_review/completed/backfill_failed` 状态或已过结束时间的 session 会归到“已经面试”，否则归到“等待面试”。
+- 验证结果：
+  - 红灯确认：新增 `interviewFlow` 测试首次运行 1 failed，原因为响应缺少 `interviewFlow` key。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k old_interview_flow`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：46 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：59 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：293 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮先补齐 calendar-source 的后端兼容推导；旧 Node 还会在飞书 Bitable 配置齐全时读取表记录字段并用真实“面试阶段”覆盖 `stageText/source=bitable`，后续仍需继续迁移 Bitable 阶段读取与缓存。
+  - 当前关键词推导覆盖旧页面的核心展示需求；真实线上阶段字段如果包含更多自定义文案，需要在 Bitable 阶段读取落地时一起扩展。

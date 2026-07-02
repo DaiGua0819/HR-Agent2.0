@@ -382,6 +382,37 @@ def test_calendar_sync_syncs_bound_resume_image_to_bitable() -> None:
     assert status["bitableResumeErrors"] == 0
 
 
+def test_list_sessions_includes_old_interview_flow_payload() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 二面面试"},
+    )
+    session.start_time = 4_000_000_000
+    session.end_time = 4_000_003_600
+    session.status = "matched"
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+    )
+
+    [listed] = service.list_sessions()
+
+    assert listed["interviewFlow"] == {
+        "groupKey": "waiting",
+        "groupLabel": "等待面试",
+        "roundKey": "second",
+        "roundLabel": "二面",
+        "stageText": "",
+        "source": "calendar",
+        "recordId": "",
+        "error": "",
+    }
+
+
 def test_interview_center_sync_api_routes_are_compatible() -> None:
     service = InterviewCenterService(
         repository=ResumeRepository.in_memory([_resume_record()]),
