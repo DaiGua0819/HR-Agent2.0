@@ -1888,8 +1888,8 @@ def test_feishu_oauth_callback_missing_code_uses_old_html_error() -> None:
 
     assert response.status_code == 400
     assert response.headers["content-type"].startswith("text/html")
-    assert "飞书授权失败" in response.text
-    assert "missing_feishu_oauth_code" in response.text
+    assert "飞书授权失败：缺少 code" in response.text
+    assert "missing_feishu_oauth_code" not in response.text
 
 
 def test_interview_center_frontend_page_and_assets_are_served() -> None:

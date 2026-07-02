@@ -1338,3 +1338,33 @@
 - 风险 / 待确认：
   - 本轮只恢复旧 `backfill-source` 读取优先级和错误字段，不改变真实回灌、面评生成、Bitable 或飞书会议来源读取链路。
   - 真实 Feishu/妙记/Bitable 授权环境下的端到端回灌来源展示仍需后续联调确认。
+
+---
+
+### 快照 0091：恢复飞书回调缺 code 旧文案
+
+- 修改时间：2026-07-03 05:54:52 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `GET /api/interview-center/feishu/oauth/callback` 在缺少 `code` 参数时返回 400 HTML，页面文案为 `飞书授权失败：缺少 code`。
+  - 当前 FastAPI HTML 失败页直接展示 service 抛出的内部错误码 `missing_feishu_oauth_code`，旧前端/用户看到的是工程码而不是旧系统文案。
+  - OAuth callback 是用户授权后的浏览器可见入口，错误页需要保持旧体验并避免暴露内部码。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `missing_feishu_oauth_code` 新增旧错误文案映射为 `缺少 code`。
+  - `feishu_oauth_callback()` 的 HTML 错误分支改为使用 `_legacy_error_message(exc)`，和 JSON 旧错误响应共享同一映射。
+  - `test_feishu_oauth_callback_missing_code_uses_old_html_error()` 改为断言 HTML 包含 `飞书授权失败：缺少 code`，并确认不再暴露 `missing_feishu_oauth_code`。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k missing_code_uses_old_html_error` 首次失败，实际 HTML 仍包含 `missing_feishu_oauth_code`。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k missing_code_uses_old_html_error`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - OAuth 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "feishu_oauth_callback or feishu_auth_url or feishu_status or disconnect"`：6 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：69 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：82 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：316 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复 OAuth callback 缺 `code` 的旧 HTML 文案，不改变授权码交换、token 保存或真实飞书 OAuth 联调路径。
+  - 真实飞书 OAuth 授权码交换仍需在有飞书应用配置和授权用户的环境里端到端验证。

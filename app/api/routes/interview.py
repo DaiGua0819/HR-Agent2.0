@@ -140,6 +140,7 @@ _LEGACY_INTERVIEW_ERROR_MESSAGES = {
     "backfill_not_available": "面试结束后 10 分钟才可读取纪要",
     "early_backfill_override_forbidden": "提前回灌未授权或授权已使用，已停止避免误读会议纪要",
     "no_valid_interview_record": "未读取到有效面试记录",
+    "missing_feishu_oauth_code": "缺少 code",
 }
 
 
@@ -415,7 +416,7 @@ async def feishu_oauth_callback(
         result = await _service(request).oauth().handle_callback(code=code, state=state)
     except ValueError as exc:
         if not _wants_json(request):
-            return _feishu_callback_failure_html(str(exc), status_code=400)
+            return _feishu_callback_failure_html(_legacy_error_message(exc), status_code=400)
         return _legacy_error_response(400, exc)
     if _wants_json(request):
         return result
