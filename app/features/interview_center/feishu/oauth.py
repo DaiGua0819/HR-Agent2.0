@@ -187,7 +187,7 @@ class FeishuOAuthService:
 
         if self.store is not None:
             self.store.clear_token()
-        return {"ok": True, "message": "feishu_disconnected"}
+        return {"ok": True, "message": "已断开飞书日历授权"}
 
 
 def _expires_at(value: Any, *, default: int | None = None) -> int:

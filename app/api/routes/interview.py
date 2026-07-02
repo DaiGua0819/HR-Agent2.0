@@ -386,9 +386,9 @@ async def feishu_auth_url(request: Request) -> dict[str, object]:
 
 @router.get("/api/interview-center/feishu/oauth/callback", response_model=None)
 async def feishu_oauth_callback(
-    code: str,
-    state: str,
     request: Request,
+    code: str = "",
+    state: str = "",
 ) -> dict[str, object] | HTMLResponse:
     """Old interview-center Feishu OAuth callback endpoint."""
 

@@ -1486,6 +1486,45 @@ def test_feishu_oauth_callback_defaults_to_old_html_redirect() -> None:
     assert store.get_token()["accessToken"] == "user-access"
 
 
+def test_feishu_oauth_callback_accepts_missing_state_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/interview-center/feishu/oauth/callback",
+            params={"code": "code-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "location.replace('/interview-center.html?feishu=connected')" in response.text
+    assert store.get_token()["accessToken"] == "user-access"
+    assert store.get_token()["state"] == ""
+
+
+def test_feishu_oauth_callback_missing_code_uses_old_html_error() -> None:
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get("/api/interview-center/feishu/oauth/callback")
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("text/html")
+    assert "飞书授权失败" in response.text
+    assert "missing_feishu_oauth_code" in response.text
+
+
 def test_interview_center_frontend_page_and_assets_are_served() -> None:
     app = create_app()
     with TestClient(app) as client:
@@ -1533,6 +1572,7 @@ def test_feishu_status_and_disconnect_use_stored_token() -> None:
     assert before.json()["userInfo"]["name"] == "HR"
     assert before.json()["calendarSync"]["enabled"] is True
     assert disconnected.json()["ok"] is True
+    assert disconnected.json()["message"] == "已断开飞书日历授权"
     assert after.json()["ok"] is True
     assert after.json()["connected"] is False
 

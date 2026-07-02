@@ -936,3 +936,38 @@
 - 风险 / 待确认：
   - 本轮修复的是旧前端可见的本地协议兼容，不替代真实飞书 OAuth、真实日历、真实 Docx、真实 VC/妙记和真实 Bitable 写入联调。
   - 错误内容目前沿用当前 service 层错误码，没有完整恢复旧 Node 的中文错误文案；如果产品侧需要逐字一致，还需要继续建立错误码到旧中文文案的映射表。
+
+---
+
+### 快照 0078：兼容旧 OAuth 回调缺省参数与断开授权文案
+
+- 修改时间：2026-07-03 03:43:12 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 OAuth callback 只读取 `code`，`state` 缺失时仍会继续交换飞书授权码；当前 FastAPI 路由把 `state` 声明为必填，导致缺省 `state` 的旧入口请求在路由层返回 422。
+  - 旧 Node 在缺少 `code` 时返回旧式 HTML 授权失败页；当前 FastAPI 因 `code` 必填同样会在路由层返回 422，绕过了旧页面可读的失败页。
+  - 旧 Node `feishu/disconnect` 返回 `已断开飞书日历授权`，当前实现返回 `feishu_disconnected`，属于旧 API 响应面不一致。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `app/features/interview_center/feishu/oauth.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_feishu_oauth_callback_accepts_missing_state_like_old_node()`，覆盖 `/api/interview-center/feishu/oauth/callback?code=...` 在无 `state` 时仍返回旧式 HTML redirect，并保存 token 中的空 `state`。
+  - 新增 `test_feishu_oauth_callback_missing_code_uses_old_html_error()`，覆盖无 `code/state` 时返回 400 HTML 授权失败页，而不是 FastAPI 422。
+  - 旧 Feishu OAuth callback 路由的 `code/state` 改为可缺省查询参数，继续复用现有 `handle_callback()` 的缺 code 校验和 HTML/JSON 分支。
+  - `FeishuOAuthService.disconnect()` 的 `message` 恢复为旧 Node 中文文案 `已断开飞书日历授权`，并在状态/断开测试中固定。
+- 验证结果：
+  - 红灯确认：新增 OAuth callback 缺省参数测试首次运行 2 failed，两个场景均实际返回 422，证明被 FastAPI 路由参数校验拦截。
+  - 红灯确认：断开授权文案断言首次失败，实际返回 `feishu_disconnected`。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "missing_state_like_old_node or missing_code_uses_old_html_error"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k feishu_status_and_disconnect_use_stored_token`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：59 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：72 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check` 无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：306 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 本地 18080 smoke：使用 `%TEMP%\hr-agent-interview-center-oauth-smoke-18080.sqlite` 和 `DRY_RUN=true` 启动 `run_control_plane.py`，真实 HTTP 检查 4 项通过：`/health`、`/interview-center.html`、无 `code` 的 `/api/interview-center/feishu/oauth/callback` 返回 400 HTML 且包含 `missing_feishu_oauth_code`、`/api/interview-center/feishu/disconnect` 返回中文 message。服务已停止，临时 SQLite 已删除。
+- 风险 / 待确认：
+  - 本轮只恢复 OAuth callback 参数兼容和断开授权响应文案；真实飞书 OAuth 授权码交换仍需在有飞书应用配置和授权用户的环境里端到端联调。
+  - 缺 `code` 的 HTML 失败页目前显示当前 service 错误码 `missing_feishu_oauth_code`，不是旧 Node 的完整中文缺 code 文案；如需逐字一致，可以继续补错误文案映射。
