@@ -26,6 +26,11 @@ const state = {
 };
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
+const SUMMARY_PANEL_STORAGE_KEY = "resumeSummaryPanelWidth";
+const SUMMARY_PANEL_DEFAULT_WIDTH = 276;
+const SUMMARY_PANEL_MIN_WIDTH = 220;
+const SUMMARY_PANEL_MAX_WIDTH = 460;
+const SUMMARY_PANEL_MIN_PREVIEW_WIDTH = 380;
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const RESUME_LIBRARY_JOB_TYPES = [
@@ -1308,28 +1313,122 @@ function bindGlobalSearchToFilters() {
     setView("resumes");
   });
 }
+function applyResumeFilters() {
+  state.jobType = $("filters").job_type.value.trim();
+  state.page = 1;
+  clearResumePrefetchCache();
+  loadResumes();
+}
+function bindAutoApplyResumeFilters() {
+  const filters = $("filters");
+  if (!filters) return;
+  $("filters").addEventListener("change", (event) => {
+    if (!event.target?.matches?.("select, input")) return;
+    applyResumeFilters();
+  });
+}
+function clampSummaryPanelWidth(width, grid = $("previewGrid")) {
+  const numeric = Number.parseInt(width, 10);
+  const base = Number.isFinite(numeric) ? numeric : SUMMARY_PANEL_DEFAULT_WIDTH;
+  const gridWidth = grid?.getBoundingClientRect?.().width || 0;
+  const responsiveMax = gridWidth
+    ? Math.max(SUMMARY_PANEL_MIN_WIDTH, Math.min(SUMMARY_PANEL_MAX_WIDTH, Math.floor(gridWidth - SUMMARY_PANEL_MIN_PREVIEW_WIDTH)))
+    : SUMMARY_PANEL_MAX_WIDTH;
+  return Math.min(responsiveMax, Math.max(SUMMARY_PANEL_MIN_WIDTH, base));
+}
+function currentSummaryPanelWidth() {
+  const grid = $("previewGrid");
+  if (!grid) return SUMMARY_PANEL_DEFAULT_WIDTH;
+  const inlineWidth = grid.style.getPropertyValue("--summary-panel-width");
+  const computedWidth = getComputedStyle(grid).getPropertyValue("--summary-panel-width");
+  return Number.parseInt(inlineWidth || computedWidth, 10) || SUMMARY_PANEL_DEFAULT_WIDTH;
+}
+function setSummaryPanelWidth(width, { persist = false } = {}) {
+  const grid = $("previewGrid");
+  if (!grid) return SUMMARY_PANEL_DEFAULT_WIDTH;
+  const next = clampSummaryPanelWidth(width, grid);
+  grid.style.setProperty("--summary-panel-width", `${next}px`);
+  const handle = $("summaryResizeHandle");
+  if (handle) handle.setAttribute("aria-valuenow", String(next));
+  if (persist) {
+    try {
+      localStorage.setItem(SUMMARY_PANEL_STORAGE_KEY, String(next));
+    } catch (error) {
+      console.debug("summary panel width was not persisted", error);
+    }
+  }
+  return next;
+}
+function bindSummaryPanelResize() {
+  const grid = $("previewGrid");
+  const handle = $("summaryResizeHandle");
+  if (!grid || !handle) return;
+  try {
+    setSummaryPanelWidth(localStorage.getItem(SUMMARY_PANEL_STORAGE_KEY) || SUMMARY_PANEL_DEFAULT_WIDTH);
+  } catch (error) {
+    setSummaryPanelWidth(SUMMARY_PANEL_DEFAULT_WIDTH);
+  }
+  let startX = 0;
+  let startWidth = SUMMARY_PANEL_DEFAULT_WIDTH;
+  function stopResize(event) {
+    grid.classList.remove("is-summary-resizing");
+    window.removeEventListener("pointermove", moveResize);
+    window.removeEventListener("pointerup", stopResize);
+    window.removeEventListener("pointercancel", stopResize);
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch (error) {
+      // Pointer capture may already be released by the browser.
+    }
+    setSummaryPanelWidth(currentSummaryPanelWidth(), { persist: true });
+  }
+  function moveResize(event) {
+    const delta = event.clientX - startX;
+    setSummaryPanelWidth(startWidth - delta);
+  }
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    startX = event.clientX;
+    startWidth = currentSummaryPanelWidth();
+    grid.classList.add("is-summary-resizing");
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Pointer capture is best effort for older embedded browsers.
+    }
+    window.addEventListener("pointermove", moveResize);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 32 : 16;
+    const direction = event.key === "ArrowLeft" ? 1 : -1;
+    setSummaryPanelWidth(currentSummaryPanelWidth() + direction * step, { persist: true });
+  });
+  window.addEventListener("resize", () => setSummaryPanelWidth(currentSummaryPanelWidth()));
+}
 function bindPageActions() {
   hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   initializeSmoothFilterSelects();
   bindGlobalSearchToFilters();
+  bindAutoApplyResumeFilters();
+  bindSummaryPanelResize();
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
   $("filterToggleBtn").onclick = toggleFilterPanel;
   $("filters").addEventListener("submit", (event) => {
     event.preventDefault();
-    state.jobType = $("filters").job_type.value.trim();
-    state.page = 1;
-    clearResumePrefetchCache();
-    loadResumes();
+    applyResumeFilters();
   });
   $("filters").addEventListener("reset", () =>
     setTimeout(() => {
       state.jobType = "";
-      state.page = 1;
       syncSmoothFilterSelects();
-      clearResumePrefetchCache();
-      loadResumes();
+      applyResumeFilters();
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;

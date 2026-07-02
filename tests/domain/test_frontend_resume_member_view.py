@@ -104,7 +104,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260702-resume-ui-refinements" in html
+    assert "20260702-auto-filter-apply" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -227,22 +227,40 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
-    primary_filter_button_block = styles.split(".filter-actions .ts-btn--primary {", 1)[1].split(
-        "}",
-        1,
-    )[0]
 
-    assert "20260702-resume-ui-refinements" in html
+    assert "20260702-auto-filter-apply" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in filters_block
     assert "grid-column: 1 / -1" not in filter_actions_block
     assert "align-self: center" in filter_actions_block
-    assert "rgba(239, 246, 255, 0.98)" in primary_filter_button_block
-    assert "rgba(219, 234, 254, 0.86)" in primary_filter_button_block
-    assert "color: var(--ts-primary)" in primary_filter_button_block
+    assert "justify-content: center" in filter_actions_block
+    assert ".filter-actions .ts-btn--primary" not in styles
     assert "transition: max-height" in styles
+
+
+def test_resume_filters_auto_apply_and_only_keep_centered_reset() -> None:
+    """Selecting a filter option should immediately apply filters without a submit button."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    filter_form = html.split('<form class="filters ts-filter-form" id="filters">', 1)[1].split(
+        "</form>",
+        1,
+    )[0]
+
+    assert 'type="submit"' not in filter_form
+    assert 'ts-btn--primary' not in filter_form
+    assert ">筛选<" not in filter_form
+    assert 'type="reset"' in filter_form
+    assert "重置筛选" in filter_form
+    assert "function applyResumeFilters()" in script
+    assert "function bindAutoApplyResumeFilters()" in script
+    assert '$("filters").addEventListener("change"' in script
+    assert "applyResumeFilters();" in script
+    assert "bindAutoApplyResumeFilters();" in script
 
 
 def test_resume_filter_form_uses_aligned_native_selects_for_compact_fields() -> None:
@@ -360,7 +378,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-resume-ui-refinements" in html
+    assert "20260702-auto-filter-apply" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -756,7 +774,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-resume-ui-refinements" in html
+    assert "20260702-auto-filter-apply" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -802,8 +820,10 @@ def test_candidate_cards_are_larger_and_read_status_is_frosted_badge() -> None:
     unread_block = styles.split(".candidate-card__read-badge--unread {", 1)[1].split("}", 1)[0]
     viewed_block = styles.split(".candidate-card__read-badge--viewed {", 1)[1].split("}", 1)[0]
 
-    assert "min-height: 86px" in card_block
-    assert "padding: 12px" in card_block
+    assert "min-height: 95px" in card_block
+    assert "padding: 13px 12px" in card_block
+    assert "gap: 8px" in card_block
+    assert "align-content: center" in card_block
     assert "font-size: 16px" in heading_block
     assert "font-size: 13px" in job_block
     assert "font-size: 12px" in meta_block
@@ -859,25 +879,46 @@ def test_candidate_card_metadata_stays_inside_card_on_narrow_panes() -> None:
     assert "text-overflow: ellipsis" in item_block
 
 
-def test_candidate_card_metadata_is_lifted_from_bottom_edge() -> None:
-    """The metadata row should sit above the card edge so descenders are not clipped."""
+def test_candidate_card_content_is_vertically_centered() -> None:
+    """Candidate card text should sit evenly between the top and bottom edges."""
 
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    card_block = styles.split(".candidate-card {", 1)[1].split("}", 1)[0]
     meta_block = styles.split(".candidate-card__meta {", 1)[1].split("}", 1)[0]
 
+    assert "align-content: center" in card_block
     assert "line-height: 1.35" in meta_block
-    assert "transform: translateY(-2px)" in meta_block
+    assert "transform:" not in meta_block
 
 
 def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
     """The right summary column should give more width back to the resume content."""
 
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    preview_grid_block = styles.split(".ts-preview-grid {", 1)[1].split("}", 1)[0]
+    resize_handle_block = styles.split(".summary-resize-handle {", 1)[1].split("}", 1)[0]
     summary_block = styles.split(".summary-content {", 1)[1].split("}", 1)[0]
     card_block = styles.split(".ts-summary-card {", 1)[1].split("}", 1)[0]
 
+    assert 'id="previewGrid"' in html
+    assert 'id="summaryResizeHandle"' in html
+    assert 'role="separator"' in html
+    assert 'aria-controls="summaryContent"' in html
+    assert "grid-template-columns: minmax(0, 1fr) 10px var(--summary-panel-width)" in preview_grid_block
+    assert "--summary-panel-width: 276px" in preview_grid_block
+    assert "cursor: col-resize" in resize_handle_block
+    assert "touch-action: none" in resize_handle_block
     assert "padding: 12px 10px" in summary_block
     assert "padding: 10px" in card_block
+    assert "function bindSummaryPanelResize()" in script
+    assert "SUMMARY_PANEL_STORAGE_KEY" in script
+    assert "setSummaryPanelWidth" in script
+    assert 'localStorage.setItem(SUMMARY_PANEL_STORAGE_KEY' in script
+    assert 'handle.addEventListener("pointerdown"' in script
+    assert 'window.addEventListener("pointermove"' in script
+    assert "bindSummaryPanelResize();" in script
 
 
 def test_stitch_workspace_keeps_candidate_list_and_preview_same_viewport() -> None:
@@ -896,7 +937,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260702-resume-ui-refinements" in html
+    assert "/assets/styles.css?v=20260702-auto-filter-apply" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
