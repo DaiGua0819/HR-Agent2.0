@@ -28,7 +28,6 @@ from app.platforms.types import (
 from app.platforms.zhilian import selectors
 from app.platforms.zhilian.dom_scripts import (
     CLICK_SESSION_ROW_JS,
-    CLICK_UNREAD_FILTER_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
     UNREAD_FILTER_STATE_JS,
@@ -48,39 +47,29 @@ async def open_chat_page(page: BrowserPage) -> None:
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """点击“未读”筛选。"""
 
-    clicked = await _safe_eval_dict(page, CLICK_UNREAD_FILTER_JS)
-    if clicked.get("selected"):
-        await asyncio.sleep(1)
-        state = await _unread_filter_state(page)
-        row_states = await read_unread_row_states(page)
-        selected = bool(state.get("active")) or bool(row_states)
+    state = await _unread_filter_state(page)
+    if state.get("active"):
+        return {
+            "selected": True,
+            "label": str(state.get("label") or "未读"),
+            "state": state,
+            "click": {"skipped": True, "reason": "already_active"},
+            "trustedClick": {},
+            "fallbackRows": 0,
+        }
+    trusted = await _trusted_click_unread_filter(page)
+    if trusted.get("attempted"):
+        state = trusted.get("state", {})
+        row_states = trusted.get("rows", [])
+        selected = bool(trusted.get("ok")) and (bool(state.get("active")) or bool(row_states))
         return {
             "selected": selected,
-            "label": str(clicked.get("label") or ""),
+            "label": str(trusted.get("label") or ""),
             "state": state,
-            "click": clicked,
+            "click": trusted.get("click", {}),
+            "trustedClick": trusted,
             "fallbackRows": len(row_states) if not state.get("active") else 0,
         }
-    elements = await page.query_all(selectors.UNREAD_FILTER)
-    for element in elements:
-        label = await element.text()
-        if label == "未读" or ("未读" in label and len(label) <= 8):
-            click = await reliable_click_element(
-                page,
-                element,
-                label="智联未读筛选",
-                verify=lambda: _verify_unread_active(page),
-            )
-            state = await _unread_filter_state(page)
-            row_states = await read_unread_row_states(page)
-            selected = bool(click.get("ok")) and (bool(state.get("active")) or bool(row_states))
-            return {
-                "selected": selected,
-                "label": label,
-                "state": state,
-                "click": click,
-                "fallbackRows": len(row_states) if not state.get("active") else 0,
-            }
     return {"selected": False, "reason": "unread_filter_not_found"}
 
 
@@ -564,6 +553,28 @@ async def _unread_filter_state(page: BrowserPage) -> dict[str, object]:
     if not raw:
         raw = await _safe_eval_dict(page, UNREAD_FILTER_STATE_JS)
     return raw if raw else {"active": False, "reason": "unread_state_unknown"}
+
+
+async def _trusted_click_unread_filter(page: BrowserPage) -> dict[str, object]:
+    """Click the visible Zhilian unread checkbox through the BrowserElement path."""
+
+    for element in await page.query_all(selectors.UNREAD_FILTER):
+        label = " ".join((await element.text()).split())
+        if not (label == "未读" or ("未读" in label and len(label) <= 8)):
+            continue
+        click = await reliable_click_element(page, element, label="智联未读筛选可信点击")
+        await asyncio.sleep(1)
+        state = await _unread_filter_state(page)
+        rows = await read_unread_row_states(page)
+        return {
+            "attempted": True,
+            "ok": bool(click.get("ok")),
+            "label": label,
+            "click": click,
+            "state": state,
+            "rows": rows,
+        }
+    return {"attempted": False, "reason": "unread_filter_not_found"}
 
 
 async def _read_context_payload(page: BrowserPage) -> dict[str, object]:

@@ -334,6 +334,51 @@ def test_zhilian_unread_filter_and_refs_use_shared_pattern() -> None:
     assert [item.conversation_id for item in refs] == ["conv-电气工程师"]
 
 
+def test_zhilian_unread_filter_uses_trusted_click_when_dom_click_does_not_activate() -> None:
+    """真实智联页会忽略 JS click，处理前必须补一次可信未读按钮点击。"""
+
+    page = UntrustedZhilianUnreadClickPage(
+        conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])]
+    )
+
+    result = asyncio.run(select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert page.unread_selected is True
+    assert page.trusted_unread_clicks == 1
+
+
+def test_zhilian_unread_filter_does_not_click_again_when_already_active() -> None:
+    """未读筛选已选中时不能重复点击，避免把筛选切回全部。"""
+
+    page = UntrustedZhilianUnreadClickPage(
+        conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])],
+        unread_selected=True,
+    )
+
+    result = asyncio.run(select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert result["click"]["reason"] == "already_active"
+    assert page.unread_selected is True
+    assert page.trusted_unread_clicks == 0
+
+
+def test_zhilian_unread_filter_does_not_treat_rows_as_success_when_trusted_click_fails() -> None:
+    """有未读行但可信未读点击失败时，不能继续按已筛选处理。"""
+
+    page = FailedTrustedZhilianUnreadClickPage(
+        conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])]
+    )
+
+    result = asyncio.run(select_unread_filter(page))
+
+    assert result["selected"] is False
+    assert result["trustedClick"]["ok"] is False
+    assert page.unread_selected is False
+    assert page.trusted_unread_clicks >= 1
+
+
 def test_zhilian_unread_rows_exclude_read_and_system_labels() -> None:
     """Only rows with a real unread badge and no read/system label are actionable."""
 
@@ -749,6 +794,34 @@ class ZhilianAttachmentAfterRequestPage(FakePage):
             "bytes": convo.get("zhilian_attachment_bytes"),
             "path": "",
         }
+
+
+class UntrustedZhilianUnreadClickPage(FakePage):
+    """模拟真实智联页面忽略脚本 click，但接受可信元素点击。"""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.trusted_unread_clicks = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "unread_filter_not_found" in script and "未读" in script:
+            return {"selected": True, "label": "未读", "source": "dom_text_ignored"}
+        return await super().eval_js(script, arg)
+
+    async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
+        if "未读" in element.text_value:
+            self.trusted_unread_clicks += 1
+        await super().handle_element_click(element)
+
+
+class FailedTrustedZhilianUnreadClickPage(UntrustedZhilianUnreadClickPage):
+    """模拟可信未读按钮点击失败，但列表仍存在未读行。"""
+
+    async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
+        if "未读" in element.text_value:
+            self.trusted_unread_clicks += 1
+            raise RuntimeError("trusted unread click failed")
+        await super().handle_element_click(element)
 
 
 def conversation(position: str, messages: list[dict[str, str]]) -> dict[str, object]:
