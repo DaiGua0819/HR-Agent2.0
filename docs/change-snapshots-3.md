@@ -1190,3 +1190,33 @@
 - 风险 / 待确认：
   - 当前只补齐旧 Node 二面关键词推导中的关键字段来源；真实 Bitable 写入、飞书文档权限和线上历史 session 仍需在授权环境做端到端联调确认。
   - 轮次关键词仍集中在 backfill 兼容层；后续如果面试中心其他链路也需要完全一致的轮次判断，可以再抽到共享 helper。
+
+---
+
+### 快照 0086：回灌生成异常保存失败态
+
+- 修改时间：2026-07-03 05:00:51 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在进入 `backfillSession()` 的真实回灌流程后，如果会议来源读取、面评生成或后续处理抛错，会捕获异常、保存 `backfill_failed`、写入 `lastBackfillError` 和 error 日志，然后返回失败 session。
+  - 当前 FastAPI `BackfillService.backfill()` 在面评生成器抛出 `ValueError/KeyError` 时会直接把异常抛给 API，绕过失败态持久化；例如 LLM JSON 解析失败会让旧页面看到请求失败，而不是可审计的回灌失败 session。
+  - 该行为会影响自动回灌调度的错误归档和页面查看失败原因，和旧服务不一致。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `BackfillService.backfill()` 在加入运行中集合后初始化本轮 `source`，进入回灌流程后的异常统一保存为 `backfill_failed` 并返回 session，不再直接抛出。
+  - `_save_failed()` 新增可选 `log_level/log_message`，空来源失败继续走 warn；生成/处理异常走旧 Node 风格 error 日志，日志消息保留原异常内容。
+  - 新增 `test_backfill_marks_session_failed_when_evaluation_generation_errors_like_old_node()`，覆盖有效会议文本存在但评价生成器抛 `ValueError` 时，服务返回失败 session、记录 `lastBackfillError/backfillAttempts`，且不污染简历库中的 `interviewEvaluation`。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，`ValueError: llm_json_parse_failed` 从 `FailingEvaluationGenerator.generate()` 直接冒泡，证明当前实现没有保存失败态。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k evaluation_generation_errors`：1 passed，66 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill_fails_when_sources_are_empty or evaluation_generation_errors or backfill_persists_evaluation or backfill_keeps_evaluation or syncs_missing_evaluation_document or session_round_for_second_document or backfill_api"`：11 passed，56 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：67 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：80 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：314 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复“已进入回灌流程后的异常落失败态”行为；会话不存在、未绑定简历、10 分钟保护等前置校验仍按旧 API 错误响应抛出。
+  - 如果后续要完全复刻旧 Node 提前回灌失败时写入 `earlyBackfillOverride.failedAt`，需要增加单独测试后继续补齐。

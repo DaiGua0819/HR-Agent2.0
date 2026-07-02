@@ -1050,6 +1050,30 @@ def test_backfill_fails_when_sources_are_empty() -> None:
     assert result["session"]["backfillSource"]["source"] == "fake_meeting"
 
 
+def test_backfill_marks_session_failed_when_evaluation_generation_errors_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    repository = ResumeRepository.in_memory([_resume_record()])
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FailingEvaluationGenerator(ValueError("llm_json_parse_failed")),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=True))
+
+    assert result["session"]["status"] == "backfill_failed"
+    assert result["session"]["lastBackfillError"] == "llm_json_parse_failed"
+    assert result["session"]["backfillAttempts"] == 1
+    assert "interviewEvaluation" not in repository.get("resume-1").payload
+    logs = store.list_logs(session.id, limit=10)
+    assert logs[0]["level"] == "error"
+    assert logs[0]["message"] == "llm_json_parse_failed"
+
+
 def test_backfill_persists_evaluation_updates_resume_and_calls_assets() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
@@ -2246,6 +2270,24 @@ class FakeEvaluationGenerator:
             "risks": [],
             "suggestedRuleChanges": [],
         }
+
+
+class FailingEvaluationGenerator(FakeEvaluationGenerator):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def generate(
+        self,
+        *,
+        resume: dict[str, Any],
+        session: Any,
+        interview_text: str,
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        _ = resume, session, interview_text, source
+        self.calls += 1
+        raise self.error
 
 
 class FakeAssetSync:

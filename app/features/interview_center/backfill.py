@@ -152,6 +152,7 @@ class BackfillService:
         if session.id in self.running:
             return {"session": session.to_dict()}
         self.running.add(session.id)
+        source: dict[str, Any] = {}
         try:
             session.status = "backfilling"
             session.backfill_attempts += 1
@@ -223,10 +224,16 @@ class BackfillService:
             }
             return {"session": saved.to_dict()}
         except Exception as exc:
-            self.last_error = str(exc)
-            if not isinstance(exc, ValueError | KeyError):
-                self._save_failed(session, session.backfill_source, str(exc))
-            raise
+            message = str(exc) or "interview backfill failed"
+            self.last_error = message
+            failed = self._save_failed(
+                session,
+                source,
+                message,
+                log_level="error",
+                log_message=message,
+            )
+            return {"session": failed.to_dict()}
         finally:
             self.running.discard(session.id)
 
@@ -401,13 +408,16 @@ class BackfillService:
         session: InterviewSession,
         source: dict[str, Any],
         error: str,
+        *,
+        log_level: str = "warn",
+        log_message: str = "interview backfill failed",
     ) -> InterviewSession:
         session.status = "backfill_failed"
         session.backfill_source = source
         session.last_backfill_error = error
         session.payload = {**session.payload, "backfilledAt": now_iso()}
         saved = self.store.save(session)
-        self.store.append_log(session.id, "warn", "interview backfill failed", source)
+        self.store.append_log(session.id, log_level, log_message, source)
         self.last_result = {"sessionId": session.id, "status": saved.status, "source": source}
         return saved
 
