@@ -54,6 +54,12 @@ class FeedbackBackfillRequest(BaseModel):
     interviewer: str = ""
 
 
+class InterviewPrepareRequest(BaseModel):
+    """Old interview-center prepare request."""
+
+    force: bool = False
+
+
 def _service(request: Request) -> InterviewCenterService:
     service = getattr(request.app.state, "interview_center_service", None)
     if service is None:
@@ -162,6 +168,23 @@ async def get_session(session_id: str, request: Request) -> dict[str, object]:
 
     try:
         return _service(request).get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/interview-center/sessions/{session_id}/prepare")
+async def prepare_session(
+    session_id: str,
+    request: Request,
+    payload: InterviewPrepareRequest | None = None,
+) -> dict[str, object]:
+    """Old interview-center prepare-session endpoint."""
+
+    resolved = payload or InterviewPrepareRequest()
+    try:
+        return await _service(request).prepare_session(session_id, force=resolved.force)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

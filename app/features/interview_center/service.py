@@ -28,6 +28,11 @@ from app.features.interview_center.feishu.bitable import (
     BitableClientProtocol,
     MockFeishuBitableClient,
 )
+from app.features.interview_center.feishu.docx import (
+    InterviewDocClientProtocol,
+    MockInterviewDocClient,
+    build_interview_document_text,
+)
 from app.features.interview_center.feishu.oauth import FeishuOAuthService
 from app.features.interview_center.question_generator import (
     InterviewQuestionGenerator,
@@ -39,6 +44,7 @@ from app.features.interview_center.store import (
     GLOBAL_INTERVIEW_STORE,
     InterviewSession,
     InterviewStoreProtocol,
+    now_iso,
 )
 from app.llm.client import LLMClient
 from app.settings import PROJECT_ROOT
@@ -57,6 +63,7 @@ class InterviewCenterService:
         output_dir: str | Path | None = None,
         conversation_repository: ConversationRepository | None = None,
         calendar_client: CalendarClientProtocol | None = None,
+        doc_client: InterviewDocClientProtocol | None = None,
     ) -> None:
         self.repository = repository or ResumeRepository.from_settings()
         self.conversation_repository = (
@@ -64,6 +71,7 @@ class InterviewCenterService:
         )
         self.store = store or GLOBAL_INTERVIEW_STORE
         self.bitable = bitable or MockFeishuBitableClient()
+        self.doc_client = doc_client or MockInterviewDocClient()
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
         self.feedback_backfill = FeedbackBackfillService(store=self.store, bitable=self.bitable)
@@ -215,6 +223,81 @@ class InterviewCenterService:
 
         return self.calendar_sync.status()
 
+    async def prepare_session(self, session_id: str, *, force: bool = False) -> dict[str, Any]:
+        """Generate interview questions and create the Feishu Docx question package."""
+
+        session = self._require_session(session_id)
+        if not session.resume_id:
+            raise ValueError("interview_session_resume_required")
+        resume = self._load_resume(session.resume_id)
+        if resume is None:
+            raise KeyError("bound_resume_not_found")
+        resume_payload = resume.model_dump()
+        question_set = session.question_set if not force else {}
+        questions = list(question_set.get("questions") or [])
+        if not questions:
+            questions = await self.question_generator.generate(
+                resume=resume_payload,
+                job_type=session.job_type or resume.job_type or resume.applied_position or "",
+                conversation=[],
+            )
+            question_set = {
+                "questions": questions,
+                "jobType": session.job_type or resume.job_type or resume.applied_position or "",
+                "generatedAt": now_iso(),
+            }
+        session.questions = questions
+        session.question_set = dict(question_set)
+        session.payload = {
+            **session.payload,
+            "resume": resume_payload,
+            "preparedAt": now_iso(),
+        }
+
+        feishu_doc = dict(session.feishu_doc if not force else {})
+        doc_error = ""
+        if force or not feishu_doc.get("documentId"):
+            title = _document_title(session, resume_payload)
+            text = build_interview_document_text(
+                candidate_name=session.candidate_name or resume.name or "",
+                job_type=session.job_type or resume.job_type or resume.applied_position or "",
+                resume=resume_payload,
+                question_set=session.question_set,
+            )
+            try:
+                feishu_doc = {
+                    **await self.doc_client.create_document_from_text(title, text),
+                    "createdAt": now_iso(),
+                }
+                self.store.append_log(
+                    session.id,
+                    "info",
+                    "created interview question document",
+                    {
+                        "documentId": feishu_doc.get("documentId"),
+                        "url": feishu_doc.get("url"),
+                    },
+                )
+            except Exception as exc:
+                doc_error = str(exc) or "create_interview_doc_failed"
+                feishu_doc = {
+                    "contentSynced": False,
+                    "contentError": doc_error,
+                    "updatedAt": now_iso(),
+                }
+                self.store.append_log(session.id, "error", doc_error, {})
+        session.feishu_doc = feishu_doc
+        document_ready = bool(
+            feishu_doc.get("documentId") and feishu_doc.get("contentSynced") is not False
+        )
+        session.status = "prepared" if document_ready else "prepared_local"
+        if doc_error:
+            session.payload = {**session.payload, "prepareErrors": [doc_error]}
+        else:
+            session.payload = {**session.payload, "prepareErrors": []}
+        self.store.save(session)
+        return {"session": session.to_dict(), "feishuDoc": feishu_doc}
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """列出会话。"""
 
@@ -336,6 +419,14 @@ def _resume_query(resume: Resume) -> dict[str, Any]:
         "job_type": resume.job_type or resume.applied_position,
         "source_platform": resume.source_platform,
     }
+
+
+def _document_title(session: InterviewSession, resume: dict[str, Any]) -> str:
+    candidate_name = session.candidate_name or str(resume.get("name") or "候选人")
+    job_type = session.job_type or str(
+        resume.get("job_type") or resume.get("applied_position") or "面试"
+    )
+    return f"{candidate_name}-{job_type}-面试问题"
 
 
 def _session_payload(session: ConversationSession) -> dict[str, Any]:

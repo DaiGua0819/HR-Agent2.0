@@ -116,3 +116,33 @@
   - 当前 `EmptyCalendarClient` 是安全默认空实现；真实 OAuth 用户 token 驱动的飞书日历 HTTP client 将在后续 OAuth/status 兼容阶段接入。
   - 本轮按计划先保留 `autoPrepare` 参数但不执行文档准备，Task 4 会实现真正的 prepare session 和飞书 docx 边界。
   - 本轮未触发 Bitable 简历图同步，Task 5 会把路由和幂等记录匹配接入资产同步。
+
+---
+
+### 快照 0051：迁移面试中心 Prepare Session 与飞书 Docx 边界
+
+- 修改时间：2026-07-02 22:56:13 +08:00
+- 修改原因：
+  - 旧面试中心在准备面试时要求 session 已绑定候选人简历，然后生成问题包并写入飞书 Docx；当前 Python 版只有创建 session 时同步生成问题，缺少旧 `/prepare` 路径。
+  - 旧系统在飞书文档创建失败时不会丢弃本地问题包，而是保留 `prepared_local` 状态和错误信息；当前服务缺少该降级状态。
+  - 迁移需要先建立可 mock 的 Docx 边界，后续再替换成真实飞书文档读写。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/docx.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `InterviewDocClientProtocol`、`MockInterviewDocClient`、`build_interview_document_text()`，提供 dry-run 安全文档创建边界。
+  - `InterviewCenterService` 新增 `doc_client` 注入和 `prepare_session()`，实现绑定校验、加载简历、生成/复用 `questionSet`、写入 `feishuDoc`、失败时保存 `prepared_local`。
+  - `app/api/routes/interview.py` 新增 `POST /api/interview-center/sessions/{session_id}/prepare`，未绑定简历返回 409，session/简历不存在返回 404。
+  - 新增测试覆盖未绑定拒绝、问题包生成、飞书文档保存、文档失败保留本地状态和旧 prepare API 路由。
+- 验证结果：
+  - 红灯确认：新增测试初次运行 4 failed，原因是 `InterviewCenterService.__init__()` 尚不支持 `doc_client`，prepare 入口未实现。
+  - 修复后：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：15 passed，1 个既有 StarletteDeprecationWarning。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：28 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/docx.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/docx.py app/features/interview_center/service.py app/api/routes/interview.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前 `MockInterviewDocClient` 只提供 dry-run/mock 文档元数据；真实飞书 Docx 创建、正文块写入和失败补写会在后续 OAuth/status 与文档客户端完善阶段接入。
+  - 当前 prepare 不自动更新 Bitable 记录；Task 5 会接入资产同步和目标表记录写入。

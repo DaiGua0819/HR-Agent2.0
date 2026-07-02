@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from app.control_plane.main import create_app
 from app.domain.resume.models import ResumeRecord
 from app.domain.resume.repository import ResumeRepository
@@ -205,6 +207,98 @@ def test_interview_center_sync_api_routes_are_compatible() -> None:
     assert status.json()["lastResult"]["total"] == 1
 
 
+def test_prepare_session_requires_bound_resume() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(resume_id="", candidate_name="", job_type="AI应用开发实习生")
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        llm=FakeLLM(),
+        doc_client=FakeDocClient(),
+    )
+
+    with pytest.raises(ValueError, match="interview_session_resume_required"):
+        asyncio.run(service.prepare_session(session.id))
+
+
+def test_prepare_session_generates_question_set_and_feishu_doc() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+    )
+    doc_client = FakeDocClient()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+
+    result = asyncio.run(service.prepare_session(session.id))
+
+    prepared = result["session"]
+    assert prepared["status"] == "prepared"
+    assert prepared["questions"][0]["question"] == "请介绍 Agent 项目"
+    assert prepared["questionSet"]["questions"][0]["focus"] == "项目真实性"
+    assert prepared["feishuDoc"]["documentId"] == "doc-1"
+    assert prepared["feishuDoc"]["contentSynced"] is True
+    assert doc_client.created[0]["title"] == "Alice-AI应用开发实习生-面试问题"
+    assert "请介绍 Agent 项目" in doc_client.created[0]["text"]
+
+
+def test_prepare_session_keeps_local_state_when_doc_creation_fails() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        llm=FakeLLM(),
+        doc_client=FakeDocClient(error=RuntimeError("doc unavailable")),
+    )
+
+    result = asyncio.run(service.prepare_session(session.id))
+
+    prepared = result["session"]
+    assert prepared["status"] == "prepared_local"
+    assert prepared["questionSet"]["questions"][0]["question"] == "请介绍 Agent 项目"
+    assert prepared["feishuDoc"]["contentSynced"] is False
+    assert prepared["feishuDoc"]["contentError"] == "doc unavailable"
+    assert prepared["payload"]["prepareErrors"] == ["doc unavailable"]
+
+
+def test_prepare_session_api_route_is_compatible() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        llm=FakeLLM(),
+        doc_client=FakeDocClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        response = client.post(
+            f"/api/interview-center/sessions/{session.id}/prepare",
+            json={"force": False},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session"]["status"] == "prepared"
+    assert response.json()["session"]["feishuDoc"]["documentId"] == "doc-1"
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -307,6 +401,51 @@ class FakeCalendarClient:
             }
         )
         return list(self.events)
+
+
+class FakeDocClient:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.created: list[dict[str, Any]] = []
+
+    async def create_document_from_text(self, title: str, text: str) -> dict[str, Any]:
+        self.created.append({"title": title, "text": text})
+        if self.error:
+            raise self.error
+        return {
+            "documentId": "doc-1",
+            "url": "https://example.feishu.cn/docx/doc-1",
+            "title": title,
+            "contentSynced": True,
+        }
+
+
+class FakeLLM:
+    async def chat_completions(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
+        _ = messages, temperature
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            [
+                                {
+                                    "category": "项目",
+                                    "question": "请介绍 Agent 项目",
+                                    "focus": "项目真实性",
+                                }
+                            ],
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
 
 
 def _resume_record() -> ResumeRecord:
