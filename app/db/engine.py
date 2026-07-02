@@ -74,6 +74,7 @@ def run_migrations(database_path: str | Path | None = None) -> None:
             "TEXT",
         )
         _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
+        _migrate_interview_sessions_if_present(connection)
         connection.commit()
 
 
@@ -100,6 +101,8 @@ def _preflight_existing_tables(connection: sqlite3.Connection) -> None:
             "TEXT",
         )
         _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
+    if "interview_sessions" in tables:
+        _migrate_interview_sessions_if_present(connection)
 
 
 def _add_column_if_missing(
@@ -111,3 +114,89 @@ def _add_column_if_missing(
     columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_interview_sessions_if_present(connection: sqlite3.Connection) -> None:
+    tables = {
+        row["name"]
+        for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if "interview_sessions" not in tables:
+        return
+    _add_column_if_missing(connection, "interview_sessions", "feishu_event_id", "TEXT")
+    _add_column_if_missing(connection, "interview_sessions", "calendar_id", "TEXT")
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "start_time",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "end_time",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "question_set",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "feishu_doc",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(connection, "interview_sessions", "bitable_table_id", "TEXT")
+    _add_column_if_missing(connection, "interview_sessions", "bitable_table_name", "TEXT")
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "bitable_resume_image",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "bitable_interview_record_image",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "bitable_skill_evaluation_document",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "bitable_second_interview_evaluation_document",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "interview_evaluation",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "backfill_source",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "rule_suggestion_ids",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _add_column_if_missing(connection, "interview_sessions", "last_backfill_error", "TEXT")
+    _add_column_if_missing(
+        connection,
+        "interview_sessions",
+        "backfill_attempts",
+        "INTEGER NOT NULL DEFAULT 0",
+    )

@@ -192,25 +192,65 @@ CREATE TABLE IF NOT EXISTS question_logs (
 
 CREATE TABLE IF NOT EXISTS interview_sessions (
   id TEXT PRIMARY KEY,
+  feishu_event_id TEXT,
+  calendar_id TEXT,
   resume_id TEXT NOT NULL,
   candidate_name TEXT,
   job_type TEXT,
   status TEXT NOT NULL,
+  start_time INTEGER NOT NULL DEFAULT 0,
+  end_time INTEGER NOT NULL DEFAULT 0,
   questions TEXT NOT NULL,
+  question_set TEXT NOT NULL DEFAULT '{}',
   matches TEXT NOT NULL,
+  feishu_doc TEXT NOT NULL DEFAULT '{}',
   bitable_record_id TEXT,
+  bitable_table_id TEXT,
+  bitable_table_name TEXT,
+  bitable_resume_image TEXT NOT NULL DEFAULT '{}',
+  bitable_interview_record_image TEXT NOT NULL DEFAULT '{}',
+  bitable_skill_evaluation_document TEXT NOT NULL DEFAULT '{}',
+  bitable_second_interview_evaluation_document TEXT NOT NULL DEFAULT '{}',
   resume_image_path TEXT,
   summary_image_path TEXT,
   feedback TEXT,
+  interview_evaluation TEXT NOT NULL DEFAULT '{}',
+  backfill_source TEXT NOT NULL DEFAULT '{}',
+  rule_suggestion_ids TEXT NOT NULL DEFAULT '[]',
+  last_backfill_error TEXT,
+  backfill_attempts INTEGER NOT NULL DEFAULT 0,
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_sessions_feishu_event
+  ON interview_sessions(feishu_event_id)
+  WHERE feishu_event_id IS NOT NULL AND feishu_event_id != '';
 CREATE INDEX IF NOT EXISTS idx_interview_sessions_resume
   ON interview_sessions(resume_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_interview_sessions_status
   ON interview_sessions(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_calendar_time
+  ON interview_sessions(calendar_id, start_time);
+
+CREATE TABLE IF NOT EXISTS interview_feishu_tokens (
+  id TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS interview_logs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  level TEXT NOT NULL,
+  message TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_logs_session
+  ON interview_logs(session_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS resume_review_states (
   id TEXT PRIMARY KEY,
