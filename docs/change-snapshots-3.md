@@ -791,3 +791,32 @@
 - 风险 / 待确认：
   - 默认列表现在更贴近旧前端日程视图；如果后续新增管理后台需要默认看全量历史，应显式传 `startTime=0&endTime=0` 或单独提供管理视图参数。
   - 本次只恢复时间窗默认值；旧前端若还有更多列表筛选维度或分页行为，仍需继续按旧 Node 入口逐项审计。
+---
+
+### 快照 0073：恢复同步接口默认自动准备
+
+- 修改时间：2026-07-03 02:50:30 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `POST /api/interview-center/sync` 会把请求体解析失败当作空对象，并使用 `autoPrepare: body.autoPrepare !== false`，因此无请求体或未传 `autoPrepare` 时默认会自动为已匹配日程生成面试问题文档。
+  - 当前 FastAPI 路由要求请求体必须存在，无 body 时返回 422；同时 `InterviewCenterSyncRequest.autoPrepare` 默认值是 `False`，和旧前端默认同步按钮行为不一致。
+  - 需要保留显式传 `autoPrepare:false` 的能力，避免自动日历 tick 或人工调试在不需要时创建文档。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_interview_center_sync_api_defaults_to_auto_prepare_without_body()`，覆盖旧兼容行为：无 body 调用 `/api/interview-center/sync` 应返回 200，完成日历同步并自动生成题集/飞书文档。
+  - `InterviewCenterSyncRequest.auto_prepare` 默认值改为 `True`，显式 `autoPrepare:false` 仍会传入 service 并跳过自动准备。
+  - `sync_calendar()` 路由 payload 改为可选，缺省时使用默认请求对象，兼容旧 Node 的 `readJsonBody(...).catch(() => ({}))`。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，接口在无 body 时返回 `422 Unprocessable Entity`，证明当前实现不兼容旧同步入口默认行为。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "sync_api"`，结果 `2 passed, 51 deselected`，仅有既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`，结果 `53 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`，结果 `66 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`，结果 `All checks passed!`。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`，通过。
+  - 空白检查：`git diff --check` 无空白错误，仅有 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`，结果 `300 passed`，仅有既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 旧同步按钮默认会创建文档；本次恢复该行为后，如果某些内部调用不想自动准备，必须继续显式传 `autoPrepare:false`。
+  - 本次仅兼容无 body 和默认值；如果旧前端存在非 JSON body 的调用路径，FastAPI 请求解析行为还需结合真实浏览器 smoke 再确认。

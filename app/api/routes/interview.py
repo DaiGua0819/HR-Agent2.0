@@ -44,7 +44,7 @@ class InterviewCenterSyncRequest(BaseModel):
     """Old interview-center calendar sync request."""
 
     calendar_id: str = Field(default="primary", alias="calendarId")
-    auto_prepare: bool = Field(default=False, alias="autoPrepare")
+    auto_prepare: bool = Field(default=True, alias="autoPrepare")
     auto_prepare_limit: int = Field(default=12, alias="autoPrepareLimit")
 
 
@@ -185,16 +185,17 @@ async def list_sessions(
 
 @router.post("/api/interview-center/sync")
 async def sync_calendar(
-    payload: InterviewCenterSyncRequest,
     request: Request,
+    payload: InterviewCenterSyncRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center Feishu calendar sync entry point."""
 
     service = _service(request)
+    resolved = payload or InterviewCenterSyncRequest()
     result = await service.sync_calendar(
-        calendar_id=payload.calendar_id,
-        auto_prepare=payload.auto_prepare,
-        auto_prepare_limit=payload.auto_prepare_limit,
+        calendar_id=resolved.calendar_id,
+        auto_prepare=resolved.auto_prepare,
+        auto_prepare_limit=resolved.auto_prepare_limit,
     )
     return {"ok": True, **result, "logs": service.store.list_logs("", 30)}
 

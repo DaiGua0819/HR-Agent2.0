@@ -560,6 +560,39 @@ def test_interview_center_sync_api_routes_are_compatible() -> None:
     assert status.json()["lastResult"]["total"] == 1
 
 
+def test_interview_center_sync_api_defaults_to_auto_prepare_without_body() -> None:
+    doc_client = FakeDocClient()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-api-auto-prepare",
+                    "summary": "Alice 面试",
+                    "description": "phone 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        synced = client.post("/api/interview-center/sync")
+
+    assert synced.status_code == 200
+    assert synced.json()["ok"] is True
+    assert synced.json()["prepared"] == 1
+    assert synced.json()["sessions"][0]["status"] == "prepared"
+    assert synced.json()["sessions"][0]["feishuDoc"]["documentId"] == "doc-1"
+    assert len(doc_client.created) == 1
+
+
 def test_prepare_session_requires_bound_resume() -> None:
     store = InMemoryInterviewStore()
     session = store.create(resume_id="", candidate_name="", job_type="AI应用开发实习生")
