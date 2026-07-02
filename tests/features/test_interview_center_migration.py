@@ -21,6 +21,7 @@ from app.features.interview_center.feishu.bitable import (
 from app.features.interview_center.feishu.calendar import normalize_calendar_event
 from app.features.interview_center.feishu.client import FeishuStoredUserTokenProvider
 from app.features.interview_center.feishu.docx import FeishuInterviewDocClient
+from app.features.interview_center.feishu.meeting import FeishuMeetingSourceClient
 from app.features.interview_center.feishu.routes import resolve_bitable_target
 from app.features.interview_center.service import InterviewCenterService
 from app.features.interview_center.store import InMemoryInterviewStore, SQLiteInterviewStore
@@ -695,6 +696,158 @@ def test_feishu_doc_client_returns_dry_run_metadata_without_network(
     assert result["documentId"].startswith("dry-run-doc:")
     assert result["contentSynced"] is True
     assert result["contentLength"] == len("问题正文")
+
+
+def test_feishu_meeting_source_client_collects_doc_relation_and_minutes_sources() -> None:
+    requests: list[httpx.Request] = []
+
+    def doc_blocks(text: str) -> dict[str, Any]:
+        return {
+            "code": 0,
+            "data": {
+                "items": [
+                    {
+                        "text": {
+                            "elements": [
+                                {"text_run": {"content": text}},
+                            ]
+                        }
+                    }
+                ]
+            },
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer user-access"
+        path = request.url.path
+        if path == "/open-apis/docx/v1/documents/doc-main/blocks":
+            return httpx.Response(200, json=doc_blocks("main interview answer"))
+        if path == "/open-apis/docx/v1/documents/docLinked/blocks":
+            return httpx.Response(200, json=doc_blocks("linked document note"))
+        if path == "/open-apis/docx/v1/documents/note-doc/blocks":
+            return httpx.Response(200, json=doc_blocks("calendar relation note"))
+        if path == "/open-apis/docx/v1/documents/note-artifact/blocks":
+            return httpx.Response(200, json=doc_blocks("meeting note artifact"))
+        if path == "/open-apis/calendar/v4/calendars/primary/events/mget_instance_relation_info":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "instance_relation_infos": [
+                            {
+                                "meeting_instance_ids": ["meeting-1"],
+                                "meeting_notes": ["note-doc"],
+                            }
+                        ]
+                    },
+                },
+            )
+        if path == "/open-apis/vc/v1/meetings/meeting-1":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"meeting": {"id": "meeting-1", "note_id": "note-1"}}},
+            )
+        if path == "/open-apis/vc/v1/notes/note-1":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "note": {
+                            "artifacts": [
+                                {"artifact_type": 2, "doc_token": "note-artifact"},
+                            ]
+                        }
+                    },
+                },
+            )
+        if path == "/open-apis/vc/v1/meetings/meeting-1/recording":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "recording": {"url": "https://feishu.cn/minutes/min-recording"}
+                    },
+                },
+            )
+        if path == "/open-apis/minutes/v1/minutes/min-linked/transcript":
+            return httpx.Response(200, json={"code": 0, "data": {"content": "linked transcript"}})
+        if path == "/open-apis/minutes/v1/minutes/min-recording/transcript":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"content": "recording transcript"}},
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    store = InMemoryInterviewStore()
+    store.save_token({"accessToken": "user-access", "expiresAt": 999_999_999_999})
+    session = store.create(resume_id="resume-1", candidate_name="Alice", job_type="AI")
+    session.feishu_event_id = "event-1"
+    session.calendar_id = "primary"
+    session.start_time = 1_783_000_000
+    session.end_time = 1_783_003_600
+    session.feishu_doc = {
+        "documentId": "doc-main",
+        "localText": "question package template",
+        "url": "https://feishu.cn/docx/doc-main",
+    }
+    session.payload = {
+        "description": "linked https://feishu.cn/docx/docLinked",
+        "meetingUrl": "https://feishu.cn/minutes/min-linked",
+        "rawEvent": {"app_link": "https://feishu.cn/calendar/event-1"},
+    }
+    client = FeishuMeetingSourceClient(
+        token_provider=FeishuStoredUserTokenProvider(store=store),
+        transport=httpx.MockTransport(handler),
+    )
+
+    collected = asyncio.run(client.collect_sources(session))
+
+    assert "main interview answer" in collected["text"]
+    assert "linked document note" in collected["text"]
+    assert "calendar relation note" in collected["text"]
+    assert "meeting note artifact" in collected["text"]
+    assert "linked transcript" in collected["text"]
+    assert "recording transcript" in collected["text"]
+    assert {
+        "interview_doc",
+        "linked_doc",
+        "calendar_relation",
+        "meeting_detail",
+        "meeting_note",
+        "meeting_note_doc",
+        "meeting_recording",
+        "minutes_transcript",
+    } <= set(collected["source"]["types"])
+    assert collected["source"]["linkedDocIds"] == ["docLinked", "note-doc", "note-artifact"]
+    assert collected["source"]["minuteTokens"] == ["min-linked", "min-recording"]
+    assert collected["source"]["meetingNoteIds"] == ["note-1"]
+    assert collected["source"]["rawTextLength"] == len(collected["text"])
+    assert requests
+
+
+def test_feishu_meeting_source_client_skips_without_user_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"meeting source client must not call network: {request.url}")
+
+    client = FeishuMeetingSourceClient(
+        token_provider=FeishuStoredUserTokenProvider(store=InMemoryInterviewStore()),
+        transport=httpx.MockTransport(handler),
+    )
+    session = InMemoryInterviewStore().create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI",
+    )
+
+    collected = asyncio.run(client.collect_sources(session))
+
+    assert collected["text"] == ""
+    assert collected["source"]["source"] == "feishu_meeting"
+    assert collected["source"]["errors"] == ["feishu_user_token_required"]
 
 
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:

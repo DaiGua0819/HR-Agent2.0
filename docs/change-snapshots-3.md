@@ -298,3 +298,34 @@
 - 风险 / 待确认：
   - 当前已接入日历与 Docx 真实 HTTP 边界，但真实 VC/妙记来源读取、真实 Bitable 上传/字段过滤仍需后续继续迁移和联调。
   - 飞书真实接口的错误码映射目前只做基础异常抛出，后续联调时还需要按旧前端提示文案细化错误返回。
+
+---
+
+### 快照 0057：迁移面试中心飞书会议与妙记来源收集
+
+- 修改时间：2026-07-03 00:14:09 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 backfill 会从飞书面试文档、关联 Docx、日程关联会议、会议纪要 Doc、会议录制妙记和妙记转录中收集面试文本；当前 Python 版仍使用 `EmptyMeetingSourceClient`，真实回灌无法读取有效来源。
+  - 既有 OAuth 用户 token 已入库，meeting/minutes/source 边界需要复用同一个 store-backed token provider，并在缺 token 时安全返回空来源，避免破坏现有 backfill 流程。
+  - 回灌来源结构需要继续兼容旧前端需要的 `types`、`rawTextLength`、`linkedDocIds`、`minuteTokens`、`meetingNoteIds`、`sources` 和 `errors`。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/meeting.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `FeishuMeetingSourceClient`，使用 OAuth 用户 token 收集飞书面试来源，支持可注入 `httpx` transport 便于测试。
+  - 支持读取主面试 Docx、描述/会议链接中的关联 Docx 与 Minutes token、飞书日程关联会议、会议详情 note_id、会议纪要 artifact Docx、会议录制里的 Minutes token，以及会议/妙记搜索兜底。
+  - 新增 transcript payload 解析、Docx block 文本解析、source token 提取、来源去重和 RFC3339 搜索时间窗等 helper。
+  - `InterviewCenterService` 默认将 backfill 的 meeting client 切换为 `FeishuMeetingSourceClient(token_provider=self.user_token_provider)`；测试传入的 fake meeting client 仍优先生效。
+  - 新增测试覆盖真实来源收集聚合和缺用户 token 时不触网安全跳过。
+- 验证结果：
+  - 红灯确认：新增测试初次运行因 `FeishuMeetingSourceClient` 不存在而 collection error；随后校正测试中不符合旧正则的 Docx token 形状后，新测试稳定覆盖目标行为。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "feishu_meeting_source_client"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：31 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：44 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/meeting.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/meeting.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 真实飞书 VC/Minutes 接口的字段形状可能存在租户差异，当前实现按旧 Node 兼容字段解析；线上联调时需根据实际响应继续补充字段映射。
+  - Bitable 真实附件上传和字段列表过滤仍未完全替换 mock/pending 边界，是后续迁移的主要剩余缺口。

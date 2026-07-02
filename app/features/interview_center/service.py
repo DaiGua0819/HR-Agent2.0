@@ -40,7 +40,10 @@ from app.features.interview_center.feishu.docx import (
     InterviewDocClientProtocol,
     build_interview_document_text,
 )
-from app.features.interview_center.feishu.meeting import MeetingSourceClientProtocol
+from app.features.interview_center.feishu.meeting import (
+    FeishuMeetingSourceClient,
+    MeetingSourceClientProtocol,
+)
 from app.features.interview_center.feishu.oauth import (
     FeishuOAuthHttpClientProtocol,
     FeishuOAuthService,
@@ -103,7 +106,8 @@ class InterviewCenterService:
         self.backfill_service = BackfillService(
             store=self.store,
             repository=self.repository,
-            meeting_client=meeting_client,
+            meeting_client=meeting_client
+            or FeishuMeetingSourceClient(token_provider=self.user_token_provider),
             evaluation_generator=evaluation_generator,
             asset_sync=self.asset_sync,
             now=now,
