@@ -32,6 +32,7 @@ from app.features.interview_center.feishu.assets import (
 )
 from app.features.interview_center.feishu.bitable import (
     BitableClientProtocol,
+    FeishuBitableClient,
     MockFeishuBitableClient,
 )
 from app.features.interview_center.feishu.client import FeishuStoredUserTokenProvider
@@ -61,7 +62,7 @@ from app.features.interview_center.store import (
     now_iso,
 )
 from app.llm.client import LLMClient
-from app.settings import PROJECT_ROOT
+from app.settings import PROJECT_ROOT, load_settings
 
 
 class InterviewCenterService:
@@ -89,7 +90,7 @@ class InterviewCenterService:
             conversation_repository or ConversationRepository.from_settings()
         )
         self.store = store or GLOBAL_INTERVIEW_STORE
-        self.bitable = bitable or MockFeishuBitableClient()
+        self.bitable = bitable or _default_bitable_client()
         self.user_token_provider = FeishuStoredUserTokenProvider(store=self.store)
         self.doc_client = doc_client or FeishuInterviewDocClient(
             token_provider=self.user_token_provider
@@ -493,6 +494,13 @@ def _document_title(session: InterviewSession, resume: dict[str, Any]) -> str:
         resume.get("job_type") or resume.get("applied_position") or "面试"
     )
     return f"{candidate_name}-{job_type}-面试问题"
+
+
+def _default_bitable_client() -> BitableClientProtocol:
+    feishu = load_settings().feishu
+    if feishu.app_id and feishu.app_secret and feishu.bitable_app_token:
+        return FeishuBitableClient(config=feishu)
+    return MockFeishuBitableClient()
 
 
 def _session_payload(session: ConversationSession) -> dict[str, Any]:

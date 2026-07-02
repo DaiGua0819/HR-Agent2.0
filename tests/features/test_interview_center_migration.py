@@ -14,6 +14,7 @@ from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.calendar_sync import FeishuCalendarClient
 from app.features.interview_center.feishu.bitable import (
+    FeishuBitableClient,
     MockFeishuBitableClient,
     find_existing_bitable_record,
     pick_existing_bitable_fields,
@@ -106,6 +107,128 @@ def test_pick_existing_bitable_fields_filters_to_field_map() -> None:
         "姓名": "Alice",
         "候选人联系电话": "13800138000",
     }
+
+
+def test_feishu_bitable_client_filters_fields_before_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_BITABLE_APP_TOKEN", "app-token")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer tenant-token"
+        path = request.url.path
+        if path == "/open-apis/bitable/v1/apps/app-token/tables/table-1/fields":
+            if request.url.params.get("page_token") == "next":
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "items": [{"field_name": "简历"}],
+                            "has_more": False,
+                        },
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "items": [{"field_name": "姓名"}],
+                        "has_more": True,
+                        "page_token": "next",
+                    },
+                },
+            )
+        if path == "/open-apis/bitable/v1/apps/app-token/tables/table-1/records":
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload == {
+                "fields": {"姓名": "Alice", "简历": [{"file_token": "file-1"}]}
+            }
+            assert request.url.params["user_id_type"] == "open_id"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {"record": {"record_id": "rec-1", "fields": payload["fields"]}},
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = FeishuBitableClient(
+        token_provider=FakeTenantTokenProvider(),
+        transport=httpx.MockTransport(handler),
+        dry_run=False,
+    )
+
+    record = asyncio.run(
+        client.create_record(
+            "table-1",
+            {
+                "姓名": "Alice",
+                "简历": [{"file_token": "file-1"}],
+                "不存在字段": "drop",
+            },
+        )
+    )
+
+    assert record["record_id"] == "rec-1"
+    assert [request.url.path for request in requests].count(
+        "/open-apis/bitable/v1/apps/app-token/tables/table-1/fields"
+    ) == 2
+
+
+def test_feishu_bitable_client_uploads_file_with_drive_media(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FEISHU_BITABLE_APP_TOKEN", "app-token")
+    image_path = tmp_path / "summary.png"
+    image_path.write_bytes(b"png-bytes")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer tenant-token"
+        assert request.url.path == "/open-apis/drive/v1/medias/upload_all"
+        body = request.content
+        assert b'name="parent_node"' in body
+        assert b"app-token" in body
+        assert b'name="parent_type"' in body
+        assert b"bitable_image" in body
+        assert b"summary.png" in body
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"file_token": "uploaded-token"}},
+        )
+
+    client = FeishuBitableClient(
+        token_provider=FakeTenantTokenProvider(),
+        transport=httpx.MockTransport(handler),
+        dry_run=False,
+    )
+
+    token = asyncio.run(client.upload_file(image_path))
+
+    assert token == "uploaded-token"
+    assert len(requests) == 1
+
+
+def test_interview_center_service_uses_real_bitable_client_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_BITABLE_APP_TOKEN", "app-token")
+
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+    )
+
+    assert isinstance(service.bitable, FeishuBitableClient)
 
 
 def test_normalize_calendar_event_detects_interview_like_event() -> None:
@@ -1082,6 +1205,11 @@ class FakeTokenRefreshClient:
             "expires_in": 3600,
             "refresh_expires_in": 7200,
         }
+
+
+class FakeTenantTokenProvider:
+    async def tenant_access_token(self) -> str:
+        return "tenant-token"
 
 
 def _resume_record() -> ResumeRecord:

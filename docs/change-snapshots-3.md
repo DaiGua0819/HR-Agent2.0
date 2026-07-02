@@ -329,3 +329,35 @@
 - 风险 / 待确认：
   - 真实飞书 VC/Minutes 接口的字段形状可能存在租户差异，当前实现按旧 Node 兼容字段解析；线上联调时需根据实际响应继续补充字段映射。
   - Bitable 真实附件上传和字段列表过滤仍未完全替换 mock/pending 边界，是后续迁移的主要剩余缺口。
+
+---
+
+### 快照 0058：迁移面试中心 Bitable 真实字段过滤与附件上传
+
+- 修改时间：2026-07-03 00:26:01 +08:00
+- 修改原因：
+  - 旧 Node 面试中心写入 Bitable 前会分页读取目标表字段，只保留真实存在且非空的字段，避免因为线上表结构差异导致整次写入失败；当前 Python `FeishuBitableClient` 直接提交原始字段。
+  - 旧 Node 会通过 `drive/v1/medias/upload_all` 上传简历长图和面试总结图，并拿到真实 `file_token` 写入附件字段；当前 Python 仍返回 `pending-real-upload:*`。
+  - 服务默认 Bitable 边界仍固定为 mock，导致配置齐全的本地/线上服务无法自动使用真实飞书 Bitable client。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/bitable.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `FeishuBitableClient` 新增可注入 `transport` 和显式 `dry_run`，便于测试和运行时安全控制。
+  - 新增 `list_fields()`，按旧逻辑分页读取字段并缓存 `byName` 字段图；`create_record()` 和 `update_record()` 写入前统一调用 `pick_existing_bitable_fields()` 过滤字段。
+  - `list_records()` 改为分页读取记录，并带上 `user_id_type=open_id`，兼容旧面试中心读取方式。
+  - `upload_file()` 改为真实 multipart 上传到 `/drive/v1/medias/upload_all`，图片优先使用 `bitable_image`，失败后可回退 `bitable_file`，返回真实 `file_token`。
+  - `InterviewCenterService` 默认 Bitable client 改为配置齐全时使用 `FeishuBitableClient`，未配置 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_BITABLE_APP_TOKEN` 时继续使用 `MockFeishuBitableClient`，避免影响本地未配置环境。
+  - 新增测试覆盖字段分页过滤后创建记录、Drive media 附件上传、配置齐全时服务默认启用真实 Bitable client。
+- 验证结果：
+  - 红灯确认：新增 Bitable 测试初次运行 2 failed，原因是 `FeishuBitableClient` 不支持 `transport/dry_run` 且上传仍为 pending；服务默认注入测试初次运行 1 failed，原因是配置齐全时仍使用 mock。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "feishu_bitable_client or real_bitable_client_when_configured"`：3 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：34 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：47 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/bitable.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/bitable.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - multipart 上传已按旧 Node 参数实现，仍需用真实飞书租户做一次端到端联调，确认 `bitable_image` / `bitable_file` 在当前应用权限下均可用。
+  - 默认真实 Bitable 仅在配置齐全时启用；若线上环境缺少任一飞书配置，服务会保守回落到 mock，需要部署前检查环境变量。

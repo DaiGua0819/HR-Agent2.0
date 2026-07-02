@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -65,6 +66,9 @@ class FeishuBitableClient:
     token_provider: FeishuTokenProvider | None = None
     config: FeishuConfig | None = None
     base_url: str = "https://open.feishu.cn/open-apis"
+    transport: httpx.AsyncBaseTransport | None = None
+    dry_run: bool | None = None
+    _fields_cache: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.config = self.config or load_settings().feishu
@@ -73,20 +77,73 @@ class FeishuBitableClient:
     async def list_records(self, table_id: str) -> list[dict[str, Any]]:
         """读取多维表记录。"""
 
-        assert self.config is not None
-        url = f"/bitable/v1/apps/{self.config.bitable_app_token}/tables/{table_id}/records"
-        data = await self._request("GET", url)
-        return list(data.get("data", {}).get("items", []))
+        self._assert_bitable_configured()
+        records: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            data = await self._request(
+                "GET",
+                f"{self._table_url(table_id)}/records",
+                params={
+                    "page_size": "500",
+                    "user_id_type": "open_id",
+                    **({"page_token": page_token} if page_token else {}),
+                },
+            )
+            payload = data.get("data") or {}
+            records.extend(list(payload.get("items") or []))
+            page_token = str(payload.get("page_token") or "")
+            if not payload.get("has_more") or not page_token:
+                break
+        return records
+
+    async def list_fields(self, table_id: str, *, force: bool = False) -> dict[str, Any]:
+        """读取并缓存多维表字段，用于写入前过滤不存在字段。"""
+
+        if table_id in self._fields_cache and not force:
+            return self._fields_cache[table_id]
+        self._assert_bitable_configured()
+        fields: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            data = await self._request(
+                "GET",
+                f"{self._table_url(table_id)}/fields",
+                params={
+                    "page_size": "100",
+                    **({"page_token": page_token} if page_token else {}),
+                },
+            )
+            payload = data.get("data") or {}
+            fields.extend(list(payload.get("items") or []))
+            page_token = str(payload.get("page_token") or "")
+            if not payload.get("has_more") or not page_token:
+                break
+        field_map = {
+            "items": fields,
+            "byName": {
+                str(field.get("field_name") or field.get("name") or ""): field
+                for field in fields
+                if field.get("field_name") or field.get("name")
+            },
+        }
+        self._fields_cache[table_id] = field_map
+        return field_map
 
     async def create_record(self, table_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         """新增多维表记录。"""
 
-        if is_dry_run():
+        if is_dry_run(self.dry_run):
             record_dry_run_intent("feishu.create_record", tableId=table_id, fields=fields)
             return {"record_id": f"dry-run:{uuid4()}", "fields": dict(fields), "dryRun": True}
-        assert self.config is not None
-        url = f"/bitable/v1/apps/{self.config.bitable_app_token}/tables/{table_id}/records"
-        return await self._request("POST", url, json={"fields": fields})
+        field_map = await self.list_fields(table_id)
+        data = await self._request(
+            "POST",
+            f"{self._table_url(table_id)}/records",
+            params={"user_id_type": "open_id"},
+            json={"fields": pick_existing_bitable_fields(fields, field_map)},
+        )
+        return data.get("data", {}).get("record") or data.get("data") or {}
 
     async def update_record(
         self,
@@ -96,7 +153,7 @@ class FeishuBitableClient:
     ) -> dict[str, Any]:
         """更新多维表记录。"""
 
-        if is_dry_run():
+        if is_dry_run(self.dry_run):
             record_dry_run_intent(
                 "feishu.update_record",
                 tableId=table_id,
@@ -104,31 +161,91 @@ class FeishuBitableClient:
                 fields=fields,
             )
             return {"record_id": record_id, "fields": dict(fields), "dryRun": True}
-        assert self.config is not None
-        url = (
-            f"/bitable/v1/apps/{self.config.bitable_app_token}/tables/{table_id}"
-            f"/records/{record_id}"
+        if not record_id:
+            return await self.create_record(table_id, fields)
+        field_map = await self.list_fields(table_id)
+        data = await self._request(
+            "PUT",
+            f"{self._table_url(table_id)}/records/{record_id}",
+            params={"user_id_type": "open_id"},
+            json={"fields": pick_existing_bitable_fields(fields, field_map)},
         )
-        return await self._request("PUT", url, json={"fields": fields})
+        return data.get("data", {}).get("record") or data.get("data") or {}
 
     async def upload_file(self, file_path: str | Path) -> str:
-        """上传文件；真实 multipart 细节最后阶段联调。"""
+        """上传文件到飞书 Drive，供 Bitable 附件字段引用。"""
 
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(path)
-        if is_dry_run():
+        if is_dry_run(self.dry_run):
             record_dry_run_intent("feishu.upload_file", filePath=str(path))
             return f"dry-run-file-token:{path.name}"
-        return f"pending-real-upload:{path.name}"
+        self._assert_bitable_configured()
+        content = path.read_bytes()
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        parent_types = (
+            ["bitable_image", "bitable_file"]
+            if content_type.startswith("image/")
+            else ["bitable_file"]
+        )
+        last_error: Exception | None = None
+        assert self.config is not None
+        for parent_type in parent_types:
+            try:
+                data = await self._request(
+                    "POST",
+                    "/drive/v1/medias/upload_all",
+                    data={
+                        "file_name": path.name,
+                        "parent_type": parent_type,
+                        "parent_node": self.config.bitable_app_token,
+                        "size": str(len(content)),
+                        "extra": (
+                            '{"drive_route_token":"'
+                            f'{self.config.bitable_app_token}"'
+                            "}"
+                        ),
+                    },
+                    files={"file": (path.name, content, content_type)},
+                )
+                token = str(
+                    data.get("data", {}).get("file_token")
+                    or data.get("data", {}).get("fileToken")
+                    or data.get("data", {}).get("token")
+                    or ""
+                )
+                if not token:
+                    raise ValueError("missing_feishu_file_token")
+                return token
+            except Exception as exc:
+                last_error = exc
+        raise last_error or ValueError("upload_feishu_bitable_attachment_failed")
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         assert self.token_provider is not None
         headers = {"Authorization": f"Bearer {await self.token_provider.tenant_access_token()}"}
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=30, headers=headers) as client:
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=30,
+            headers=headers,
+            transport=self.transport,
+        ) as client:
             response = await client.request(method, url, **kwargs)
             response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if int(data.get("code") or 0) != 0:
+            raise ValueError(str(data.get("msg") or "feishu_bitable_request_failed"))
+        return data
+
+    def _table_url(self, table_id: str) -> str:
+        assert self.config is not None
+        return f"/bitable/v1/apps/{self.config.bitable_app_token}/tables/{table_id}"
+
+    def _assert_bitable_configured(self) -> None:
+        assert self.config is not None
+        if not self.config.bitable_app_token:
+            raise ValueError("missing_feishu_bitable_app_token")
 
 
 @dataclass
