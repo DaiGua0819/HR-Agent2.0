@@ -94,6 +94,7 @@ class InterviewSession:
             "summaryImagePath": self.summary_image_path,
             "feedback": self.feedback,
             "interviewEvaluation": self.interview_evaluation,
+            "humanReview": self.payload.get("humanReview") or {},
             "backfillSource": self.backfill_source,
             "ruleSuggestionIds": self.rule_suggestion_ids,
             "lastBackfillError": self.last_backfill_error,

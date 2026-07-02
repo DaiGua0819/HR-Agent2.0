@@ -361,3 +361,35 @@
 - 风险 / 待确认：
   - multipart 上传已按旧 Node 参数实现，仍需用真实飞书租户做一次端到端联调，确认 `bitable_image` / `bitable_file` 在当前应用权限下均可用。
   - 默认真实 Bitable 仅在配置齐全时启用；若线上环境缺少任一飞书配置，服务会保守回落到 mock，需要部署前检查环境变量。
+
+---
+
+### 快照 0059：迁移面试中心人工复核与日志兼容路由
+
+- 修改时间：2026-07-03 00:33:55 +08:00
+- 修改原因：
+  - 旧 Node 面试中心支持 `/api/interview-center/sessions/{id}/review`、`/confirm` 和 `/api/interview-center/logs`，旧前端会在回灌后通过这些接口完成人工复核、确认和查看操作日志；当前 FastAPI 版缺少这些入口。
+  - 旧 `review/confirm` 会同步更新 session 状态、`interviewEvaluation.review`、`humanReview`，并把最新 `interviewEvaluation` 写回简历库；Python 版此前只停留在 `needs_review`。
+  - 旧前端依赖 session 响应里的顶层 `humanReview` 字段，需要在不改 SQLite schema 的前提下兼容该响应形状。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/store.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `InterviewCenterService` 新增 `review_session()`，规范化 `passed/rejected/need_followup` 决策，按旧逻辑将 `need_followup` 保持为 `needs_review`，其他决策置为 `completed`。
+  - review 会更新 session 的 `interview_evaluation.review`、`humanReviewRequired`、`reviewedAt`，并把同一份 `interviewEvaluation` 回写到绑定简历记录。
+  - `InterviewSession.to_dict()` 新增旧前端兼容顶层 `humanReview`，数据存放在 `payload["humanReview"]`，避免新增数据库列。
+  - `app/api/routes/interview.py` 新增 `POST /review`、`POST /confirm` 和 `GET /logs`，其中 confirm 复用 review 行为，logs 支持 `sessionId` 和 `limit`。
+  - 新增测试覆盖 service review 持久化、resume 回写、API review/confirm/logs 兼容返回和日志记录。
+- 验证结果：
+  - 红灯确认：新增测试初次运行 2 failed，原因是 `InterviewCenterService.review_session` 不存在且 `/review` API 返回 404。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "review_session or review_confirm"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：36 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：49 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/api/routes/interview.py app/features/interview_center/service.py app/features/interview_center/store.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/api/routes/interview.py app/features/interview_center/service.py app/features/interview_center/store.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 本轮补齐的是人工复核和日志兼容入口；旧 Node 的自动 calendar/backfill scheduler 仍是后续端到端运行审计时需要确认的剩余差异。
+  - 当前 `humanReview` 通过 payload 兼容输出，若后续前端需要按字段查询/筛选人工复核状态，再考虑新增持久化列。

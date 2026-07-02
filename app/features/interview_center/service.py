@@ -365,6 +365,53 @@ class InterviewCenterService:
         session = self._require_session(session_id)
         return {"sessionId": session.id, "source": session.backfill_source}
 
+    async def review_session(
+        self,
+        session_id: str,
+        *,
+        decision: str = "passed",
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Persist the old interview-center human review/confirm action."""
+
+        session = self._require_session(session_id)
+        normalized_decision = _normalize_review_decision(decision)
+        reviewed_at = now_iso()
+        review = {
+            "status": normalized_decision,
+            "decision": normalized_decision,
+            "note": str(note or "")[:1000],
+            "reviewedAt": reviewed_at,
+        }
+        interview_evaluation = {
+            **session.interview_evaluation,
+            "review": review,
+            "humanReviewRequired": normalized_decision == "need_followup",
+            "reviewedAt": reviewed_at,
+        }
+        human_review = {
+            "confirmed": True,
+            "decision": normalized_decision,
+            "note": review["note"],
+            "confirmedAt": reviewed_at,
+        }
+        session.interview_evaluation = interview_evaluation
+        session.status = _review_status_for_decision(normalized_decision)
+        session.payload = {**session.payload, "humanReview": human_review}
+        saved = self.store.save(session)
+        if saved.resume_id:
+            self.repository.update(
+                saved.resume_id,
+                {"interviewEvaluation": interview_evaluation},
+            )
+        self.store.append_log(
+            saved.id,
+            "info",
+            "interview review completed",
+            human_review,
+        )
+        return {"session": saved.to_dict()}
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """列出会话。"""
 
@@ -494,6 +541,17 @@ def _document_title(session: InterviewSession, resume: dict[str, Any]) -> str:
         resume.get("job_type") or resume.get("applied_position") or "面试"
     )
     return f"{candidate_name}-{job_type}-面试问题"
+
+
+def _normalize_review_decision(value: str) -> str:
+    decision = str(value or "").strip()
+    if decision in {"passed", "rejected", "need_followup"}:
+        return decision
+    return "passed"
+
+
+def _review_status_for_decision(decision: str) -> str:
+    return "needs_review" if decision == "need_followup" else "completed"
 
 
 def _default_bitable_client() -> BitableClientProtocol:

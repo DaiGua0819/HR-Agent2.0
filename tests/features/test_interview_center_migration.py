@@ -624,6 +624,35 @@ def test_backfill_persists_evaluation_updates_resume_and_calls_assets() -> None:
     assert asset_sync.calls == ["interview_record_image", "evaluation_document"]
 
 
+def test_review_session_updates_session_and_resume_evaluation() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.interview_evaluation = {
+        "summary": "候选人项目扎实",
+        "humanReviewRequired": True,
+    }
+    store.save(session)
+    repository = ResumeRepository.in_memory([_resume_record()])
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+
+    result = asyncio.run(
+        service.review_session(session.id, decision="need_followup", note="补充系统设计追问")
+    )
+
+    assert result["session"]["status"] == "needs_review"
+    assert result["session"]["interviewEvaluation"]["humanReviewRequired"] is True
+    assert result["session"]["interviewEvaluation"]["review"]["decision"] == "need_followup"
+    assert result["session"]["humanReview"]["confirmed"] is True
+    saved_resume = repository.get("resume-1")
+    assert saved_resume.payload["interviewEvaluation"]["review"]["note"] == "补充系统设计追问"
+    assert store.list_logs(session.id, limit=1)[0]["message"] == "interview review completed"
+
+
 def test_backfill_api_routes_are_compatible() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
@@ -653,6 +682,48 @@ def test_backfill_api_routes_are_compatible() -> None:
     assert source.json()["source"]["source"] == "fake_meeting"
     assert status.status_code == 200
     assert status.json()["lastResult"]["sessionId"] == session.id
+
+
+def test_review_confirm_and_logs_api_routes_are_compatible() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.interview_evaluation = {
+        "summary": "候选人项目扎实",
+        "humanReviewRequired": True,
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        reviewed = client.post(
+            f"/api/interview-center/sessions/{session.id}/review",
+            json={"decision": "passed", "note": "通过人工复核"},
+        )
+        confirmed = client.post(
+            f"/api/interview-center/sessions/{session.id}/confirm",
+            json={"decision": "rejected", "note": "暂不通过"},
+        )
+        logs = client.get(
+            "/api/interview-center/logs",
+            params={"sessionId": session.id, "limit": 5},
+        )
+
+    assert reviewed.status_code == 200
+    assert reviewed.json()["ok"] is True
+    assert reviewed.json()["session"]["status"] == "completed"
+    assert reviewed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
+    assert confirmed.status_code == 200
+    assert confirmed.json()["session"]["status"] == "completed"
+    assert confirmed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "rejected"
+    assert logs.status_code == 200
+    assert logs.json()["ok"] is True
+    assert logs.json()["logs"][0]["message"] == "interview review completed"
 
 
 def test_feishu_auth_url_route_includes_old_oauth_scopes(monkeypatch: pytest.MonkeyPatch) -> None:

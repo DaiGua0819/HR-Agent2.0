@@ -68,6 +68,13 @@ class InterviewBackfillRequest(BaseModel):
     early_override_token: str = Field(default="", alias="earlyOverrideToken")
 
 
+class InterviewReviewRequest(BaseModel):
+    """Old interview-center human review/confirm request."""
+
+    decision: str = "passed"
+    note: str = ""
+
+
 def _service(request: Request) -> InterviewCenterService:
     service = getattr(request.app.state, "interview_center_service", None)
     if service is None:
@@ -234,6 +241,47 @@ async def backfill_status(request: Request) -> dict[str, object]:
     """Old interview-center backfill status endpoint."""
 
     return {"ok": True, **_service(request).backfill_status()}
+
+
+@router.post("/api/interview-center/sessions/{session_id}/review")
+async def review_session(
+    session_id: str,
+    payload: InterviewReviewRequest,
+    request: Request,
+) -> dict[str, object]:
+    """Old interview-center human review endpoint."""
+
+    try:
+        result = await _service(request).review_session(
+            session_id,
+            decision=payload.decision,
+            note=payload.note,
+        )
+        return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/interview-center/sessions/{session_id}/confirm")
+async def confirm_session(
+    session_id: str,
+    payload: InterviewReviewRequest,
+    request: Request,
+) -> dict[str, object]:
+    """Old interview-center confirm endpoint; same behavior as review."""
+
+    return await review_session(session_id, payload, request)
+
+
+@router.get("/api/interview-center/logs")
+async def interview_center_logs(
+    request: Request,
+    sessionId: str = "",
+    limit: int = 80,
+) -> dict[str, object]:
+    """Old interview-center logs endpoint."""
+
+    return {"ok": True, "logs": _service(request).store.list_logs(sessionId, limit)}
 
 
 @router.post("/api/interview-center/sessions/{session_id}/sync-bitable")
