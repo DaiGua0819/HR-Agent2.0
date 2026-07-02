@@ -159,16 +159,19 @@ async def create_session(
 @router.get("/api/interview-center/sessions")
 async def list_sessions(
     request: Request,
-    startTime: int = 0,
-    endTime: int = 0,
+    startTime: int | None = None,
+    endTime: int | None = None,
     status: str = "",
 ) -> dict[str, object]:
     """Old interview-center sessions list endpoint."""
 
     service = _service(request)
+    now_seconds = int(service.now())
+    resolved_start_time = startTime if startTime is not None else now_seconds - 86_400
+    resolved_end_time = endTime if endTime is not None else now_seconds + 14 * 86_400
     sessions = await service.list_sessions_enriched(
-        start_time=startTime,
-        end_time=endTime,
+        start_time=resolved_start_time,
+        end_time=resolved_end_time,
         status=status,
     )
     return {

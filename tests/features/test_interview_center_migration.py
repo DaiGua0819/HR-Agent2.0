@@ -444,7 +444,10 @@ def test_sessions_api_prefers_bitable_interview_flow_stage() -> None:
     app = create_app()
     app.state.interview_center_service = service
     with TestClient(app) as client:
-        response = client.get("/api/interview-center/sessions")
+        response = client.get(
+            "/api/interview-center/sessions",
+            params={"startTime": 0, "endTime": 0},
+        )
 
     flow = response.json()["sessions"][0]["interviewFlow"]
     assert flow["source"] == "bitable"
@@ -452,6 +455,70 @@ def test_sessions_api_prefers_bitable_interview_flow_stage() -> None:
     assert flow["recordId"] == "rec-stage"
     assert flow["groupKey"] == "completed"
     assert flow["roundKey"] == "second"
+
+
+def test_sessions_api_uses_old_default_time_window() -> None:
+    now = 2_000_000_000
+    day_seconds = 86_400
+    store = InMemoryInterviewStore()
+    upcoming = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 初面"},
+    )
+    upcoming.start_time = now + 3_600
+    upcoming.end_time = now + 7_200
+    store.save(upcoming)
+    stale = store.create(
+        resume_id="resume-old",
+        candidate_name="Old",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Old 面试"},
+    )
+    stale.start_time = now - 2 * day_seconds
+    stale.end_time = stale.start_time + 3_600
+    store.save(stale)
+    far_future = store.create(
+        resume_id="resume-future",
+        candidate_name="Future",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Future 面试"},
+    )
+    far_future.start_time = now + 15 * day_seconds
+    far_future.end_time = far_future.start_time + 3_600
+    store.save(far_future)
+    non_interview = store.create(
+        resume_id="resume-meeting",
+        candidate_name="Meeting",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": False, "title": "项目例会"},
+    )
+    non_interview.start_time = now + 3_600
+    non_interview.end_time = now + 7_200
+    store.save(non_interview)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        now=lambda: now,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        default_response = client.get("/api/interview-center/sessions")
+        unbounded_response = client.get(
+            "/api/interview-center/sessions",
+            params={"startTime": 0, "endTime": 0},
+        )
+
+    default_ids = {item["id"] for item in default_response.json()["sessions"]}
+    unbounded_ids = {item["id"] for item in unbounded_response.json()["sessions"]}
+    assert default_response.status_code == 200
+    assert default_ids == {upcoming.id}
+    assert stale.id in unbounded_ids
+    assert far_future.id in unbounded_ids
+    assert non_interview.id not in unbounded_ids
 
 
 def test_interview_center_sync_api_routes_are_compatible() -> None:

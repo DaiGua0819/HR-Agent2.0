@@ -762,3 +762,32 @@
 - 风险 / 待确认：
   - 本次只隔离回灌成功后的资产同步异常；如果未来要支持后台自动补偿失败的面试记录截图或评估文档，需要继续补充重试队列或人工重试入口。
   - warn 日志目前记录异常字符串；真实 Bitable/Docx 错误若需要更细的错误码、recordId、fileToken 等诊断字段，可在联调后继续扩展日志 payload。
+---
+
+### 快照 0072：恢复旧面试中心列表默认时间窗
+
+- 修改时间：2026-07-03 02:44:09 +08:00
+- 修改原因：
+  - 旧 Node 面试中心的 `GET /api/interview-center/sessions` 在未传 `startTime/endTime` 时默认只返回“当前时间前 1 天到未来 14 天”的面试类日程，避免旧前端列表加载历史或过远未来的日程。
+  - 当前 FastAPI 路由把 `startTime/endTime` 默认值设为 `0`，等价于默认不过滤时间范围，导致旧日程和 15 天后的日程也会进入旧前端列表。
+  - 需要保留显式传 `startTime=0&endTime=0` 的调试/兼容入口，因此只改变“参数缺省”时的默认窗口，不改变 service 层的显式 0 语义。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_sessions_api_uses_old_default_time_window()`，覆盖默认列表只返回窗口内面试类日程、排除过旧/过远日程，并确认显式 `startTime=0&endTime=0` 仍可请求不按时间过滤的全量面试类日程。
+  - `/api/interview-center/sessions` 的 `startTime/endTime` 改为可空查询参数；缺省时使用 `service.now()` 计算 `now - 86400` 到 `now + 14 * 86400` 的旧默认窗口。
+  - 原有 Bitable 面试阶段 enrichment 测试显式传 `startTime=0&endTime=0`，让它继续专注验证 Bitable 阶段字段，不依赖默认时间窗。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，默认列表返回了过旧和过远未来会话，证明当前路由未应用旧默认时间窗。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k default_time_window`，结果 `1 passed, 51 deselected`，仅有既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`，结果 `52 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`，结果 `65 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`，结果 `All checks passed!`。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`，通过。
+  - 空白检查：`git diff --check` 无空白错误，仅有 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`，结果 `299 passed`，仅有既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 默认列表现在更贴近旧前端日程视图；如果后续新增管理后台需要默认看全量历史，应显式传 `startTime=0&endTime=0` 或单独提供管理视图参数。
+  - 本次只恢复时间窗默认值；旧前端若还有更多列表筛选维度或分页行为，仍需继续按旧 Node 入口逐项审计。
