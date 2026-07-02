@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from os import getenv
 from typing import Any, Protocol
 
 import httpx
@@ -22,6 +23,10 @@ from app.features.interview_center.feishu.client import (
 from app.features.interview_center.store import InterviewSession, InterviewStoreProtocol, now_iso
 
 DAY_SECONDS = 24 * 60 * 60
+AUTO_CALENDAR_SYNC_INTERVAL_MS = max(
+    60_000,
+    int(getenv("INTERVIEW_CALENDAR_SYNC_INTERVAL_MS") or 5 * 60 * 1000),
+)
 
 
 class CalendarClientProtocol(Protocol):
@@ -114,11 +119,17 @@ class CalendarSyncService:
         repository: ResumeRepository,
         calendar_client: CalendarClientProtocol | None = None,
         now: Callable[[], float] | None = None,
+        enabled: bool | None = None,
+        interval_ms: int | None = None,
     ) -> None:
         self.store = store
         self.repository = repository
         self.calendar_client = calendar_client or EmptyCalendarClient()
         self.now = now or time.time
+        self.enabled = (
+            _env_enabled("INTERVIEW_CALENDAR_SYNC_ENABLED") if enabled is None else enabled
+        )
+        self.interval_ms = interval_ms or AUTO_CALENDAR_SYNC_INTERVAL_MS
         self.running = False
         self.last_run_at = ""
         self.last_error = ""
@@ -204,8 +215,9 @@ class CalendarSyncService:
         """Return old-compatible calendar sync status."""
 
         return {
-            "enabled": True,
+            "enabled": self.enabled,
             "running": self.running,
+            "intervalMs": self.interval_ms,
             "lastRunAt": self.last_run_at,
             "lastError": self.last_error,
             "lastResult": self.last_result,
@@ -267,3 +279,7 @@ class CalendarSyncService:
             "bitableResumeResults": [],
             "sessions": [],
         }
+
+
+def _env_enabled(name: str) -> bool:
+    return str(getenv(name, "true")).strip().lower() not in {"0", "false", "no"}

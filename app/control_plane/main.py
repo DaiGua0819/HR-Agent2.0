@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -35,7 +36,16 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     """创建控制面应用。"""
 
     settings = load_settings()
-    app = FastAPI(title="HR Agent Control Plane")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.interview_center_service.start_schedulers()
+        try:
+            yield
+        finally:
+            await app.state.interview_center_service.stop_schedulers()
+
+    app = FastAPI(title="HR Agent Control Plane", lifespan=lifespan)
     repository = ResumeRepository.from_settings()
     scoring_service = ScoringService(repository)
     review_repository = ResumeReviewRepository(settings.resolved_database_path)

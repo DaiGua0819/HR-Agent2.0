@@ -422,3 +422,38 @@
 - 风险 / 待确认：
   - 本轮补齐旧页面立即依赖的绑定和列表响应；自动 calendar/backfill scheduler 仍需继续审计并补齐状态与 tick 行为。
   - sessions 响应保留 `items`，同时新增旧前端使用的 `sessions`，若后续有新前端按 `items` 读取仍可兼容。
+
+---
+
+### 快照 0061：迁移面试中心自动同步与自动回灌 Scheduler
+
+- 修改时间：2026-07-03 00:54:06 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在服务启动后会自动启动飞书日历同步 scheduler 和面试回灌 scheduler，并通过 `/sync/status`、`/backfill/status` 暴露 `enabled`、`running`、`intervalMs`、`lastRunAt`、`lastError` 等状态；当前 FastAPI 版只有手动 sync/backfill 和简化状态。
+  - 旧自动日历同步在飞书未授权时会安全跳过并记录 `lastError`，不能触发真实日历请求；当前 Python 版没有自动 tick 入口。
+  - 旧自动回灌会筛选已绑定简历、已有飞书面试文档、已过 10 分钟保护期、未生成评价且未超过最大尝试次数的面试 session，并按结束时间排序、限制每轮处理数量；当前 Python 版没有这一自动候选筛选与限流行为。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/calendar_sync.py`
+  - `app/features/interview_center/backfill.py`
+  - `app/features/interview_center/service.py`
+  - `app/control_plane/main.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `CalendarSyncService` 新增旧 scheduler 兼容的 `enabled`、`intervalMs` 状态字段，并读取 `INTERVIEW_CALENDAR_SYNC_ENABLED` / `INTERVIEW_CALENDAR_SYNC_INTERVAL_MS`。
+  - `BackfillService` 新增自动回灌状态字段、`auto_candidates()` 和 `run_auto_tick()`，支持 `INTERVIEW_AUTO_BACKFILL_ENABLED`、`INTERVIEW_BACKFILL_INTERVAL_MS`、`INTERVIEW_BACKFILL_MAX_PER_TICK`、`INTERVIEW_BACKFILL_MAX_ATTEMPTS`，并返回 `lastProcessed`、`inFlightSessionIds`、`pendingCount`。
+  - `InterviewCenterService` 新增 `run_auto_calendar_sync_tick()`、`run_auto_backfill_tick()`、`start_schedulers()`、`stop_schedulers()` 和 `scheduler_running`，自动日历同步在飞书未连接时只记录 `lastError` 并跳过。
+  - `create_app()` 改用 FastAPI lifespan 在本地服务启动/关闭时启动并取消面试中心 scheduler，避免 `on_event` 弃用警告和后台任务泄漏。
+  - 新增测试覆盖未授权自动日历同步跳过、自动回灌候选筛选/排序/maxPerTick 限制，以及后台 scheduler 能启动、自动 tick 并停止。
+- 验证结果：
+  - 红灯确认：新增 scheduler 切片测试首次运行 2 failed，原因是 `run_auto_calendar_sync_tick` / `run_auto_backfill_tick` 不存在；新增后台 scheduler 测试首次运行 1 failed，原因是 `start_schedulers` 不存在。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "auto_calendar_tick or auto_backfill_tick or schedulers_start"`：3 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：41 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 警告修复验证：首次用 `@app.on_event` 接入时新增 FastAPI deprecation warnings；改为 lifespan 后重跑同一迁移测试，警告恢复为仅 1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：54 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/api/routes/interview.py app/control_plane/main.py app/features/interview_center/calendar_sync.py app/features/interview_center/backfill.py app/features/interview_center/service.py app/features/interview_center/store.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/api/routes/interview.py app/control_plane/main.py app/features/interview_center/calendar_sync.py app/features/interview_center/backfill.py app/features/interview_center/service.py app/features/interview_center/store.py tests/features/test_interview_center_migration.py`：通过。
+  - 空白检查：`git diff --check` 无空白错误，仅 Windows 换行提示。
+- 风险 / 待确认：
+  - 自动 scheduler 已在 FastAPI lifespan 中启停；真实环境仍需用有效飞书 OAuth token 观察自动日历同步和自动回灌的端到端效果。
+  - 当前自动日历 tick 遵循旧逻辑，在未授权时只更新 `lastError` 并跳过，不会写入日志；如果运营侧需要可见日志，再单独补充。

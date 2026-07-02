@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -118,7 +119,9 @@ class InterviewCenterService:
             repository=self.repository,
             calendar_client=calendar_client
             or FeishuCalendarClient(token_provider=self.user_token_provider),
+            now=now,
         )
+        self._scheduler_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def create_session_from_resume(
         self,
@@ -262,6 +265,88 @@ class InterviewCenterService:
 
         return self.calendar_sync.status()
 
+    @property
+    def scheduler_running(self) -> bool:
+        """Whether any background interview-center scheduler task is active."""
+
+        return any(not task.done() for task in self._scheduler_tasks.values())
+
+    def start_schedulers(
+        self,
+        *,
+        initial_calendar_delay: float | None = None,
+        initial_backfill_delay: float | None = None,
+    ) -> None:
+        """Start old-compatible background scheduler loops."""
+
+        if self.calendar_sync.enabled and "calendar" not in self._scheduler_tasks:
+            self._scheduler_tasks["calendar"] = asyncio.create_task(
+                self._scheduler_loop(
+                    initial_delay=(
+                        min(30.0, self.calendar_sync.interval_ms / 1000)
+                        if initial_calendar_delay is None
+                        else initial_calendar_delay
+                    ),
+                    interval_seconds=self.calendar_sync.interval_ms / 1000,
+                    tick=self.run_auto_calendar_sync_tick,
+                )
+            )
+        if self.backfill_service.enabled and "backfill" not in self._scheduler_tasks:
+            self._scheduler_tasks["backfill"] = asyncio.create_task(
+                self._scheduler_loop(
+                    initial_delay=(
+                        self.backfill_service.interval_ms / 1000
+                        if initial_backfill_delay is None
+                        else initial_backfill_delay
+                    ),
+                    interval_seconds=self.backfill_service.interval_ms / 1000,
+                    tick=self.run_auto_backfill_tick,
+                )
+            )
+
+    async def stop_schedulers(self) -> None:
+        """Cancel background scheduler loops."""
+
+        tasks = list(self._scheduler_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._scheduler_tasks.clear()
+
+    async def _scheduler_loop(
+        self,
+        *,
+        initial_delay: float,
+        interval_seconds: float,
+        tick: Any,
+    ) -> None:
+        await asyncio.sleep(max(0.0, initial_delay))
+        while True:
+            await tick()
+            await asyncio.sleep(max(1.0, interval_seconds))
+
+    async def run_auto_calendar_sync_tick(self) -> dict[str, Any]:
+        """Run one old-compatible automatic calendar sync tick."""
+
+        if not self.calendar_sync.enabled or self.calendar_sync.running:
+            return self.calendar_sync.status()
+        if not self.oauth_service.status().get("connected"):
+            self.calendar_sync.last_error = "飞书未授权，跳过自动日历同步"
+            return self.calendar_sync.status()
+        try:
+            await self.calendar_sync.sync(
+                calendar_id="primary",
+                auto_prepare=False,
+                auto_prepare_limit=0,
+                source="auto",
+                skip_if_running=True,
+            )
+        except Exception as exc:
+            self.calendar_sync.last_error = str(exc) or "自动同步飞书日历失败"
+            self.store.append_log("", "warn", self.calendar_sync.last_error, {})
+        return self.calendar_sync.status()
+
     async def prepare_session(self, session_id: str, *, force: bool = False) -> dict[str, Any]:
         """Generate interview questions and create the Feishu Docx question package."""
 
@@ -358,6 +443,19 @@ class InterviewCenterService:
         """Return backfill scheduler/service status."""
 
         return self.backfill_service.status()
+
+    async def run_auto_backfill_tick(
+        self,
+        *,
+        max_per_tick: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any]:
+        """Run one old-compatible automatic interview backfill tick."""
+
+        return await self.backfill_service.run_auto_tick(
+            max_per_tick=max_per_tick,
+            max_attempts=max_attempts,
+        )
 
     def backfill_source(self, session_id: str) -> dict[str, Any]:
         """Return the stored public backfill source for a session."""

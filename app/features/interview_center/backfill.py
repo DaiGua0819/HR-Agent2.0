@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable
+from os import getenv
 from typing import Any, Protocol
 
 from app.domain.resume.models import Resume
@@ -17,6 +18,19 @@ from app.features.interview_center.feishu.meeting import (
 from app.features.interview_center.store import InterviewSession, InterviewStoreProtocol, now_iso
 
 BACKFILL_DELAY_SECONDS = 10 * 60
+DAY_SECONDS = 24 * 60 * 60
+AUTO_BACKFILL_INTERVAL_MS = max(
+    60_000,
+    int(getenv("INTERVIEW_BACKFILL_INTERVAL_MS") or 5 * 60 * 1000),
+)
+AUTO_BACKFILL_MAX_PER_TICK = max(
+    1,
+    min(int(getenv("INTERVIEW_BACKFILL_MAX_PER_TICK") or 3), 10),
+)
+AUTO_BACKFILL_MAX_ATTEMPTS = max(
+    1,
+    min(int(getenv("INTERVIEW_BACKFILL_MAX_ATTEMPTS") or 3), 10),
+)
 
 
 class EvaluationGeneratorProtocol(Protocol):
@@ -65,6 +79,10 @@ class BackfillService:
         evaluation_generator: EvaluationGeneratorProtocol | None = None,
         asset_sync: BitableAssetSync | Any | None = None,
         now: Callable[[], float] | None = None,
+        enabled: bool | None = None,
+        interval_ms: int | None = None,
+        max_per_tick: int | None = None,
+        max_attempts: int | None = None,
     ) -> None:
         self.store = store
         self.repository = repository
@@ -72,7 +90,16 @@ class BackfillService:
         self.evaluation_generator = evaluation_generator or DefaultEvaluationGenerator()
         self.asset_sync = asset_sync
         self.now = now or time.time
+        self.enabled = (
+            _env_enabled("INTERVIEW_AUTO_BACKFILL_ENABLED") if enabled is None else enabled
+        )
+        self.interval_ms = interval_ms or AUTO_BACKFILL_INTERVAL_MS
+        self.max_per_tick = max_per_tick or AUTO_BACKFILL_MAX_PER_TICK
+        self.max_attempts = max_attempts or AUTO_BACKFILL_MAX_ATTEMPTS
         self.running: set[str] = set()
+        self.auto_running = False
+        self.last_run_at = ""
+        self.last_processed: list[dict[str, Any]] = []
         self.last_result: dict[str, Any] | None = None
         self.last_error = ""
 
@@ -162,15 +189,133 @@ class BackfillService:
         finally:
             self.running.discard(session.id)
 
-    def status(self) -> dict[str, Any]:
+    async def run_auto_tick(
+        self,
+        *,
+        max_per_tick: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any]:
+        """Run one old-compatible automatic backfill scheduler tick."""
+
+        resolved_max_per_tick = _bounded_int(max_per_tick, self.max_per_tick, 1, 10)
+        resolved_max_attempts = _bounded_int(max_attempts, self.max_attempts, 1, 10)
+        if not self.enabled or self.auto_running:
+            return self.status(
+                max_per_tick=resolved_max_per_tick,
+                max_attempts=resolved_max_attempts,
+            )
+        self.auto_running = True
+        self.last_run_at = now_iso()
+        self.last_error = ""
+        processed: list[dict[str, Any]] = []
+        try:
+            candidates = self.auto_candidates(max_attempts=resolved_max_attempts)[
+                :resolved_max_per_tick
+            ]
+            for session in candidates:
+                try:
+                    await self.backfill(session.id, force=False)
+                    next_session = self.store.get(session.id) or session
+                    processed.append(
+                        {
+                            "sessionId": session.id,
+                            "title": session.payload.get("title") or "",
+                            "resumeName": (
+                                session.payload.get("resume", {}).get("name")
+                                or session.payload.get("matchedResume", {}).get("name")
+                                or session.candidate_name
+                            ),
+                            "status": next_session.status,
+                            "error": next_session.last_backfill_error,
+                        }
+                    )
+                except Exception as exc:
+                    message = str(exc) or "auto backfill failed"
+                    processed.append(
+                        {
+                            "sessionId": session.id,
+                            "title": session.payload.get("title") or "",
+                            "resumeName": session.candidate_name,
+                            "status": "error",
+                            "error": message,
+                        }
+                    )
+                    self.store.append_log(session.id, "error", message, {})
+            self.last_processed = processed
+        except Exception as exc:
+            self.last_error = str(exc) or "auto backfill tick failed"
+            self.store.append_log("", "error", self.last_error, {})
+        finally:
+            self.auto_running = False
+        return self.status(
+            max_per_tick=resolved_max_per_tick,
+            max_attempts=resolved_max_attempts,
+        )
+
+    def status(
+        self,
+        *,
+        max_per_tick: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, Any]:
         """Return old-compatible backfill status."""
 
+        resolved_max_per_tick = max_per_tick or self.max_per_tick
+        resolved_max_attempts = max_attempts or self.max_attempts
         return {
-            "running": bool(self.running),
-            "runningSessionIds": sorted(self.running),
+            "enabled": self.enabled,
+            "running": self.auto_running,
+            "intervalMs": self.interval_ms,
+            "maxPerTick": resolved_max_per_tick,
+            "maxAttempts": resolved_max_attempts,
+            "lastRunAt": self.last_run_at,
             "lastError": self.last_error,
             "lastResult": self.last_result,
+            "lastProcessed": self.last_processed,
+            "inFlightSessionIds": sorted(self.running),
+            "runningSessionIds": sorted(self.running),
+            "pendingCount": len(self.auto_candidates(max_attempts=resolved_max_attempts)),
         }
+
+    def auto_candidates(self, *, max_attempts: int | None = None) -> list[InterviewSession]:
+        """Return sessions eligible for one automatic backfill pass."""
+
+        resolved_max_attempts = max_attempts or self.max_attempts
+        now_seconds = int(self.now())
+        start_time = now_seconds - 30 * DAY_SECONDS
+        end_time = now_seconds + DAY_SECONDS
+        candidates: list[InterviewSession] = []
+        for session in self.store.list():
+            if not session.payload.get("isInterviewLike"):
+                continue
+            if not session.resume_id:
+                continue
+            if not session.feishu_doc.get("documentId"):
+                continue
+            if session.interview_evaluation:
+                continue
+            if session.id in self.running:
+                continue
+            if session.status in {
+                "non_interview",
+                "ignored",
+                "completed",
+                "needs_review",
+                "backfilling",
+            }:
+                continue
+            if int(session.backfill_attempts or 0) >= resolved_max_attempts:
+                continue
+            session_time = int(session.end_time or session.start_time or 0)
+            if not session_time or session_time < start_time or session_time > end_time:
+                continue
+            if now_seconds < session_time + BACKFILL_DELAY_SECONDS:
+                continue
+            candidates.append(session)
+        return sorted(
+            candidates,
+            key=lambda item: int(item.end_time or item.start_time or 0),
+        )
 
     def _require_session(self, session_id: str) -> InterviewSession:
         session = self.store.get(session_id)
@@ -248,3 +393,13 @@ class BackfillService:
             document,
             second_round=second_round,
         )
+
+
+def _env_enabled(name: str) -> bool:
+    return str(getenv(name, "true")).strip().lower() not in {"0", "false", "no"}
+
+
+def _bounded_int(value: int | None, default: int, minimum: int, maximum: int) -> int:
+    if value is None:
+        return default
+    return max(minimum, min(int(value), maximum))

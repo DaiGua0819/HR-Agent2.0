@@ -756,6 +756,86 @@ def test_backfill_api_routes_are_compatible() -> None:
     assert status.json()["lastResult"]["sessionId"] == session.id
 
 
+def test_auto_calendar_tick_skips_when_feishu_is_not_connected() -> None:
+    calendar_client = FakeCalendarClient(
+        [
+            {
+                "event_id": "event-auto",
+                "summary": "Alice 面试",
+                "start_time": {"timestamp": "1783000000"},
+            }
+        ]
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        calendar_client=calendar_client,
+    )
+
+    status = asyncio.run(service.run_auto_calendar_sync_tick())
+
+    assert status["enabled"] is True
+    assert status["running"] is False
+    assert status["intervalMs"] >= 60_000
+    assert status["lastError"] == "飞书未授权，跳过自动日历同步"
+    assert calendar_client.calls == []
+
+
+def test_auto_backfill_tick_processes_due_candidates_with_limit() -> None:
+    store = InMemoryInterviewStore()
+    first = _auto_backfill_candidate(store, "first", end_time=1_783_003_000)
+    second = _auto_backfill_candidate(store, "second", end_time=1_783_003_100)
+    third = _auto_backfill_candidate(store, "third", end_time=1_783_003_200)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient("候选人完整回答了 Agent 项目"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: 1_783_004_000,
+    )
+
+    status = asyncio.run(service.run_auto_backfill_tick(max_per_tick=2, max_attempts=3))
+
+    assert status["enabled"] is True
+    assert status["running"] is False
+    assert status["maxPerTick"] == 2
+    assert status["maxAttempts"] == 3
+    assert [item["sessionId"] for item in status["lastProcessed"]] == [
+        first.id,
+        second.id,
+    ]
+    assert all(item["status"] == "needs_review" for item in status["lastProcessed"])
+    assert status["pendingCount"] == 1
+    assert status["inFlightSessionIds"] == []
+    assert store.get(first.id).status == "needs_review"
+    assert store.get(second.id).status == "needs_review"
+    assert store.get(third.id).status == "prepared"
+
+
+def test_interview_center_schedulers_start_and_stop_background_ticks() -> None:
+    async def run_scheduler_once() -> InterviewCenterService:
+        service = InterviewCenterService(
+            repository=ResumeRepository.in_memory([_resume_record()]),
+            store=InMemoryInterviewStore(),
+            calendar_client=FakeCalendarClient([]),
+            now=lambda: 1_783_004_000,
+        )
+        service.start_schedulers(
+            initial_calendar_delay=0.01,
+            initial_backfill_delay=0.01,
+        )
+        await asyncio.sleep(0.05)
+        await service.stop_schedulers()
+        return service
+
+    service = asyncio.run(run_scheduler_once())
+
+    assert service.calendar_sync.last_error == "飞书未授权，跳过自动日历同步"
+    assert service.backfill_status()["lastRunAt"]
+    assert service.scheduler_running is False
+
+
 def test_review_confirm_and_logs_api_routes_are_compatible() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
@@ -1389,4 +1469,25 @@ def _backfill_session(store: InMemoryInterviewStore) -> Any:
         payload={"isInterviewLike": True},
     )
     session.end_time = 1_783_003_600
+    return store.save(session)
+
+
+def _auto_backfill_candidate(
+    store: InMemoryInterviewStore,
+    suffix: str,
+    *,
+    end_time: int,
+) -> Any:
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name=f"Alice {suffix}",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": f"Alice {suffix} 面试"},
+    )
+    session.status = "prepared"
+    session.end_time = end_time
+    session.feishu_doc = {
+        "documentId": f"doc-{suffix}",
+        "url": f"https://example.feishu.cn/docx/doc-{suffix}",
+    }
     return store.save(session)
