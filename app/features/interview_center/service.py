@@ -259,6 +259,7 @@ class InterviewCenterService:
             auto_prepare_limit=auto_prepare_limit,
             source="manual",
         )
+        result = await self._sync_bitable_resume_images(result)
         if auto_prepare:
             result = await self._auto_prepare_synced_sessions(
                 result,
@@ -270,6 +271,94 @@ class InterviewCenterService:
         """Return calendar sync status for old-compatible endpoints."""
 
         return self.calendar_sync.status()
+
+    async def _sync_bitable_resume_images(self, result: dict[str, Any]) -> dict[str, Any]:
+        bitable_resume_results = []
+        for session_payload in list(result.get("sessions") or []):
+            session = self.store.get(str(session_payload.get("id") or ""))
+            if session is None or not session.resume_id:
+                continue
+            resume = self._load_resume(session.resume_id)
+            if resume is None:
+                bitable_resume_results.append(
+                    {
+                        "sessionId": session.id,
+                        "skipped": True,
+                        "reason": "resume_not_found",
+                    }
+                )
+                continue
+            resume_payload = _public_resume_payload(resume)
+            resume_pdf_path = _resume_pdf_path(resume_payload)
+            if not resume_pdf_path:
+                bitable_resume_results.append(
+                    {
+                        "sessionId": session.id,
+                        "skipped": True,
+                        "reason": "missing_resume_pdf_path",
+                    }
+                )
+                continue
+            try:
+                sync_result = await self.asset_sync.ensure_resume_image(
+                    session,
+                    resume_payload,
+                    resume_pdf_path=resume_pdf_path,
+                )
+                bitable_resume_results.append({"sessionId": session.id, **sync_result})
+                if sync_result.get("ok"):
+                    self.store.append_log(
+                        session.id,
+                        "info",
+                        "synced resume image to interview bitable",
+                        {
+                            "recordId": sync_result.get("recordId"),
+                            "fileToken": (
+                                sync_result.get("resumeImage", {}).get("fileToken")
+                                if isinstance(sync_result.get("resumeImage"), dict)
+                                else ""
+                            ),
+                        },
+                    )
+            except Exception as exc:
+                payload = getattr(exc, "payload", {}) or {}
+                bitable_resume_results.append(
+                    {
+                        "sessionId": session.id,
+                        "ok": False,
+                        "error": str(exc) or "sync_resume_image_failed",
+                        "payload": payload,
+                    }
+                )
+                self.store.append_log(
+                    session.id,
+                    "warn",
+                    str(exc) or "sync_resume_image_failed",
+                    payload,
+                )
+        range_payload = result.get("range") or {}
+        next_result = {
+            **result,
+            "bitableResumeResults": bitable_resume_results,
+            "sessions": self.list_sessions(
+                start_time=int(range_payload.get("startTime") or 0),
+                end_time=int(range_payload.get("endTime") or 0),
+            ),
+        }
+        if self.calendar_sync.last_result is not None:
+            self.calendar_sync.last_result = {
+                **self.calendar_sync.last_result,
+                "bitableResumeSynced": sum(
+                    1 for item in bitable_resume_results if item.get("ok")
+                ),
+                "bitableResumeSkipped": sum(
+                    1 for item in bitable_resume_results if item.get("skipped")
+                ),
+                "bitableResumeErrors": sum(
+                    1 for item in bitable_resume_results if item.get("ok") is False
+                ),
+            }
+        return next_result
 
     async def _auto_prepare_synced_sessions(
         self,
@@ -763,6 +852,25 @@ def _public_resume_payload(resume: Resume) -> dict[str, Any]:
     if resume.phone or resume.phone_key:
         payload["phone"] = resume.phone or resume.phone_key
     return payload
+
+
+def _resume_pdf_path(resume: dict[str, Any]) -> str:
+    nested_payload = resume.get("payload") if isinstance(resume.get("payload"), dict) else {}
+    for source in (resume, nested_payload):
+        for key in (
+            "resumePdfPath",
+            "resume_pdf_path",
+            "pdfPath",
+            "pdf_path",
+            "filePath",
+            "file_path",
+            "downloadPath",
+            "download_path",
+        ):
+            value = source.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return ""
 
 
 def _normalize_review_decision(value: str) -> str:

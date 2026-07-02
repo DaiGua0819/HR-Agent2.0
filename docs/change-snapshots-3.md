@@ -551,3 +551,34 @@
 - 风险 / 待确认：
   - 本轮补齐的是旧 `autoPrepare` 编排；旧 Node 在日历同步中还会尝试把已绑定候选人的简历图同步到 Bitable 并返回 `bitableResumeResults`，当前 FastAPI 结果保留该字段但尚未在 sync 阶段触发真实简历图同步，后续还需要继续审计并补齐。
   - 自动准备复用现有 `prepare_session()`，真实飞书 Docx 写入仍受 dry-run 和 OAuth token 配置保护；端到端联调时需要用有效飞书授权验证真实文档创建。
+
+---
+
+### 快照 0065：补齐面试中心日历同步简历图回写
+
+- 修改时间：2026-07-03 01:31:06 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在日历同步中会对“面试类 + 已绑定简历”的 session 调用 `syncSessionResumeImageToBitable()`，把候选人简历长截图写入对应飞书面试表，并在响应中返回 `bitableResumeResults`。
+  - 当前 FastAPI `CalendarSyncService.sync()` 仅保留了空的 `bitableResumeResults` 字段，实际没有触发 `BitableAssetSync.ensure_resume_image()`，也没有在 `/sync/status` 的 `lastResult` 中提供 `bitableResumeSynced / bitableResumeSkipped / bitableResumeErrors` 统计。
+  - 该行为依赖简历库 payload 中的本地 PDF 路径和 `InterviewCenterService` 已组合的 `asset_sync`，因此继续在 service 编排层补齐，不让底层日历同步服务直接依赖渲染/飞书资产写入。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_calendar_sync_syncs_bound_resume_image_to_bitable()`，覆盖同步日历后已自动绑定简历的 session 会调用 `asset_sync.ensure_resume_image()`，返回 `bitableResumeResults`，并更新 `lastResult` 的 Bitable 简历图统计。
+  - `InterviewCenterService.sync_calendar()` 在底层日历同步后、自动准备前执行 `_sync_bitable_resume_images()`，贴近旧 Node 的执行顺序。
+  - 新增 `_resume_pdf_path()`，按 `resumePdfPath / resume_pdf_path / pdfPath / pdf_path / filePath / file_path / downloadPath / download_path` 从简历顶层或嵌套 `payload` 中解析本地 PDF 路径；缺失时返回 `missing_resume_pdf_path` 跳过结果，避免伪造文件或触发无意义渲染。
+  - Bitable 简历图同步成功时写 session 日志；异常时返回 `{ok: false, error, payload}` 并记录 warn 日志，保持旧响应形状。
+- 验证结果：
+  - 红灯确认：新增 Bitable 简历图同步测试首次运行 1 failed，原因为 `result["bitableResumeResults"]` 仍为空数组。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k syncs_bound_resume_image`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：45 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：58 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：292 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 当前同步阶段会在简历 payload 没有本地 PDF 路径时安全跳过；真实线上数据需要继续确认智联/51job 同步入库后的字段是否统一落在这些路径键中。
+  - 真实 Bitable 写入仍依赖飞书配置、OAuth/tenant token、字段列表和 dry-run 设置；本轮用 FakeAssetSync 验证编排，真实 multipart 上传和字段过滤已由前置 Bitable client/asset sync 测试覆盖，仍需端到端联调。

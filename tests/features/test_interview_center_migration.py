@@ -337,6 +337,51 @@ def test_calendar_sync_auto_prepare_generates_docs_for_matched_sessions() -> Non
     assert service.calendar_sync_status()["lastResult"]["prepared"] == 1
 
 
+def test_calendar_sync_syncs_bound_resume_image_to_bitable() -> None:
+    store = InMemoryInterviewStore()
+    asset_sync = FakeAssetSync()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory(
+            [
+                _resume_record(
+                    {
+                        "pdfPath": "alice.pdf",
+                    }
+                )
+            ]
+        ),
+        store=store,
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-bitable-resume",
+                    "summary": "Alice interview",
+                    "description": "phone 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+        asset_sync=asset_sync,
+    )
+
+    result = asyncio.run(service.sync_calendar(calendar_id="primary", auto_prepare=False))
+
+    assert result["bitableResumeResults"] == [
+        {
+            "sessionId": result["sessions"][0]["id"],
+            "ok": True,
+            "recordId": "resume-image-record",
+        }
+    ]
+    assert asset_sync.calls == ["resume_image"]
+    assert asset_sync.resume_image_calls[0]["resumePdfPath"] == "alice.pdf"
+    status = service.calendar_sync_status()["lastResult"]
+    assert status["bitableResumeSynced"] == 1
+    assert status["bitableResumeSkipped"] == 0
+    assert status["bitableResumeErrors"] == 0
+
+
 def test_interview_center_sync_api_routes_are_compatible() -> None:
     service = InterviewCenterService(
         repository=ResumeRepository.in_memory([_resume_record()]),
@@ -1464,6 +1509,24 @@ class FakeEvaluationGenerator:
 class FakeAssetSync:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.resume_image_calls: list[dict[str, Any]] = []
+
+    async def ensure_resume_image(
+        self,
+        session: Any,
+        resume: dict[str, Any],
+        *,
+        resume_pdf_path: str,
+    ) -> dict[str, Any]:
+        self.calls.append("resume_image")
+        self.resume_image_calls.append(
+            {
+                "sessionId": session.id,
+                "resumeId": resume.get("id"),
+                "resumePdfPath": resume_pdf_path,
+            }
+        )
+        return {"ok": True, "recordId": "resume-image-record"}
 
     async def ensure_interview_record_image(
         self,
@@ -1518,15 +1581,17 @@ class FakeTenantTokenProvider:
         return "tenant-token"
 
 
-def _resume_record() -> ResumeRecord:
+def _resume_record(payload: dict[str, Any] | None = None) -> ResumeRecord:
+    resume_payload = {
+        "name": "Alice",
+        "phone": "13800138000",
+        "job_type": "AI应用开发实习生",
+        "rawText": "Alice 13800138000 Python LLM Agent",
+    }
+    resume_payload.update(payload or {})
     return ResumeRecord(
         id="resume-1",
-        payload={
-            "name": "Alice",
-            "phone": "13800138000",
-            "job_type": "AI应用开发实习生",
-            "rawText": "Alice 13800138000 Python LLM Agent",
-        },
+        payload=resume_payload,
         phone_key="13800138000",
         job_type="AI应用开发实习生",
         match_score=90,
