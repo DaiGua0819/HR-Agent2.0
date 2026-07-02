@@ -13,6 +13,7 @@ from app.domain.conversation.models import ConversationSession
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
+from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.calendar_sync import (
     CalendarClientProtocol,
     CalendarSyncService,
@@ -74,6 +75,11 @@ class InterviewCenterService:
         self.doc_client = doc_client or MockInterviewDocClient()
         self.question_generator = InterviewQuestionGenerator(llm or LLMClient())
         self.output_dir = Path(output_dir or PROJECT_ROOT / "data" / "interview_center")
+        self.asset_sync = BitableAssetSync(
+            store=self.store,
+            bitable=self.bitable,
+            output_dir=self.output_dir,
+        )
         self.feedback_backfill = FeedbackBackfillService(store=self.store, bitable=self.bitable)
         self.calendar_sync = CalendarSyncService(
             store=self.store,

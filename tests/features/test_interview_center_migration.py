@@ -9,7 +9,9 @@ import pytest
 from app.control_plane.main import create_app
 from app.domain.resume.models import ResumeRecord
 from app.domain.resume.repository import ResumeRepository
+from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.feishu.bitable import (
+    MockFeishuBitableClient,
     find_existing_bitable_record,
     pick_existing_bitable_fields,
 )
@@ -299,6 +301,135 @@ def test_prepare_session_api_route_is_compatible() -> None:
     assert response.json()["session"]["feishuDoc"]["documentId"] == "doc-1"
 
 
+def test_bitable_asset_sync_skips_existing_resume_attachment() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True},
+    )
+    table_id = "tblJTlyRbGdsbJmM"
+    bitable = MockFeishuBitableClient(
+        records={
+            table_id: [
+                {
+                    "record_id": "rec-1",
+                    "fields": {
+                        "姓名": "Alice",
+                        "候选人联系电话": "13800138000",
+                        "简历": [{"file_token": "existing-token"}],
+                    },
+                }
+            ]
+        }
+    )
+    sync = BitableAssetSync(store=store, bitable=bitable)
+
+    result = asyncio.run(
+        sync.ensure_resume_image(
+            session,
+            _resume_payload(),
+            resume_pdf_path="resume.pdf",
+        )
+    )
+
+    assert result["skipped"] is True
+    assert result["reason"] == "bitable_resume_field_already_has_attachment"
+    assert result["recordId"] == "rec-1"
+    assert not any(call["method"] == "upload_file" for call in bitable.calls)
+    assert store.get(session.id).bitable_record_id == "rec-1"
+
+
+def test_bitable_asset_sync_uploads_resume_image_and_creates_record() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True},
+    )
+    bitable = MockFeishuBitableClient()
+    sync = BitableAssetSync(
+        store=store,
+        bitable=bitable,
+        resume_image_renderer=lambda **_: "alice_resume.png",
+    )
+
+    result = asyncio.run(
+        sync.ensure_resume_image(
+            session,
+            _resume_payload(),
+            resume_pdf_path="resume.pdf",
+        )
+    )
+
+    create_call = next(call for call in bitable.calls if call["method"] == "create_record")
+    assert result["ok"] is True
+    assert create_call["tableId"] == "tblJTlyRbGdsbJmM"
+    assert create_call["fields"]["姓名"] == "Alice"
+    assert create_call["fields"]["简历"] == [{"file_token": "mock-file-token:alice_resume.png"}]
+    assert store.get(session.id).bitable_resume_image["field"] == "简历"
+
+
+def test_bitable_asset_sync_guards_default_table_when_route_does_not_match() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="完全无关岗位",
+        payload={"isInterviewLike": True},
+    )
+    bitable = MockFeishuBitableClient()
+    sync = BitableAssetSync(store=store, bitable=bitable, default_table_id="default-table")
+
+    result = asyncio.run(
+        sync.ensure_resume_image(
+            session,
+            {**_resume_payload(), "jobType": "完全无关岗位", "job_type": "完全无关岗位"},
+            resume_pdf_path="resume.pdf",
+        )
+    )
+
+    assert result["skipped"] is True
+    assert result["reason"] == "job_not_in_bitable_table"
+    assert bitable.calls == []
+
+
+def test_bitable_asset_sync_uses_second_interview_evaluation_field() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True},
+    )
+    session.interview_evaluation = {"round": "second", "summary": "建议复试通过"}
+    store.save(session)
+    bitable = MockFeishuBitableClient()
+    sync = BitableAssetSync(store=store, bitable=bitable)
+
+    result = asyncio.run(
+        sync.ensure_evaluation_document(
+            session,
+            _resume_payload(),
+            {
+                "documentId": "doc-second",
+                "url": "https://example.feishu.cn/docx/doc-second",
+                "title": "复试评价",
+            },
+            second_round=True,
+        )
+    )
+
+    create_call = next(call for call in bitable.calls if call["method"] == "create_record")
+    assert result["ok"] is True
+    assert "复试结果评价" in create_call["fields"]
+    assert "技能评价" not in create_call["fields"]
+    saved = store.get(session.id)
+    assert saved.bitable_second_interview_evaluation_document["field"] == "复试结果评价"
+
+
 def test_sqlite_store_upserts_calendar_event_by_feishu_event_id(tmp_path: Path) -> None:
     database = tmp_path / "interview.sqlite"
     store = SQLiteInterviewStore(database)
@@ -462,3 +593,13 @@ def _resume_record() -> ResumeRecord:
         match_score=90,
         updated_at="2026-01-01",
     )
+
+
+def _resume_payload() -> dict[str, Any]:
+    return {
+        "id": "resume-1",
+        "name": "Alice",
+        "phone": "13800138000",
+        "jobType": "AI应用开发实习生",
+        "job_type": "AI应用开发实习生",
+    }

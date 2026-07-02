@@ -146,3 +146,33 @@
 - 风险 / 待确认：
   - 当前 `MockInterviewDocClient` 只提供 dry-run/mock 文档元数据；真实飞书 Docx 创建、正文块写入和失败补写会在后续 OAuth/status 与文档客户端完善阶段接入。
   - 当前 prepare 不自动更新 Bitable 记录；Task 5 会接入资产同步和目标表记录写入。
+
+---
+
+### 快照 0052：迁移面试中心 Bitable 资产同步服务
+
+- 修改时间：2026-07-02 23:03:51 +08:00
+- 修改原因：
+  - 旧面试中心会把简历长截图、面试记录图、技能评价/复试评价文档写回路由后的飞书多维表，并在已有附件或文档链接时跳过重复写入；当前 Python 版缺少这条独立资产同步边界。
+  - 旧系统会先按候选人手机号/姓名查找记录，并在岗位与目标表不匹配时跳过，避免写错表或重复创建记录。
+  - 后续 backfill 需要复用统一资产同步服务，把面试评价产物回写到 Bitable。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/asset_sync.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `BitableAssetSync`，提供 `ensure_resume_image()`、`ensure_interview_record_image()`、`ensure_evaluation_document()`。
+  - 资产同步复用 Task 2 的 `resolve_bitable_target()` 和 `find_existing_bitable_record()`，支持已有附件跳过、歧义姓名跳过、默认表岗位 guard、上传后创建/更新记录。
+  - 支持字段：`简历`、`面试记录`、`技能评价`、`复试结果评价`；复试场景写入 `复试结果评价` 并保存到 `bitable_second_interview_evaluation_document`。
+  - `InterviewCenterService` 组合 `BitableAssetSync`，供后续 backfill/prepare 流程复用。
+  - 新增测试覆盖已有简历附件跳过、上传后创建记录、默认表岗位不匹配拦截、复试评价字段选择。
+- 验证结果：
+  - 红灯确认：新增测试初次运行失败，原因是 `app.features.interview_center.asset_sync` 模块不存在。
+  - 修复后：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：19 passed，1 个既有 StarletteDeprecationWarning。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：32 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/asset_sync.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/asset_sync.py app/features/interview_center/service.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前真实 Bitable 字段过滤仍以 Task 2 helper 为边界，`BitableAssetSync` 直接使用当前 client 写入；后续真实 HTTP client 接入字段列表后需要在写入路径统一调用字段过滤。
+  - 当前资产同步服务已组合到主服务，但 backfill 尚未调用；Task 6 会把评价生成、source 收集、resume update 与 Bitable 资产同步串起来。
