@@ -878,3 +878,25 @@
 - 风险 / 待确认：
   - 空 body 复核会默认通过，这是旧 Node 行为；如果后续需要强制人工填写决策，应新增受控入口，而不是改变旧兼容 API。
   - 本次仍未替代真实浏览器 smoke，后续需要继续在 18080 本地服务里验证旧前端点击复核/确认按钮的请求形态。
+---
+
+### 快照 0076：本地 18080 面试中心冒烟验证
+
+- 修改时间：2026-07-03 03:16:16 +08:00
+- 修改原因：
+  - 迁移计划要求在测试通过后启动本地 18080 服务，验证旧面试中心页面、静态资源和核心旧 API 在真实 FastAPI/SQLite 运行态下可用。
+  - 需要确认近期补齐的默认时间窗、空 body 同步/回灌/复核兼容不只在 TestClient 中成立，也能通过本地 HTTP 服务正常响应。
+  - 本次验证必须使用临时 SQLite，避免影响真实 `data/` 运行库、浏览器 profile 或日志。
+- 修改文件：
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 使用 `%TEMP%\hr-agent-interview-center-smoke-18080.sqlite` 作为 `DATABASE_PATH`，预置 1 条 smoke 简历和 2 条已结束超过 10 分钟、可人工复核的面试会话。
+  - 使用 `CONTROL_PLANE_PORT=18080`、`DRY_RUN=true` 启动 `run_control_plane.py`，验证完成后停止 uvicorn 进程并删除临时 SQLite 文件。
+  - 首次 smoke 使用未来面试时间，触发既有“过早回灌保护”，`backfill-source` 返回空 source；复核后确认这是 smoke 数据不符合旧保护窗口导致，随后把临时会话改成已结束超过 10 分钟并重新验证通过。
+- 验证结果：
+  - 本地服务启动：`Uvicorn running on http://127.0.0.1:18080`。
+  - HTTP smoke 共 15 项通过：`/health`、`/interview-center.html`、`/assets/interview-center/app.js`、`/api/interview-center/sessions`、`items` alias、`/sessions/{id}`、`/backfill-source`、`/logs`、无 body `/review`、无 body `/confirm`、`/sync/status`、`/backfill/status`、`/feishu/status`、`/feishu/auth-url`、`/feishu/disconnect`。
+  - 服务清理：已停止本轮 uvicorn 进程，18080 端口无监听项；临时 SQLite 文件已删除。
+- 风险 / 待确认：
+  - 本轮 smoke 验证的是 dry-run/临时库下的本地 HTTP 运行态，未连接真实飞书 OAuth、真实日历事件、真实 Docx 写入和真实 Bitable 上传。
+  - 后续还需要在有授权的环境中完成真实飞书 OAuth、calendar event、Docx、VC/妙记和 Bitable 写入的端到端联调，才能把总迁移目标标记完成。
