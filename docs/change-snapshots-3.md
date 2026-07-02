@@ -1032,3 +1032,36 @@
 - 风险 / 待确认：
   - 本轮只覆盖当前 FastAPI service 已知会暴露到旧面试中心前端的错误码；真实联调中如果出现旧 Node 其它中文错误分支，还需要继续补充映射。
   - 当前映射集中在路由兼容层，业务层仍保留内部错误码，便于测试和后端逻辑继续用稳定 code 判断。
+
+---
+
+### 快照 0081：恢复旧提前回灌授权保护
+
+- 修改时间：2026-07-03 04:19:01 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在面试结束后 10 分钟保护期内，只允许 `force=true`、`earlyOverride=true` 且一次性授权 token 有效时提前回灌；授权无效时返回 403，避免误读尚未完成的会议纪要。
+  - 当前 FastAPI backfill 服务忽略了 `force` 参数，导致只要 `earlyOverride=true` 且 token 正确，即使没有 `force=true` 也会绕过 10 分钟保护并执行回灌。
+  - 当前旧 API 错误响应层只固定调用处传入的状态码，无法带出 backfill 领域错误自己的 403 状态和旧 Node 的 `availableAt/endTime` 错误 payload。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `BackfillError(ValueError)`，在保留内部错误码的同时携带旧 API 所需的 `status_code` 和 `payload`。
+  - `_enforce_ten_minute_guard()` 恢复旧条件：提前回灌必须同时满足 `early_override` 和 `force`，且 token 未过期、未使用、未失败；无效授权返回 `early_backfill_override_forbidden` 和 403。
+  - 普通 10 分钟保护失败继续返回 `backfill_not_available`，并补齐旧 Node payload：`availableAt` 和 `endTime`。
+  - `_legacy_error_response()` 现在会读取异常上的 `status_code/payload`，旧前端可以拿到旧协议中的 403 与保护窗口信息。
+  - 修正一个已有日志断言抖动：资产同步失败用例改为查找本 session 日志中存在 `asset_sync_failed` warn，而不是依赖最新一条日志排序。
+- 验证结果：
+  - 红灯确认：新增提前回灌测试首次运行 2 failed；错误 token 场景实际返回 409，缺少 `force` 场景实际返回 200，证明当前实现偏离旧 Node 保护逻辑。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "invalid_old_early_override or requires_force_for_old_early_override"`：2 passed，61 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 边界验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill_api or backfill_blocks_until_ten_minutes or old_one_off_early_override"`：6 passed，57 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：63 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：76 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：310 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮恢复的是提前回灌授权保护和错误响应形状，不替代真实飞书会议/妙记来源读取的端到端联调。
+  - 普通 10 分钟保护的 `error` 文案仍使用当前映射中的稳定中文短句；旧 Node 会追加本地化预计可回灌时间，当前通过 `availableAt/endTime` 提供机器可读时间信息。

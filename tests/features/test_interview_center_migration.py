@@ -1092,7 +1092,11 @@ def test_backfill_keeps_evaluation_when_asset_sync_fails() -> None:
     assert result["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
     assert result["session"]["lastBackfillError"] == ""
     assert repository.get("resume-1").payload["interviewEvaluation"]["sessionId"] == session.id
-    assert store.list_logs(session.id, limit=1)[0]["level"] == "warn"
+    logs = store.list_logs(session.id, limit=10)
+    assert any(
+        item["level"] == "warn" and item["message"] == "asset_sync_failed"
+        for item in logs
+    )
 
 
 def test_review_session_updates_session_and_resume_evaluation() -> None:
@@ -1175,6 +1179,87 @@ def test_backfill_api_accepts_empty_body_like_old_node() -> None:
     assert backfilled.json()["ok"] is True
     assert backfilled.json()["session"]["status"] == "needs_review"
     assert backfilled.json()["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
+
+
+def test_backfill_api_rejects_invalid_old_early_override_with_403() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    original_status = session.status
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="不应读取"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={
+                "force": True,
+                "earlyOverride": True,
+                "earlyOverrideToken": "wrong-token",
+            },
+        )
+
+    assert backfilled.status_code == 403
+    assert backfilled.json() == {
+        "ok": False,
+        "error": "提前回灌未授权或授权已使用，已停止避免误读会议纪要",
+    }
+    assert store.get(session.id).status == original_status
+
+
+def test_backfill_api_requires_force_for_old_early_override_token() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    original_status = session.status
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="不应读取"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={
+                "earlyOverride": True,
+                "earlyOverrideToken": "override-secret",
+            },
+        )
+
+    assert backfilled.status_code == 409
+    assert backfilled.json()["ok"] is False
+    assert backfilled.json()["error"] == "面试结束后 10 分钟才可读取纪要"
+    assert backfilled.json()["availableAt"] == session.end_time + 600
+    assert backfilled.json()["endTime"] == session.end_time
+    assert store.get(session.id).status == original_status
 
 
 def test_old_interview_center_errors_use_error_payload_for_frontend() -> None:

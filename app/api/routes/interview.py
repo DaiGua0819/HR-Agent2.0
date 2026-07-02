@@ -115,9 +115,14 @@ def _invite_service(request: Request) -> InterviewInviteService:
 
 
 def _legacy_error_response(status_code: int, exc: Exception) -> JSONResponse:
+    resolved_status = int(getattr(exc, "status_code", status_code) or status_code)
+    content: dict[str, object] = {"ok": False, "error": _legacy_error_message(exc)}
+    payload = getattr(exc, "payload", None)
+    if isinstance(payload, dict):
+        content.update(payload)
     return JSONResponse(
-        status_code=status_code,
-        content={"ok": False, "error": _legacy_error_message(exc)},
+        status_code=resolved_status,
+        content=content,
     )
 
 
@@ -132,6 +137,7 @@ _LEGACY_INTERVIEW_ERROR_MESSAGES = {
     "interview_session_resume_required": "该日程尚未绑定候选人",
     "bound_resume_not_found": "绑定的候选人简历不存在",
     "backfill_not_available": "面试结束后 10 分钟才可读取纪要",
+    "early_backfill_override_forbidden": "提前回灌未授权或授权已使用，已停止避免误读会议纪要",
     "no_valid_interview_record": "未读取到有效面试记录",
 }
 

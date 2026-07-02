@@ -34,6 +34,21 @@ AUTO_BACKFILL_MAX_ATTEMPTS = max(
 )
 
 
+class BackfillError(ValueError):
+    """Backfill domain error with old API response metadata."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        status_code: int = 409,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.status_code = status_code
+        self.payload = payload or {}
+
+
 class EvaluationGeneratorProtocol(Protocol):
     """Generate structured evaluation from interview transcript text."""
 
@@ -114,12 +129,12 @@ class BackfillService:
     ) -> dict[str, Any]:
         """Backfill one interview session and return an API-compatible payload."""
 
-        _ = force
         session = self._require_session(session_id)
         if not session.resume_id:
             raise ValueError("interview_session_resume_required")
         allow_early_backfill = self._enforce_ten_minute_guard(
             session,
+            force=force,
             early_override=early_override,
             early_override_token=early_override_token,
         )
@@ -344,6 +359,7 @@ class BackfillService:
         self,
         session: InterviewSession,
         *,
+        force: bool,
         early_override: bool,
         early_override_token: str,
     ) -> bool:
@@ -352,13 +368,24 @@ class BackfillService:
         available_at = _backfill_available_at(session)
         if int(self.now()) >= available_at:
             return False
-        if early_override and _is_early_backfill_override_allowed(
+        if early_override and force and _is_early_backfill_override_allowed(
             session,
             early_override_token,
             now_seconds=int(self.now()),
         ):
             return True
-        raise ValueError("backfill_not_available")
+        if early_override and force:
+            raise BackfillError(
+                "early_backfill_override_forbidden",
+                status_code=403,
+            )
+        raise BackfillError(
+            "backfill_not_available",
+            payload={
+                "availableAt": available_at,
+                "endTime": session.end_time or 0,
+            },
+        )
 
     def _save_failed(
         self,
