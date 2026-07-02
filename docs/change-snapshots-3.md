@@ -1494,3 +1494,35 @@
 - 风险 / 待确认：
   - 本轮只恢复 review/confirm 的旧备注解析与裁剪；backfill 的 `earlyOverrideReason`/`earlyOverrideToken` 仍可继续按旧 Node 的更多类型转换细节逐项补齐。
   - `_legacy_js_string()` 已覆盖常见 JSON 值；极端对象/数组输入按旧 JavaScript 字符串化近似处理，用于兼容旧入口，不代表新 API 推荐传入复杂类型。
+
+---
+
+### 快照 0096：恢复提前回灌理由旧字符串与裁剪
+
+- 修改时间：2026-07-03 06:43:25 +08:00
+- 修改原因：
+  - 旧 Node `backfill` 入口对 `earlyOverrideReason` / `earlyOverrideToken` 使用 `body.xxx || ""`，后续理由保存通过 `clipText(..., 300)` 做 JavaScript 字符串化、trim 和超长追加 `...`。
+  - 当前 FastAPI backfill 入口直接 `str(raw_body.get(...) or "")`，对象会保存成 Python 字典字符串；服务层理由保存也只是 `[:300]`，没有旧 `clipText` 的 trim 和省略号语义。
+  - 该差异会让旧页面或脚本传入非字符串理由时，审计记录与旧服务不一致，也会让超长理由裁剪格式不同。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `_legacy_backfill_request()` 的 `earlyOverrideReason` 和 `earlyOverrideToken` 改用 `_legacy_js_string()`，贴齐旧 Node 的常见 JSON 值字符串化。
+  - backfill 提前回灌的 requested / used / failed reason 保存改用本地 `_legacy_clip_text(..., 300)`，恢复 trim、空值归空、超长追加 `...`。
+  - 新增 `test_backfill_api_uses_old_js_string_semantics_for_early_override_reason()`，覆盖对象理由保存为旧 JavaScript 的 `[object Object]`。
+  - 新增 `test_backfill_api_clips_early_override_reason_like_old_node_clip_text()`，覆盖带空格的 301 字符理由保存为前 300 字符加 `...`。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "early_override_reason_like_old_node or old_js_string_semantics_for_early_override_reason"` 首次 2 failed；对象理由实际保存为 `{'source': 'manual'}`，长理由保留前导空格且没有追加 `...`。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "early_override_reason_like_old_node or old_js_string_semantics_for_early_override_reason"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill"`：21 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：77 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：90 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：324 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复提前回灌理由和 token 的入口字符串化，以及 reason 保存裁剪；其它旧 Node 小型类型转换差异仍继续按路由逐项对照。
+  - `_legacy_clip_text()` 在 backfill 模块内保持局部实现，后续若多个模块继续需要旧 `clipText`，可以再在有测试覆盖后提取共享 helper。

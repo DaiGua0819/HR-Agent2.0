@@ -1664,6 +1664,86 @@ def test_backfill_api_persists_old_early_override_reason_from_body() -> None:
     assert override["usedAt"]
 
 
+def test_backfill_api_uses_old_js_string_semantics_for_early_override_reason() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "reason": "stored reason",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="early override meeting notes"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={
+                "force": True,
+                "earlyOverride": True,
+                "earlyOverrideToken": "override-secret",
+                "earlyOverrideReason": {"source": "manual"},
+            },
+        )
+
+    assert backfilled.status_code == 200
+    override = backfilled.json()["session"]["earlyBackfillOverride"]
+    assert override["reason"] == "[object Object]"
+    assert override["usedAt"]
+
+
+def test_backfill_api_clips_early_override_reason_like_old_node_clip_text() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "reason": "stored reason",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="early override meeting notes"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    reason = f"  {'r' * 301}  "
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={
+                "force": True,
+                "earlyOverride": True,
+                "earlyOverrideToken": "override-secret",
+                "earlyOverrideReason": reason,
+            },
+        )
+
+    assert backfilled.status_code == 200
+    override = backfilled.json()["session"]["earlyBackfillOverride"]
+    assert override["reason"] == ("r" * 300) + "..."
+
+
 def test_old_interview_center_errors_use_error_payload_for_frontend() -> None:
     store = InMemoryInterviewStore()
     session = store.create(

@@ -594,7 +594,10 @@ def _used_early_override_payload(
         "allowed": True,
         "usedAt": now_iso(),
         "availableAt": available_at,
-        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
+        "reason": _legacy_clip_text(
+            reason or override.get("reason") or "one_off_manual_override",
+            300,
+        ),
     }
 
 
@@ -615,7 +618,10 @@ def _requested_early_override_payload(
         "requestedAt": now_iso(),
         "requestedBeforeAvailableAt": available_at,
         "availableAt": available_at,
-        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
+        "reason": _legacy_clip_text(
+            reason or override.get("reason") or "one_off_manual_override",
+            300,
+        ),
     }
 
 
@@ -635,8 +641,20 @@ def _failed_early_override_payload(
         "allowed": True,
         "failedAt": now_iso(),
         "availableAt": available_at,
-        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
+        "reason": _legacy_clip_text(
+            reason or override.get("reason") or "one_off_manual_override",
+            300,
+        ),
     }
+
+
+def _legacy_clip_text(value: Any, max_length: int = 900) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > max_length:
+        return f"{text[:max_length]}..."
+    return text
 
 
 def _override_expires_at_seconds(value: Any) -> int:

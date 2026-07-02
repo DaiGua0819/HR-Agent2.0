@@ -177,8 +177,8 @@ async def _legacy_backfill_request(request: Request) -> InterviewBackfillRequest
     return InterviewBackfillRequest(
         force=_legacy_js_boolean(raw_body.get("force")),
         earlyOverride=_legacy_js_boolean(raw_body.get("earlyOverride")),
-        earlyOverrideReason=str(raw_body.get("earlyOverrideReason") or ""),
-        earlyOverrideToken=str(raw_body.get("earlyOverrideToken") or ""),
+        earlyOverrideReason=_legacy_js_string(raw_body.get("earlyOverrideReason")),
+        earlyOverrideToken=_legacy_js_string(raw_body.get("earlyOverrideToken")),
     )
 
 
