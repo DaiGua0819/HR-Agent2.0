@@ -938,6 +938,28 @@ def test_backfill_persists_evaluation_updates_resume_and_calls_assets() -> None:
     assert asset_sync.calls == ["interview_record_image", "evaluation_document"]
 
 
+def test_backfill_keeps_evaluation_when_asset_sync_fails() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    repository = ResumeRepository.in_memory([_resume_record()])
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FailingAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=True))
+
+    assert result["session"]["status"] == "needs_review"
+    assert result["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
+    assert result["session"]["lastBackfillError"] == ""
+    assert repository.get("resume-1").payload["interviewEvaluation"]["sessionId"] == session.id
+    assert store.list_logs(session.id, limit=1)[0]["level"] == "warn"
+
+
 def test_review_session_updates_session_and_resume_evaluation() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
@@ -1740,6 +1762,16 @@ class FakeAssetSync:
         _ = session, resume, document, second_round
         self.calls.append("evaluation_document")
         return {"ok": True}
+
+
+class FailingAssetSync(FakeAssetSync):
+    async def ensure_interview_record_image(
+        self,
+        session: Any,
+        resume: dict[str, Any],
+    ) -> dict[str, Any]:
+        _ = session, resume
+        raise RuntimeError("asset_sync_failed")
 
 
 class FakeOAuthClient:

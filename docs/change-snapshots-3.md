@@ -733,3 +733,32 @@
 - 风险 / 待确认：
   - 本轮补齐的是已有一次性授权 token 的消费与 usedAt 回写；旧系统中生成 override token 的入口如果后续仍需要开放，还需继续补对应 API/权限流程。
   - 失败时的 `failedAt` 标记仍需要结合真实失败路径继续审计，避免没有授权却被误标记。
+---
+
+### 快照 0071：隔离回灌资产同步失败
+
+- 修改时间：2026-07-03 02:34:50 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在成功生成并保存 `interviewEvaluation` 后，会分别尝试把面试记录截图和技能评估文档同步到 Bitable；这些资产同步失败只记录 warn，不会让已经成功的回灌整体失败。
+  - 当前 FastAPI 版本在 `BackfillService.backfill()` 保存面试评价后直接 await `_sync_assets()`，如果 Bitable/截图/文档同步链路抛错，会把已保存的回灌结果表现成接口失败，和旧逻辑不一致。
+  - 该行为需要保证候选人面试评价、简历库回写、`lastBackfillError` 清空这些核心结果优先生效，资产同步失败只进入 session warn 日志，便于后续重试或排查。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/backfill.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_backfill_keeps_evaluation_when_asset_sync_fails()`，模拟 `asset_sync.ensure_interview_record_image()` 抛出 `asset_sync_failed`，覆盖回灌接口仍返回 `needs_review`、保留 `interviewEvaluation`、清空 `lastBackfillError`、写回简历库并记录 warn 日志。
+  - 新增 `FailingAssetSync` 测试替身，复用现有 `FakeAssetSync` 的其他行为，只让面试记录图片同步阶段失败，避免测试同时覆盖多个异常来源。
+  - `BackfillService.backfill()` 在保存 session 后对 `_sync_assets()` 加 try/except，失败时追加 warn 日志并重新读取 session，继续返回已保存的回灌结果。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，原因为 `RuntimeError("asset_sync_failed")` 从 `_sync_assets()` 冒泡，证明当前实现会把资产同步失败当成回灌失败。
+  - 修正测试断言：聚焦用例通过，命令 `C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k asset_sync_fails`，结果 `1 passed, 50 deselected`，仅有既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`，结果 `51 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`，结果 `64 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`，结果 `All checks passed!`。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`，通过。
+  - 空白检查：`git diff --check` 无空白错误，仅有 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`，结果 `298 passed`，仅有既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本次只隔离回灌成功后的资产同步异常；如果未来要支持后台自动补偿失败的面试记录截图或评估文档，需要继续补充重试队列或人工重试入口。
+  - warn 日志目前记录异常字符串；真实 Bitable/Docx 错误若需要更细的错误码、recordId、fileToken 等诊断字段，可在联调后继续扩展日志 payload。

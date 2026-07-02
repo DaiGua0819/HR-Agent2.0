@@ -175,7 +175,15 @@ class BackfillService:
                     ),
                 }
             saved = self.store.save(session)
-            await self._sync_assets(saved, resume.model_dump(), interview_evaluation)
+            try:
+                await self._sync_assets(saved, resume.model_dump(), interview_evaluation)
+            except Exception as exc:
+                self.store.append_log(
+                    session.id,
+                    "warn",
+                    str(exc) or "sync_interview_assets_failed",
+                    {},
+                )
             saved = self.store.get(session.id) or saved
             self.store.append_log(
                 session.id,
