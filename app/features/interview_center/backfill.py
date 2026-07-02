@@ -143,7 +143,11 @@ class BackfillService:
         if resume_record is None:
             raise KeyError("bound_resume_not_found")
         if session.interview_evaluation and not force:
-            return {"session": session.to_dict()}
+            saved = await self._sync_existing_evaluation_document(
+                session,
+                Resume.from_record(resume_record).model_dump(),
+            )
+            return {"session": saved.to_dict()}
         if session.id in self.running:
             return {"session": session.to_dict()}
         self.running.add(session.id)
@@ -445,6 +449,46 @@ class BackfillService:
             document,
             second_round=second_round,
         )
+
+    async def _sync_existing_evaluation_document(
+        self,
+        session: InterviewSession,
+        resume: dict[str, Any],
+    ) -> InterviewSession:
+        if self.asset_sync is None:
+            return session
+        evaluation = session.interview_evaluation
+        second_round = str(evaluation.get("round") or "").lower() == "second"
+        existing_document = (
+            session.bitable_second_interview_evaluation_document
+            if second_round
+            else session.bitable_skill_evaluation_document
+        )
+        if existing_document.get("documentId"):
+            return session
+        document = {
+            "documentId": f"evaluation:{session.id}",
+            "title": evaluation.get("summary") or "技能评价",
+            "url": session.feishu_doc.get("url") or "",
+        }
+        try:
+            result = await self.asset_sync.ensure_evaluation_document(
+                session,
+                resume,
+                document,
+                second_round=second_round,
+            )
+        except Exception as exc:
+            self.store.append_log(
+                session.id,
+                "warn",
+                str(exc) or "sync_existing_evaluation_document_failed",
+                {},
+            )
+            return self.store.get(session.id) or session
+        if isinstance(result, dict) and isinstance(result.get("session"), dict):
+            return self.store.get(session.id) or session
+        return self.store.get(session.id) or session
 
 
 def _env_enabled(name: str) -> bool:

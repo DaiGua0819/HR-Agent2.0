@@ -1128,3 +1128,35 @@
 - 风险 / 待确认：
   - 本轮恢复的是旧 Node 的“不 force 不覆盖已有面评”保护；旧 Node 同时会尝试补同步缺失的 Bitable 评价文档，当前 FastAPI 仍需后续继续审计补同步链路是否完全等价。
   - 如果业务方需要在已有面评情况下强制重读会议纪要，仍可通过 `force=true` 走完整回灌链路。
+
+---
+
+### 快照 0084：补同步已有面评的评价文档
+
+- 修改时间：2026-07-03 04:43:17 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在 `session.interviewEvaluation && !force` 时不会重算面评，但如果当前轮次对应的 Bitable 评价文档字段缺失，会调用 `syncSessionSkillEvaluationDocumentToBitable()` 补同步评价文档后再返回 session。
+  - 上一轮 FastAPI 只恢复了“不 force 不覆盖已有面评”的早返回，导致缺失的 `bitableSkillEvaluationDocument` / `bitableSecondInterviewEvaluationDocument` 不会被补同步。
+  - 该行为会影响旧页面和飞书表格查看已有面评文档链接，属于面试中心迁移的旧行为缺口。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `BackfillService.backfill()` 在已有面评且 `force=false` 时改为调用 `_sync_existing_evaluation_document()`，再返回保存后的 session。
+  - 新增 `_sync_existing_evaluation_document()`：只补同步评价文档，不读取会议源、不调用评价生成器、不生成面试记录图；如果对应文档已存在则直接返回。
+  - 补同步失败时沿用旧 Node 容错思路，只写 warn 日志并返回现有 session，避免因为飞书/Bitable 写入失败影响已有面评展示。
+  - 更新回归测试为 `test_backfill_syncs_missing_evaluation_document_without_force_like_old_node()`，覆盖已有面评、缺评价文档、`force=false` 时只触发 `evaluation_document` 同步并保留原面评。
+  - 测试用 `FakeAssetSync.ensure_evaluation_document()` 现在模拟真实实现写回 session 的评价文档字段，便于断言 API 返回 payload。
+- 验证结果：
+  - 红灯确认：新增/调整测试首次运行失败，`asset_sync.calls` 为空，证明当前早返回没有补同步评价文档。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k syncs_missing_evaluation_document_without_force`：1 passed，64 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "backfill_persists_evaluation or backfill_keeps_evaluation or syncs_missing_evaluation_document or backfill_api or second_interview_evaluation_field"`：9 passed，56 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：65 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：78 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：312 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 当前轮次判断沿用评价 payload 中的 `round == "second"` 来选择复试评价字段；旧 Node 使用 `deriveInterviewRound({ session })`，后续仍可继续扩展为完全复用 session 阶段推导。
+  - 本轮验证使用 fake asset sync 和本地单测证明编排行为，真实 Bitable 字段权限和文档链接写入仍需在授权环境里端到端联调。

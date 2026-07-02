@@ -1099,7 +1099,7 @@ def test_backfill_keeps_evaluation_when_asset_sync_fails() -> None:
     )
 
 
-def test_backfill_returns_existing_evaluation_without_force_like_old_node() -> None:
+def test_backfill_syncs_missing_evaluation_document_without_force_like_old_node() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
     session.status = "needs_review"
@@ -1107,6 +1107,11 @@ def test_backfill_returns_existing_evaluation_without_force_like_old_node() -> N
         "summary": "已有面评",
         "humanReviewRequired": True,
         "sessionId": session.id,
+    }
+    session.feishu_doc = {
+        "documentId": "doc-existing",
+        "url": "https://example.feishu.cn/docx/doc-existing",
+        "title": "Alice 面试题",
     }
     store.save(session)
     repository = ResumeRepository.in_memory(
@@ -1131,7 +1136,13 @@ def test_backfill_returns_existing_evaluation_without_force_like_old_node() -> N
     assert repository.get("resume-1").payload["interviewEvaluation"]["summary"] == "已有面评"
     assert meeting_client.calls == 0
     assert evaluation_generator.calls == 0
-    assert asset_sync.calls == []
+    assert asset_sync.calls == ["evaluation_document"]
+    assert result["session"]["bitableSkillEvaluationDocument"]["field"] == "技能评价"
+    assert (
+        result["session"]["bitableSkillEvaluationDocument"]["documentId"]
+        == "evaluation:" + session.id
+    )
+    assert result["session"]["bitableSkillEvaluationDocument"]["url"] == session.feishu_doc["url"]
 
 
 def test_review_session_updates_session_and_resume_evaluation() -> None:
@@ -2237,9 +2248,28 @@ class FakeAssetSync:
         *,
         second_round: bool = False,
     ) -> dict[str, Any]:
-        _ = session, resume, document, second_round
+        _ = resume
         self.calls.append("evaluation_document")
-        return {"ok": True}
+        evaluation_document = {
+            "status": "synced",
+            "field": "复试结果评价" if second_round else "技能评价",
+            "recordId": session.bitable_record_id or "record-1",
+            "documentId": document.get("documentId") or "",
+            "url": document.get("url") or "",
+            "title": document.get("title") or "",
+        }
+        if second_round:
+            session.bitable_second_interview_evaluation_document = evaluation_document
+            result_key = "secondInterviewEvaluationDocument"
+        else:
+            session.bitable_skill_evaluation_document = evaluation_document
+            result_key = "skillEvaluationDocument"
+        return {
+            "ok": True,
+            "session": session.to_dict(),
+            result_key: evaluation_document,
+            "evaluationDocument": evaluation_document,
+        }
 
 
 class FailingAssetSync(FakeAssetSync):
