@@ -348,8 +348,8 @@ def test_zhilian_unread_filter_uses_trusted_click_when_dom_click_does_not_activa
     assert page.trusted_unread_clicks == 1
 
 
-def test_zhilian_unread_filter_does_not_click_again_when_already_active() -> None:
-    """未读筛选已选中时不能重复点击，避免把筛选切回全部。"""
+def test_zhilian_unread_filter_clicks_twice_when_already_active() -> None:
+    """处理前即使已在未读列表，也必须点击两次未读刷新并回到未读。"""
 
     page = UntrustedZhilianUnreadClickPage(
         conversations=[conversation("AI应用开发实习生", [{"sender": "other", "text": "你好"}])],
@@ -359,9 +359,9 @@ def test_zhilian_unread_filter_does_not_click_again_when_already_active() -> Non
     result = asyncio.run(select_unread_filter(page))
 
     assert result["selected"] is True
-    assert result["click"]["reason"] == "already_active"
+    assert result["clicksRequired"] == 2
     assert page.unread_selected is True
-    assert page.trusted_unread_clicks == 0
+    assert page.trusted_unread_clicks == 2
 
 
 def test_zhilian_unread_filter_does_not_treat_rows_as_success_when_trusted_click_fails() -> None:

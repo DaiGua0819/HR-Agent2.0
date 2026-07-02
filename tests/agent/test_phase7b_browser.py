@@ -20,8 +20,9 @@ from app.browser.read_once import dry_run_read_once
 from app.browser.selector_validation import detect_login_page, validate_platform_selectors
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
+from app.platforms.types import ConversationRef
 from app.platforms.zhilian import selectors as zhilian_selectors
-from scripts.platform_once_common import _health_check, _print_summary
+from scripts.platform_once_common import _health_check, _print_summary, _process_zhilian
 
 
 class TinyPage:
@@ -175,6 +176,42 @@ def test_zhilian_preflight_requires_unread_filter_click() -> None:
     assert any("unread filter not active" in item for item in missing)
 
 
+def test_zhilian_batch_reselects_unread_before_each_candidate(monkeypatch) -> None:
+    """智联批处理每次取下一个候选人前都必须强制切到未读列表。"""
+
+    class FakeRunner:
+        def __init__(self, adapter: object, **kwargs: object) -> None:
+            _ = kwargs
+            self.adapter = adapter
+
+        async def run_current(self) -> dict[str, object]:
+            conversation_id = getattr(self.adapter, "current_conversation_id", "")
+            return {
+                "conversation_id": conversation_id,
+                "session_id": f"session-{conversation_id}",
+                "candidate": {"name": conversation_id},
+                "messages": [{"sender": "other", "text": "你好"}],
+                "next_action": "wait",
+                "stage": "test",
+                "decision": {"action": "wait"},
+            }
+
+    adapter = BatchUnreadAdapter()
+    monkeypatch.setattr("scripts.platform_once_common.ConversationRunner", FakeRunner)
+
+    summaries = asyncio.run(
+        _process_zhilian(
+            adapter,
+            2,
+            conversation_repository=None,
+            artifact_store=None,
+        )
+    )
+
+    assert [item["conversationId"] for item in summaries] == ["conv-1", "conv-2"]
+    assert adapter.events == ["select", "find", "select", "find"]
+
+
 def test_boss_confirmed_live_allows_high_limit_for_full_unread_pass(monkeypatch) -> None:
     """用户确认 live 后，BOSS 单次处理不再限制 3/10 人。"""
 
@@ -295,6 +332,31 @@ class UnreadFilterFailedAdapter(PreflightAdapter):
             "click": {"selected": False},
             "fallbackRows": 0,
         }
+
+
+class BatchUnreadAdapter:
+    def __init__(self) -> None:
+        self.page = FakePage()
+        self.events: list[str] = []
+        self.refs = ["conv-1", "conv-2"]
+        self.current_conversation_id = ""
+
+    async def select_unread_filter(self) -> dict[str, object]:
+        self.events.append("select")
+        return {"selected": True}
+
+    async def find_next_unread_thread(
+        self,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> ConversationRef | None:
+        self.events.append("find")
+        excluded = exclude_ids or set()
+        for conversation_id in self.refs:
+            if conversation_id not in excluded:
+                self.current_conversation_id = conversation_id
+                return ConversationRef(Platform.ZHILIAN, "owner", conversation_id)
+        return None
 
 
 class SelectorCountPage:

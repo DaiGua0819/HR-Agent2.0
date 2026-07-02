@@ -8,10 +8,7 @@ from __future__ import annotations
 CHAT_URL = "https://rd6.zhaopin.com/app/im"
 RECOMMEND_URL = "https://rd6.zhaopin.com/app/recommend"
 
-UNREAD_FILTER = (
-    ".side-panel-header__checkbox, .km-checkbox, [role='checkbox'], "
-    "label, button,a,span,div,[role='button']"
-)
+UNREAD_FILTER = ".side-panel-header__checkbox.km-checkbox, .side-panel-header__checkbox"
 POSITION_FILTER = ".app-job-selector, .im-job-filter, [class*='job-filter']"
 ALL_POSITION_OPTION_TEXT = "全部职位"
 
