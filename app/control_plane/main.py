@@ -86,6 +86,10 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     async def index() -> FileResponse:
         return FileResponse(_frontend_file("index.html"))
 
+    @app.get("/interview-center.html")
+    async def interview_center() -> FileResponse:
+        return FileResponse(_frontend_file("interview-center.html"))
+
     @app.get("/app/{path:path}")
     async def app_entry(path: str) -> FileResponse:
         return FileResponse(_frontend_file("index.html"))

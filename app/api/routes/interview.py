@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import require_session_payload
@@ -363,14 +365,47 @@ async def feishu_auth_url(request: Request) -> dict[str, object]:
     return _service(request).oauth().auth_url_payload()
 
 
-@router.get("/api/interview-center/feishu/oauth/callback")
-async def feishu_oauth_callback(code: str, state: str, request: Request) -> dict[str, object]:
+@router.get("/api/interview-center/feishu/oauth/callback", response_model=None)
+async def feishu_oauth_callback(
+    code: str,
+    state: str,
+    request: Request,
+) -> dict[str, object] | HTMLResponse:
     """Old interview-center Feishu OAuth callback endpoint."""
 
     try:
-        return await _service(request).oauth().handle_callback(code=code, state=state)
+        result = await _service(request).oauth().handle_callback(code=code, state=state)
     except ValueError as exc:
+        if not _wants_json(request):
+            return _feishu_callback_failure_html(str(exc), status_code=400)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if _wants_json(request):
+        return result
+    return _feishu_callback_success_html()
+
+
+def _wants_json(request: Request) -> bool:
+    return "application/json" in request.headers.get("accept", "").lower()
+
+
+def _feishu_callback_success_html() -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><meta charset=\"utf-8\"><title>飞书授权成功</title>"
+        "<script>location.replace('/interview-center.html?feishu=connected')</script>"
+        "<p>飞书授权成功，正在返回面试中心...</p>",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _feishu_callback_failure_html(message: str, *, status_code: int) -> HTMLResponse:
+    safe_message = escape(message, quote=False)
+    return HTMLResponse(
+        "<!doctype html><meta charset=\"utf-8\"><title>飞书授权失败</title>"
+        f"<p>飞书授权失败：{safe_message}</p>"
+        '<p><a href="/interview-center.html">返回面试中心</a></p>',
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/api/interview-center/feishu/status")

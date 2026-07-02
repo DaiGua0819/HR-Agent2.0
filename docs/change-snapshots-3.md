@@ -484,3 +484,40 @@
   - 清理验证：18080 服务已关闭，临时 SQLite 数据库已删除。
 - 风险 / 待确认：
   - 本轮 smoke 使用空临时库和当前本地飞书配置验证路由形状；真实 OAuth token、真实日历事件、Docx、VC/妙记、Bitable 写入仍需在有授权的环境里做端到端联调。
+---
+
+### 快照 0063：迁移面试中心前端入口与 OAuth HTML 回跳
+
+- 修改时间：2026-07-03 01:16:04 +08:00
+- 修改原因：
+  - 旧 Node 面试中心前端依赖 `/interview-center.html` 作为可直接打开的页面入口，并通过 `/assets/interview-center/*` 加载拆分后的脚本与样式；当前 FastAPI 版本只有占位 HTML 且未暴露该页面入口。
+  - 旧飞书 OAuth callback 面向浏览器默认返回 HTML，并在授权成功后跳回 `/interview-center.html?feishu=connected`；当前 FastAPI callback 默认返回 JSON，会导致旧页面授权完成后不能按原流程回到面试中心。
+  - 仍需保留测试和 API 调用方使用 `Accept: application/json` 时的 JSON callback 行为，避免影响已有接口契约。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `app/control_plane/main.py`
+  - `frontend/interview-center.html`
+  - `frontend/interview-center/api.js`
+  - `frontend/interview-center/state.js`
+  - `frontend/interview-center/app.js`
+  - `frontend/interview-center/styles.css`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 将旧面试中心前端结构迁入 `frontend/interview-center.html`，并将资源路径调整为 FastAPI 静态挂载下的 `/assets/interview-center/*`。
+  - 从旧 Node 项目迁入 `api.js`、`state.js`、`app.js`、`styles.css`，保留旧页面的日历流、工作区、手动绑定、准备问题、回灌和复核交互入口。
+  - `create_app()` 新增 `GET /interview-center.html`，返回迁移后的页面文件；现有 `/assets` 静态挂载继续负责脚本和样式。
+  - `/api/interview-center/feishu/oauth/callback` 改为 `Accept: application/json` 时返回 JSON；浏览器默认请求时返回旧前端兼容 HTML，成功后执行 `location.replace('/interview-center.html?feishu=connected')`，失败时显示返回面试中心链接。
+  - 路由显式设置 `response_model=None`，避免 FastAPI 将 `dict | HTMLResponse` 解析为 Pydantic response model。
+- 验证结果：
+  - 红灯确认：新增前端入口与旧 OAuth HTML callback 测试首次运行 2 failed，原因分别是 callback 返回 `application/json` 而非 HTML、`/interview-center.html` 返回 404。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "old_html_redirect or frontend_page"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：43 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：56 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/api/routes/interview.py app/control_plane/main.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/api/routes/interview.py app/control_plane/main.py tests/features/test_interview_center_migration.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：290 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮验证覆盖页面文件和静态资源可访问性，但尚未在真实浏览器中完成旧面试中心 UI 的端到端点击验收；后续需要结合真实飞书授权、真实日历事件、Docx、VC/妙记和 Bitable 写入做完整联调。
+  - 前端资源为旧 Node 页面机械迁入，后续如继续收敛到 FastAPI 新前端体系，需要再检查全局样式冲突、缓存版本号策略和旧 API 字段使用情况。

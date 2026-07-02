@@ -1,10 +1,111 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="utf-8" />
-    <title>Interview Center</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>面试中心 - 招聘智能体</title>
+    <link rel="stylesheet" href="/assets/interview-center/styles.css?v=20260703-migration" />
   </head>
   <body>
-    <!-- Phase 0 占位：Phase 3 迁移面试中心前端契约。 -->
+    <main class="interview-shell">
+      <header class="interview-topbar">
+        <div class="title-block">
+          <p>Interview Center</p>
+          <h1>面试中心</h1>
+        </div>
+        <div class="top-actions">
+          <span class="connection-pill" id="connectionPill">飞书未检测</span>
+          <button class="ghost-btn" type="button" id="backHomeBtn">返回首页</button>
+          <button class="ghost-btn" type="button" id="disconnectBtn" hidden>断开飞书</button>
+          <button class="primary-btn" type="button" id="connectBtn">连接我的飞书日历</button>
+          <button class="primary-btn sync-btn" type="button" id="syncBtn" disabled>同步未来14天</button>
+        </div>
+      </header>
+
+      <section class="status-strip" id="statusStrip">
+        <div>
+          <strong id="metricTotal">0</strong>
+          <span>面试日程</span>
+        </div>
+        <div>
+          <strong id="metricMatched">0</strong>
+          <span>已绑定</span>
+        </div>
+        <div>
+          <strong id="metricPrepared">0</strong>
+          <span>已准备</span>
+        </div>
+        <div>
+          <strong id="metricBackfill">0</strong>
+          <span>待复核</span>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <aside class="panel calendar-panel">
+          <div class="panel-head">
+            <div>
+              <p>Feishu Calendar</p>
+              <h2>日历面试流</h2>
+            </div>
+            <div class="panel-tools">
+              <div class="date-range-filter" aria-label="面试日期范围筛选">
+                <input id="dateStartFilter" type="date" aria-label="开始日期" />
+                <span>至</span>
+                <input id="dateEndFilter" type="date" aria-label="结束日期" />
+                <button class="ghost-btn small" type="button" id="applyDateFilterBtn">应用</button>
+              </div>
+              <button class="ghost-btn small" type="button" id="refreshSessionsBtn">刷新</button>
+              <select id="statusFilter" aria-label="面试状态筛选">
+                <option value="">全部状态</option>
+                <option value="needs_confirmation">需确认</option>
+                <option value="matched">已绑定</option>
+                <option value="prepared">已准备</option>
+                <option value="prepared_local">本地准备</option>
+                <option value="backfilling">回灌中</option>
+                <option value="backfill_failed">回灌失败</option>
+                <option value="needs_review">待复核</option>
+                <option value="completed">已完成</option>
+              </select>
+            </div>
+          </div>
+          <div class="event-list" id="eventList">
+            <div class="empty-state">连接飞书后同步近期面试日程</div>
+          </div>
+        </aside>
+
+        <div
+          class="column-resizer"
+          data-resizer="calendar-workspace"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整日历和工作区宽度"
+          title="拖拽调整宽度"
+        ></div>
+
+        <section class="panel workspace-panel">
+          <div class="panel-head">
+            <div>
+              <p>Interview Workspace</p>
+              <h2 id="workspaceTitle">面试工作区</h2>
+            </div>
+            <span class="status-badge" id="workspaceStatus">未选择</span>
+          </div>
+          <div class="workspace-actions" id="workspaceActions">
+            <button class="primary-btn" type="button" id="prepareBtn" disabled>生成问题并同步飞书</button>
+            <button class="ghost-btn" type="button" id="openDocBtn" disabled>打开飞书文档</button>
+            <button class="primary-btn" type="button" id="backfillBtn" disabled>读取纪要并回灌</button>
+            <button class="ghost-btn" type="button" id="confirmBtn" disabled>确认评估</button>
+          </div>
+          <div class="workspace-body" id="workspaceBody">
+            <div class="empty-state large">从左侧选择一个面试日程</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/assets/interview-center/api.js?v=20260703-migration"></script>
+    <script src="/assets/interview-center/state.js?v=20260703-migration"></script>
+    <script src="/assets/interview-center/app.js?v=20260703-migration"></script>
   </body>
 </html>

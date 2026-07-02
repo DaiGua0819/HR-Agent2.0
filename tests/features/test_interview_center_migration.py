@@ -921,6 +921,7 @@ def test_feishu_oauth_callback_saves_token(monkeypatch: pytest.MonkeyPatch) -> N
         response = client.get(
             "/api/interview-center/feishu/oauth/callback",
             params={"code": "code-1", "state": "state-1"},
+            headers={"accept": "application/json"},
         )
 
     assert response.status_code == 200
@@ -928,6 +929,47 @@ def test_feishu_oauth_callback_saves_token(monkeypatch: pytest.MonkeyPatch) -> N
     assert response.json()["connected"] is True
     assert store.get_token()["accessToken"] == "user-access"
     assert store.get_token()["userInfo"]["open_id"] == "ou_1"
+
+
+def test_feishu_oauth_callback_defaults_to_old_html_redirect() -> None:
+    store = InMemoryInterviewStore()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        oauth_client=FakeOAuthClient(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/interview-center/feishu/oauth/callback",
+            params={"code": "code-1", "state": "state-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "location.replace('/interview-center.html?feishu=connected')" in response.text
+    assert store.get_token()["accessToken"] == "user-access"
+
+
+def test_interview_center_frontend_page_and_assets_are_served() -> None:
+    app = create_app()
+    with TestClient(app) as client:
+        page = client.get("/interview-center.html")
+        style = client.get("/assets/interview-center/styles.css")
+        api_script = client.get("/assets/interview-center/api.js")
+        app_script = client.get("/assets/interview-center/app.js")
+
+    assert page.status_code == 200
+    assert "面试中心 - 招聘智能体" in page.text
+    assert "/assets/interview-center/styles.css" in page.text
+    assert "/assets/interview-center/api.js" in page.text
+    assert style.status_code == 200
+    assert ".interview-shell" in style.text
+    assert api_script.status_code == 200
+    assert "/api/interview-center/feishu/status" in api_script.text
+    assert app_script.status_code == 200
+    assert "runAction(\"正在绑定候选人\"" in app_script.text
 
 
 def test_feishu_status_and_disconnect_use_stored_token() -> None:
