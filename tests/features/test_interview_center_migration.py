@@ -809,6 +809,45 @@ def test_backfill_blocks_until_ten_minutes_after_interview_end() -> None:
         asyncio.run(service.backfill_session(session.id))
 
 
+def test_backfill_allows_old_one_off_early_override_token() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "reason": "manual emergency",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="提前回灌授权测试"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+
+    result = asyncio.run(
+        service.backfill_session(
+            session.id,
+            force=True,
+            early_override=True,
+            early_override_token="override-secret",
+        )
+    )
+
+    override = result["session"]["earlyBackfillOverride"]
+    assert result["session"]["status"] == "needs_review"
+    assert override["allowed"] is True
+    assert override["usedAt"]
+    assert override["availableAt"] == session.end_time + 600
+    assert override["reason"] == "manual emergency"
+
+
 def test_list_sessions_clears_premature_backfill_from_session_and_resume() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from os import getenv
 from typing import Any, Protocol
 
@@ -117,7 +118,7 @@ class BackfillService:
         session = self._require_session(session_id)
         if not session.resume_id:
             raise ValueError("interview_session_resume_required")
-        self._enforce_ten_minute_guard(
+        allow_early_backfill = self._enforce_ten_minute_guard(
             session,
             early_override=early_override,
             early_override_token=early_override_token,
@@ -165,6 +166,14 @@ class BackfillService:
             session.status = "needs_review"
             session.last_backfill_error = ""
             session.payload = {**session.payload, "backfilledAt": now_iso()}
+            if allow_early_backfill:
+                session.payload = {
+                    **session.payload,
+                    "earlyBackfillOverride": _used_early_override_payload(
+                        session,
+                        available_at=_backfill_available_at(session),
+                    ),
+                }
             saved = self.store.save(session)
             await self._sync_assets(saved, resume.model_dump(), interview_evaluation)
             saved = self.store.get(session.id) or saved
@@ -329,14 +338,18 @@ class BackfillService:
         *,
         early_override: bool,
         early_override_token: str,
-    ) -> None:
+    ) -> bool:
         if not session.end_time:
-            return
-        available_at = session.end_time + BACKFILL_DELAY_SECONDS
+            return False
+        available_at = _backfill_available_at(session)
         if int(self.now()) >= available_at:
-            return
-        if early_override and early_override_token == session.id:
-            return
+            return False
+        if early_override and _is_early_backfill_override_allowed(
+            session,
+            early_override_token,
+            now_seconds=int(self.now()),
+        ):
+            return True
         raise ValueError("backfill_not_available")
 
     def _save_failed(
@@ -403,3 +416,65 @@ def _bounded_int(value: int | None, default: int, minimum: int, maximum: int) ->
     if value is None:
         return default
     return max(minimum, min(int(value), maximum))
+
+
+def _backfill_available_at(session: InterviewSession) -> int:
+    base_time = int(session.end_time or session.start_time or 0)
+    return base_time + BACKFILL_DELAY_SECONDS if base_time else 0
+
+
+def _is_early_backfill_override_allowed(
+    session: InterviewSession,
+    token: str,
+    *,
+    now_seconds: int,
+) -> bool:
+    override = (
+        session.payload.get("earlyBackfillOverride")
+        if isinstance(session.payload.get("earlyBackfillOverride"), dict)
+        else {}
+    )
+    if token == session.id:
+        return True
+    if not override.get("allowed") or override.get("usedAt") or override.get("failedAt"):
+        return False
+    expected_token = str(override.get("token") or "").strip()
+    if not expected_token or expected_token != str(token or "").strip():
+        return False
+    expires_at = _override_expires_at_seconds(override.get("expiresAt"))
+    return not (expires_at and now_seconds > expires_at)
+
+
+def _used_early_override_payload(
+    session: InterviewSession,
+    *,
+    available_at: int,
+) -> dict[str, Any]:
+    override = (
+        dict(session.payload.get("earlyBackfillOverride"))
+        if isinstance(session.payload.get("earlyBackfillOverride"), dict)
+        else {}
+    )
+    return {
+        **override,
+        "allowed": True,
+        "usedAt": now_iso(),
+        "availableAt": available_at,
+        "reason": str(override.get("reason") or "one_off_manual_override")[:300],
+    }
+
+
+def _override_expires_at_seconds(value: Any) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, int | float):
+        number = int(value)
+        return number // 1000 if number > 10_000_000_000 else number
+    try:
+        normalized = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return int(parsed.timestamp())
+    except ValueError:
+        return 0

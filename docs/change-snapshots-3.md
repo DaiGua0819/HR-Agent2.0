@@ -703,3 +703,33 @@
 - 风险 / 待确认：
   - 本轮实现了读取 Bitable 阶段的旧 API 路径；真实飞书表字段如果存在更多阶段字段别名，仍需在端到端联调后继续扩展字段映射。
   - 当前 enrichment 会在有可解析 tableId 时读取 Bitable 记录；真实环境的分页读取、字段权限和接口限流已经由 Bitable client 负责，但仍需要带真实 OAuth/tenant 配置做联调确认。
+---
+
+### 快照 0070：兼容旧式提前回灌一次性授权
+
+- 修改时间：2026-07-03 02:25:18 +08:00
+- 修改原因：
+  - 旧 Node 面试中心支持 `earlyBackfillOverride.allowed/token/expiresAt/usedAt/failedAt` 一次性授权；在面试结束后 10 分钟保护期内，只有携带正确 token 且授权未过期、未使用、未失败时才允许强制回灌。
+  - 当前 FastAPI 版只接受 `earlyOverrideToken == session.id`，无法兼容旧数据里已经生成的一次性 override token，也不会在成功提前回灌后标记 `usedAt`。
+  - 旧前端会根据 `earlyBackfillOverride.usedAt + availableAt` 判断保护是否解除，因此成功提前回灌后必须回写该状态，避免后续列表保护把刚回灌的结果当作过早脏数据清掉。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/backfill.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_backfill_allows_old_one_off_early_override_token()`，覆盖 session payload 中已有 `earlyBackfillOverride.allowed=true`、正确 token、未来 `expiresAt` 时，未到 `endTime + 10 分钟` 仍可强制回灌。
+  - `BackfillService._enforce_ten_minute_guard()` 改为返回是否使用了提前授权；普通未到时间仍抛 `backfill_not_available`，保留原有阻止逻辑。
+  - 新增旧式授权校验：校验 `allowed`、`token`、`expiresAt`、`usedAt`、`failedAt`，并保留兼容 `earlyOverrideToken == session.id` 的旧 Python 临时行为。
+  - 提前授权成功回灌后，session payload 会写回 `earlyBackfillOverride.usedAt`、`availableAt` 和原有 `reason`，供列表保护和旧前端继续识别。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，原因为 `_enforce_ten_minute_guard()` 抛出 `backfill_not_available`，证明当前实现不兼容旧式 token。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k old_one_off_early_override_token`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：50 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：63 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：297 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮补齐的是已有一次性授权 token 的消费与 usedAt 回写；旧系统中生成 override token 的入口如果后续仍需要开放，还需继续补对应 API/权限流程。
+  - 失败时的 `failedAt` 标记仍需要结合真实失败路径继续审计，避免没有授权却被误标记。
