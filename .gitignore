@@ -13,6 +13,7 @@ data/*.sqlite-*
 data/diagnostics/
 data/downloads/
 data/chrome-profiles/
+data/sync_packages/
 data/scoring_regression_*
 data/uploads/
 data/profiles/
