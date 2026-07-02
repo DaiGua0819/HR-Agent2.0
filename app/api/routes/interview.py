@@ -377,7 +377,12 @@ async def feishu_oauth_callback(code: str, state: str, request: Request) -> dict
 async def feishu_status(request: Request) -> dict[str, object]:
     """Old interview-center Feishu connection status endpoint."""
 
-    return _service(request).oauth().status()
+    service = _service(request)
+    return {
+        "ok": True,
+        **service.oauth().status(),
+        "calendarSync": service.calendar_sync_status(),
+    }
 
 
 @router.post("/api/interview-center/feishu/disconnect")

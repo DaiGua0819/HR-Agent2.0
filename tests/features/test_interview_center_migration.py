@@ -952,9 +952,12 @@ def test_feishu_status_and_disconnect_use_stored_token() -> None:
         disconnected = client.post("/api/interview-center/feishu/disconnect")
         after = client.get("/api/interview-center/feishu/status")
 
+    assert before.json()["ok"] is True
     assert before.json()["connected"] is True
     assert before.json()["userInfo"]["name"] == "HR"
+    assert before.json()["calendarSync"]["enabled"] is True
     assert disconnected.json()["ok"] is True
+    assert after.json()["ok"] is True
     assert after.json()["connected"] is False
 
 

@@ -457,3 +457,30 @@
 - 风险 / 待确认：
   - 自动 scheduler 已在 FastAPI lifespan 中启停；真实环境仍需用有效飞书 OAuth token 观察自动日历同步和自动回灌的端到端效果。
   - 当前自动日历 tick 遵循旧逻辑，在未授权时只更新 `lastError` 并跳过，不会写入日志；如果运营侧需要可见日志，再单独补充。
+
+---
+
+### 快照 0062：修复面试中心飞书状态响应并完成 18080 Smoke
+
+- 修改时间：2026-07-03 01:02:14 +08:00
+- 修改原因：
+  - 本地 18080 HTTP smoke 发现 `GET /api/interview-center/feishu/status` 虽返回 200，但响应只包含 OAuth status，缺少旧 Node 响应里的 `ok: true` 和 `calendarSync`，旧前端无法统一按 `ok` 判断状态，也拿不到日历同步状态。
+  - 旧 Node `handleStatus()` 返回 `{ ok: true, ...feishu.getStatus(), calendarSync: calendarSyncStatusPayload() }`，FastAPI 版需要补齐同样形状。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 扩展 `test_feishu_status_and_disconnect_use_stored_token()`，要求 `/feishu/status` 响应包含 `ok` 和 `calendarSync.enabled`。
+  - `GET /api/interview-center/feishu/status` 改为返回 `ok: true`、OAuth 状态和 `calendarSync` 状态。
+  - 使用临时 SQLite 数据库启动本地 18080 服务完成旧面试中心核心 HTTP smoke；完成后关闭服务并删除临时数据库。
+- 验证结果：
+  - 红灯确认：扩展后的 Feishu status 测试首次运行 1 failed，原因是响应缺少 `ok`。
+  - 新增切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "feishu_status_and_disconnect"`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：54 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app/api/routes/interview.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/api/routes/interview.py tests/features/test_interview_center_migration.py`：通过。
+  - 本地运行：用 `CONTROL_PLANE_PORT=18080` 和临时 `DATABASE_PATH=%TEMP%\hr-agent-interview-center-smoke-18080.sqlite` 启动服务，HTTP smoke 覆盖 `/health`、`/api/interview-center/sessions`、`/api/interview-center/sync/status`、`POST /api/interview-center/sync`、`/api/interview-center/backfill/status`、`/api/interview-center/feishu/auth-url`、`/api/interview-center/feishu/status`、`POST /api/interview-center/feishu/disconnect`，全部返回 200；其中 `/feishu/status` 已返回 `ok,configured,connected,userInfo,expiresAt,bitableRoutes,calendarSync`。
+  - 清理验证：18080 服务已关闭，临时 SQLite 数据库已删除。
+- 风险 / 待确认：
+  - 本轮 smoke 使用空临时库和当前本地飞书配置验证路由形状；真实 OAuth token、真实日历事件、Docx、VC/妙记、Bitable 写入仍需在有授权的环境里做端到端联调。
