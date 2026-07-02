@@ -157,6 +157,15 @@ class BackfillService:
             session.status = "backfilling"
             session.backfill_attempts += 1
             session.last_backfill_error = ""
+            if allow_early_backfill:
+                session.payload = {
+                    **session.payload,
+                    "earlyBackfillOverride": _requested_early_override_payload(
+                        session,
+                        available_at=_backfill_available_at(session),
+                        reason=early_override_reason,
+                    ),
+                }
             self.store.save(session)
             collected = await self.meeting_client.collect_sources(session)
             source = dict(collected.get("source") or {})
@@ -226,6 +235,15 @@ class BackfillService:
         except Exception as exc:
             message = str(exc) or "interview backfill failed"
             self.last_error = message
+            if allow_early_backfill:
+                session.payload = {
+                    **session.payload,
+                    "earlyBackfillOverride": _failed_early_override_payload(
+                        session,
+                        available_at=_backfill_available_at(session),
+                        reason=early_override_reason,
+                    ),
+                }
             failed = self._save_failed(
                 session,
                 source,
@@ -575,6 +593,47 @@ def _used_early_override_payload(
         **override,
         "allowed": True,
         "usedAt": now_iso(),
+        "availableAt": available_at,
+        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
+    }
+
+
+def _requested_early_override_payload(
+    session: InterviewSession,
+    *,
+    available_at: int,
+    reason: str = "",
+) -> dict[str, Any]:
+    override = (
+        dict(session.payload.get("earlyBackfillOverride"))
+        if isinstance(session.payload.get("earlyBackfillOverride"), dict)
+        else {}
+    )
+    return {
+        **override,
+        "allowed": True,
+        "requestedAt": now_iso(),
+        "requestedBeforeAvailableAt": available_at,
+        "availableAt": available_at,
+        "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
+    }
+
+
+def _failed_early_override_payload(
+    session: InterviewSession,
+    *,
+    available_at: int,
+    reason: str = "",
+) -> dict[str, Any]:
+    override = (
+        dict(session.payload.get("earlyBackfillOverride"))
+        if isinstance(session.payload.get("earlyBackfillOverride"), dict)
+        else {}
+    )
+    return {
+        **override,
+        "allowed": True,
+        "failedAt": now_iso(),
         "availableAt": available_at,
         "reason": str(reason or override.get("reason") or "one_off_manual_override")[:300],
     }

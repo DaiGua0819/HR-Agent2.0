@@ -1220,3 +1220,33 @@
 - 风险 / 待确认：
   - 本轮只恢复“已进入回灌流程后的异常落失败态”行为；会话不存在、未绑定简历、10 分钟保护等前置校验仍按旧 API 错误响应抛出。
   - 如果后续要完全复刻旧 Node 提前回灌失败时写入 `earlyBackfillOverride.failedAt`，需要增加单独测试后继续补齐。
+
+---
+
+### 快照 0087：保存提前回灌失败审计时间
+
+- 修改时间：2026-07-03 05:10:31 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在一次性提前回灌授权通过后，会先写入 `earlyBackfillOverride.requestedAt/requestedBeforeAvailableAt`；如果后续回灌流程抛错，则保存 `earlyBackfillOverride.failedAt`，保留人工提前读取会议纪要但失败的审计轨迹。
+  - 当前 FastAPI 上一轮只把生成异常落成 `backfill_failed`，但提前回灌失败时没有写 `failedAt`；旧页面和后续人工排查无法区分“授权未使用”和“授权已用但回灌失败”。
+  - 该审计字段是提前绕过 10 分钟保护时的重要安全边界，需要和旧服务保持一致。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 进入真实回灌流程且 `allow_early_backfill=true` 时，先写入 `_requested_early_override_payload()`，保留 `requestedAt/requestedBeforeAvailableAt/availableAt/reason`。
+  - 回灌流程异常失败时写入 `_failed_early_override_payload()`，保留旧 payload 并补充 `failedAt/availableAt/reason`；成功路径仍使用既有 `usedAt` 逻辑。
+  - 新增 `test_backfill_old_early_override_failure_records_failed_at()`，覆盖授权提前回灌、面评生成异常、返回失败 session 且审计 payload 写入 `failedAt`，同时不写 `usedAt`。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，`earlyBackfillOverride` 缺少 `failedAt`，证明当前实现没有保存提前回灌失败审计时间。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k old_early_override_failure_records_failed_at`：1 passed，67 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 提前回灌切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "old_one_off_early_override_token or old_early_override_failure or invalid_old_early_override or requires_force_for_old_early_override or old_early_override_reason or evaluation_generation_errors or backfill_fails_when_sources_are_empty"`：7 passed，61 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：68 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：81 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：315 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮恢复的是提前回灌失败审计字段；真实飞书会议/妙记来源读取失败时的端到端审计仍需在授权环境中联调确认。
+  - 旧 Node 空会议来源失败只保留 requested payload、不写 failedAt；当前实现保持这一点，未把空来源失败扩大为异常失败审计。

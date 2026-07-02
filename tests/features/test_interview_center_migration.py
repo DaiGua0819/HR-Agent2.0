@@ -983,6 +983,48 @@ def test_backfill_allows_old_one_off_early_override_token() -> None:
     assert override["reason"] == "manual emergency"
 
 
+def test_backfill_old_early_override_failure_records_failed_at() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.payload = {
+        **session.payload,
+        "earlyBackfillOverride": {
+            "allowed": True,
+            "token": "override-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+            "reason": "manual emergency",
+        },
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="提前读取面试记录"),
+        evaluation_generator=FailingEvaluationGenerator(ValueError("llm_json_parse_failed")),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+
+    result = asyncio.run(
+        service.backfill_session(
+            session.id,
+            force=True,
+            early_override=True,
+            early_override_token="override-secret",
+            early_override_reason="operator failed reason",
+        )
+    )
+
+    override = result["session"]["earlyBackfillOverride"]
+    assert result["session"]["status"] == "backfill_failed"
+    assert result["session"]["lastBackfillError"] == "llm_json_parse_failed"
+    assert override["allowed"] is True
+    assert override["failedAt"]
+    assert "usedAt" not in override
+    assert override["availableAt"] == session.end_time + 600
+    assert override["reason"] == "operator failed reason"
+
+
 def test_list_sessions_clears_premature_backfill_from_session_and_resume() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
