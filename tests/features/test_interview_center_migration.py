@@ -730,6 +730,75 @@ def test_old_action_routes_treat_malformed_json_body_as_empty_like_old_node() ->
     assert reviewed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
 
 
+def test_prepare_api_uses_old_js_boolean_force_semantics() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.question_set = {
+        "questions": [{"question": "old question", "focus": "old"}],
+        "jobType": session.job_type,
+    }
+    session.questions = list(session.question_set["questions"])
+    session.feishu_doc = {
+        "documentId": "old-doc",
+        "url": "https://example.feishu.cn/docx/old-doc",
+        "contentSynced": True,
+    }
+    store.save(session)
+    doc_client = FakeDocClient()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        prepared = client.post(
+            f"/api/interview-center/sessions/{session.id}/prepare",
+            json={"force": "false"},
+        )
+
+    assert prepared.status_code == 200
+    assert prepared.json()["session"]["feishuDoc"]["documentId"] == "doc-1"
+    assert len(doc_client.created) == 1
+
+
+def test_backfill_api_uses_old_js_boolean_force_semantics() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.interview_evaluation = {
+        "summary": "old evaluation",
+        "humanReviewRequired": True,
+    }
+    store.save(session)
+    meeting_client = FakeMeetingClient(text="候选人项目扎实，建议通过")
+    evaluation_generator = FakeEvaluationGenerator()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=meeting_client,
+        evaluation_generator=evaluation_generator,
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={"force": "false"},
+        )
+
+    assert backfilled.status_code == 200
+    assert backfilled.json()["session"]["status"] == "needs_review"
+    assert backfilled.json()["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
+    assert meeting_client.calls == 1
+    assert evaluation_generator.calls == 1
+
+
 def test_prepare_session_requires_bound_resume() -> None:
     store = InMemoryInterviewStore()
     session = store.create(resume_id="", candidate_name="", job_type="AI应用开发实习生")

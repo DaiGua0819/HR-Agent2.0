@@ -1429,3 +1429,35 @@
 - 风险 / 待确认：
   - 本轮只恢复 sync 入口的旧 JavaScript 参数语义；prepare/backfill 的 `Boolean(body.force)` 等字符串真值行为仍可继续按旧 Node 逐项补齐。
   - `autoPrepareLimit` 对非法真值字符串当前回退 12，避免把不可比较值传入 Python 服务；如果旧脚本依赖更怪异的 JS 比较行为，需要另行加用例。
+
+---
+
+### 快照 0094：恢复准备和回灌旧布尔参数语义
+
+- 修改时间：2026-07-03 06:23:57 +08:00
+- 修改原因：
+  - 旧 Node `prepare` 和 `backfill` 入口使用 `Boolean(body.force)`，`backfill` 还使用 `Boolean(body.earlyOverride)`；因此字符串 `"false"` 在旧服务中属于真值，会触发强制准备/强制回灌。
+  - 当前 FastAPI 通过 Pydantic 解析请求体，`"false"`、`"0"` 等字符串会被解析为 `False`，导致旧脚本或旧页面传入字符串时行为和旧 Node 不一致。
+  - 该差异会让本该强制重建问题文档或重新回灌面评的操作被静默当成非 force，尤其会保留旧文档或旧面评。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `_legacy_js_boolean()`，按 JavaScript `Boolean()` 语义处理 JSON 值：`None/false/0/""` 为 false，其它值为 true。
+  - 新增 `_legacy_prepare_request()` 和 `_legacy_backfill_request()`，使 prepare/backfill 旧入口按 Node 的 `Boolean(body.force)` / `Boolean(body.earlyOverride)` 解析。
+  - `prepare_session()` 和 `backfill_session()` 路由改用旧布尔解析；review/confirm 继续使用通用旧 body helper。
+  - 新增 `test_prepare_api_uses_old_js_boolean_force_semantics()`，覆盖 `force:"false"` 会强制重建飞书文档。
+  - 新增 `test_backfill_api_uses_old_js_boolean_force_semantics()`，覆盖 `force:"false"` 会重新采集会议来源并生成新面评，而不是早返回旧面评。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "old_js_boolean_force_semantics"` 首次 2 failed；prepare 返回旧 `old-doc`，backfill 状态保持 `created`，证明字符串 `"false"` 被当成了 false。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "old_js_boolean_force_semantics"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - Action 切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "old_js_boolean_force_semantics or malformed_json_body_as_empty or prepare_session_api_route_is_compatible or backfill_api_routes_are_compatible or backfill_api_requires_force_for_old_early_override_token"`：6 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：73 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：86 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：320 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复 prepare/backfill 的旧布尔解析；如果旧入口其它字段还存在 JavaScript 类型转换依赖，后续继续按旧 Node 逐项补齐。
+  - 对 JSON 对象/数组作为布尔字段的极端输入，当前按 JS 真值处理；这是为了贴齐旧入口，不代表新 API 推荐这样调用。

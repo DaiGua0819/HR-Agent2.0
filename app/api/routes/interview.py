@@ -167,6 +167,31 @@ async def _legacy_sync_request(request: Request) -> InterviewCenterSyncRequest:
     )
 
 
+async def _legacy_prepare_request(request: Request) -> InterviewPrepareRequest:
+    raw_body = await _legacy_json_object(request)
+    return InterviewPrepareRequest(force=_legacy_js_boolean(raw_body.get("force")))
+
+
+async def _legacy_backfill_request(request: Request) -> InterviewBackfillRequest:
+    raw_body = await _legacy_json_object(request)
+    return InterviewBackfillRequest(
+        force=_legacy_js_boolean(raw_body.get("force")),
+        earlyOverride=_legacy_js_boolean(raw_body.get("earlyOverride")),
+        earlyOverrideReason=str(raw_body.get("earlyOverrideReason") or ""),
+        earlyOverrideToken=str(raw_body.get("earlyOverrideToken") or ""),
+    )
+
+
+def _legacy_js_boolean(value: Any) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0:
+        return False
+    if isinstance(value, str) and value == "":
+        return False
+    return True
+
+
 _LEGACY_INTERVIEW_ERROR_MESSAGES = {
     "resume_not_found": "候选人简历不存在",
     "interview_session_not_found": "面试日程不存在",
@@ -308,7 +333,7 @@ async def prepare_session(
 ) -> dict[str, object]:
     """Old interview-center prepare-session endpoint."""
 
-    resolved = await _legacy_optional_body(request, InterviewPrepareRequest)
+    resolved = await _legacy_prepare_request(request)
     try:
         result = await _service(request).prepare_session(session_id, force=resolved.force)
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
@@ -325,7 +350,7 @@ async def backfill_session(
 ) -> dict[str, object]:
     """Old interview-center backfill endpoint."""
 
-    resolved = await _legacy_optional_body(request, InterviewBackfillRequest)
+    resolved = await _legacy_backfill_request(request)
     try:
         result = await _service(request).backfill_session(
             session_id,
