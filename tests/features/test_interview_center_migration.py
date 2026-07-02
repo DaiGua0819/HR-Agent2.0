@@ -943,6 +943,39 @@ def test_auto_calendar_tick_skips_when_feishu_is_not_connected() -> None:
     assert calendar_client.calls == []
 
 
+def test_auto_calendar_tick_runs_full_service_sync_when_connected() -> None:
+    store = InMemoryInterviewStore()
+    store.save_token({"accessToken": "user-access", "expiresAt": 999_999_999_999})
+    asset_sync = FakeAssetSync()
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record({"pdfPath": "alice.pdf"})]),
+        store=store,
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-auto-connected",
+                    "summary": "Alice interview",
+                    "description": "phone 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+        asset_sync=asset_sync,
+    )
+
+    status = asyncio.run(service.run_auto_calendar_sync_tick())
+
+    assert status["lastError"] == ""
+    assert status["lastResult"]["source"] == "auto"
+    assert status["lastResult"]["interviewLike"] == 1
+    assert status["lastResult"]["bitableResumeSynced"] == 1
+    assert status["lastResult"]["bitableResumeSkipped"] == 0
+    assert status["lastResult"]["bitableResumeErrors"] == 0
+    assert asset_sync.calls == ["resume_image"]
+    assert asset_sync.resume_image_calls[0]["resumePdfPath"] == "alice.pdf"
+
+
 def test_auto_backfill_tick_processes_due_candidates_with_limit() -> None:
     store = InMemoryInterviewStore()
     first = _auto_backfill_candidate(store, "first", end_time=1_783_003_000)

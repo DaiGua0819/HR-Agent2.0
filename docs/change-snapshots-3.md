@@ -642,3 +642,32 @@
 - 风险 / 待确认：
   - 本轮补齐的是列表/手动日历同步结果刷新时的清理保护；自动日历调度当前仍有部分编排直接走底层 `CalendarSyncService.sync()`，后续迁移需要继续审计它是否也应复用 service 层完整同步链路。
   - 清理简历库时沿用当前 `ResumeRepository.save()` 写回规范化 payload；真实线上旧 payload 若有更多面评字段别名，后续端到端联调时还需要按实际数据形状扩展。
+---
+
+### 快照 0068：自动日历同步复用完整面试中心编排
+
+- 修改时间：2026-07-03 02:07:15 +08:00
+- 修改原因：
+  - 旧 Node 的自动日历 tick 调用完整 `syncCalendarSessions(source="auto")`，因此自动同步也会执行候选人匹配、Bitable 简历图同步、过早回灌保护以及 `lastResult` 统计刷新。
+  - 当前 FastAPI 版 `run_auto_calendar_sync_tick()` 直接调用底层 `CalendarSyncService.sync()`，绕过了 `InterviewCenterService.sync_calendar()` 中已迁移的简历图回写和保护逻辑，导致自动 tick 的 `lastResult` 缺少 `bitableResumeSynced / Skipped / Errors`，也不会触发 `asset_sync.ensure_resume_image()`。
+  - 自动 tick 仍需保持旧行为中的 `autoPrepare=false`，不能因为复用 service 编排而自动创建面试题文档。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_auto_calendar_tick_runs_full_service_sync_when_connected()`，模拟飞书已授权、日历匹配到候选人且简历有本地 PDF 路径时，自动 tick 应触发一次 `resume_image` 同步并把 Bitable 简历图统计写入 `calendar_sync.lastResult`。
+  - `InterviewCenterService.sync_calendar()` 新增内部可选参数 `source` 和 `skip_if_running`，默认仍为手动同步；当底层同步返回 skipped 时直接返回，避免继续做 service 层后处理。
+  - `run_auto_calendar_sync_tick()` 改为调用 `self.sync_calendar(source="auto", auto_prepare=False, auto_prepare_limit=0, skip_if_running=True)`，让自动链路复用手动链路已迁移的 Bitable 简历图同步、过早回灌保护和统计刷新。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，原因为 `status["lastResult"]["bitableResumeSynced"]` 缺失，证明自动 tick 绕过了完整 service 编排。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k full_service_sync_when_connected`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：48 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：61 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：295 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮关闭了自动日历 tick 绕过 service 编排的问题，但真实飞书 OAuth、日历事件、Bitable 上传和本地 PDF 路径仍需在有授权环境下继续端到端联调。
+  - `sync_calendar()` 的 `source/skip_if_running` 目前作为 service 内部参数使用；若后续 API 需要暴露自动来源，应继续保持默认手动行为，避免影响现有 `/sync` 调用方。

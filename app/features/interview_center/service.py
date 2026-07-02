@@ -254,6 +254,8 @@ class InterviewCenterService:
         calendar_id: str = "primary",
         auto_prepare: bool = False,
         auto_prepare_limit: int = 12,
+        source: str = "manual",
+        skip_if_running: bool = False,
     ) -> dict[str, Any]:
         """Sync Feishu calendar events into interview-center sessions."""
 
@@ -261,8 +263,11 @@ class InterviewCenterService:
             calendar_id=calendar_id,
             auto_prepare=auto_prepare,
             auto_prepare_limit=auto_prepare_limit,
-            source="manual",
+            source=source,
+            skip_if_running=skip_if_running,
         )
+        if result.get("skipped"):
+            return result
         result = await self._sync_bitable_resume_images(result)
         if auto_prepare:
             result = await self._auto_prepare_synced_sessions(
@@ -480,7 +485,7 @@ class InterviewCenterService:
             self.calendar_sync.last_error = "飞书未授权，跳过自动日历同步"
             return self.calendar_sync.status()
         try:
-            await self.calendar_sync.sync(
+            await self.sync_calendar(
                 calendar_id="primary",
                 auto_prepare=False,
                 auto_prepare_limit=0,
