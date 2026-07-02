@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.backfill import (
+    BACKFILL_DELAY_SECONDS,
     BackfillService,
     EvaluationGeneratorProtocol,
 )
@@ -105,6 +108,7 @@ class InterviewCenterService:
             output_dir=self.output_dir,
         )
         self.feedback_backfill = FeedbackBackfillService(store=self.store, bitable=self.bitable)
+        self.now = now or time.time
         self.backfill_service = BackfillService(
             store=self.store,
             repository=self.repository,
@@ -343,6 +347,7 @@ class InterviewCenterService:
             "sessions": self.list_sessions(
                 start_time=int(range_payload.get("startTime") or 0),
                 end_time=int(range_payload.get("endTime") or 0),
+                protection_source="calendar_sync_result",
             ),
         }
         if self.calendar_sync.last_result is not None:
@@ -394,6 +399,7 @@ class InterviewCenterService:
             "sessions": self.list_sessions(
                 start_time=int(range_payload.get("startTime") or 0),
                 end_time=int(range_payload.get("endTime") or 0),
+                protection_source="calendar_sync_result",
             ),
         }
         if self.calendar_sync.last_result is not None:
@@ -698,6 +704,7 @@ class InterviewCenterService:
         start_time: int = 0,
         end_time: int = 0,
         status: str = "",
+        protection_source: str = "sessions_response",
     ) -> list[dict[str, Any]]:
         """列出会话。"""
 
@@ -711,6 +718,10 @@ class InterviewCenterService:
                 continue
             if session.payload.get("isInterviewLike") is False:
                 continue
+            session = self._protect_premature_backfill(
+                session,
+                source=protection_source,
+            )
             sessions.append(session.to_dict())
         return sessions
 
@@ -815,6 +826,126 @@ class InterviewCenterService:
             raise KeyError("interview_session_not_found")
         return session
 
+    def _protect_premature_backfill(
+        self,
+        session: InterviewSession,
+        *,
+        source: str,
+    ) -> InterviewSession:
+        guard = self._premature_backfill_guard(session)
+        if not guard:
+            return session
+        return self._clear_premature_backfill(session, guard, source=source)
+
+    def _premature_backfill_guard(
+        self,
+        session: InterviewSession,
+    ) -> dict[str, Any] | None:
+        if not session.interview_evaluation:
+            return None
+        available_at = _backfill_available_at(session)
+        override = (
+            session.payload.get("earlyBackfillOverride")
+            if isinstance(session.payload.get("earlyBackfillOverride"), dict)
+            else {}
+        )
+        if override.get("usedAt") and _safe_int(override.get("availableAt")) == available_at:
+            return None
+        now_seconds = int(self.now())
+        if available_at and now_seconds < available_at:
+            return {
+                "reason": "interview_not_finished",
+                "availableAt": available_at,
+                "nowSeconds": now_seconds,
+                "endTime": int(session.end_time or 0),
+            }
+        return None
+
+    def _clear_premature_backfill(
+        self,
+        session: InterviewSession,
+        guard: dict[str, Any],
+        *,
+        source: str,
+    ) -> InterviewSession:
+        stale_payload = {
+            "evaluation": dict(session.interview_evaluation),
+            "backfillSource": (
+                dict(session.backfill_source)
+                if session.backfill_source
+                else session.interview_evaluation.get("source")
+            ),
+            "ruleSuggestionIds": list(session.rule_suggestion_ids),
+            "backfilledAt": str(session.payload.get("backfilledAt") or ""),
+            "clearedAt": now_iso(),
+            "reason": guard["reason"],
+            "source": source,
+            "availableAt": guard["availableAt"],
+            "endTime": guard["endTime"],
+        }
+        try:
+            self._clear_resume_premature_backfill(session, stale_payload)
+        except Exception as exc:
+            self.store.append_log(
+                session.id,
+                "warn",
+                str(exc) or "clear_resume_premature_backfill_failed",
+                getattr(exc, "payload", {}) or {},
+            )
+        history = [
+            stale_payload,
+            *list(session.payload.get("staleInterviewEvaluationHistory") or []),
+        ][:5]
+        session.status = _status_without_backfill(session)
+        session.interview_evaluation = {}
+        session.backfill_source = {}
+        session.rule_suggestion_ids = []
+        session.last_backfill_error = ""
+        session.payload = {
+            **session.payload,
+            "backfillStartedAt": "",
+            "backfilledAt": "",
+            "staleInterviewEvaluation": stale_payload,
+            "staleInterviewEvaluationHistory": history,
+        }
+        saved = self.store.save(session)
+        self.store.append_log(
+            session.id,
+            "warn",
+            "cleared premature interview backfill result",
+            stale_payload,
+        )
+        return saved
+
+    def _clear_resume_premature_backfill(
+        self,
+        session: InterviewSession,
+        stale_payload: dict[str, Any],
+    ) -> bool:
+        if not session.resume_id:
+            return False
+        record = self.repository.get(session.resume_id)
+        if record is None:
+            return False
+        evaluation = record.payload.get("interviewEvaluation")
+        if not evaluation:
+            return False
+        if (
+            isinstance(evaluation, dict)
+            and evaluation.get("sessionId")
+            and evaluation.get("sessionId") != session.id
+        ):
+            return False
+        payload = dict(record.payload)
+        payload["staleInterviewEvaluation"] = {
+            **stale_payload,
+            "evaluation": evaluation,
+        }
+        payload["updatedAt"] = now_iso()
+        payload.pop("interviewEvaluation", None)
+        self.repository.save(Resume.from_record(replace(record, payload=payload)))
+        return True
+
 
 async def sync_interview_center() -> dict[str, Any]:
     """兼容旧 stub 的同步入口。"""
@@ -873,6 +1004,25 @@ def _resume_pdf_path(resume: dict[str, Any]) -> str:
     return ""
 
 
+def _backfill_available_at(session: InterviewSession) -> int:
+    base_time = int(session.end_time or session.start_time or 0)
+    return base_time + BACKFILL_DELAY_SECONDS if base_time else 0
+
+
+def _status_without_backfill(session: InterviewSession) -> str:
+    if session.feishu_doc.get("documentId"):
+        if session.feishu_doc.get("contentSynced") is False:
+            return "prepared_local"
+        return "prepared"
+    if session.question_set:
+        return "questions_generated"
+    if session.resume_id:
+        return "matched"
+    if session.status in {"backfilling", "backfill_failed", "needs_review", "completed"}:
+        return "synced"
+    return session.status or "synced"
+
+
 def _normalize_review_decision(value: str) -> str:
     decision = str(value or "").strip()
     if decision in {"passed", "rejected", "need_followup"}:
@@ -882,6 +1032,13 @@ def _normalize_review_decision(value: str) -> str:
 
 def _review_status_for_decision(decision: str) -> str:
     return "needs_review" if decision == "need_followup" else "completed"
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _default_bitable_client() -> BitableClientProtocol:

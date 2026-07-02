@@ -613,3 +613,32 @@
 - 风险 / 待确认：
   - 本轮先补齐 calendar-source 的后端兼容推导；旧 Node 还会在飞书 Bitable 配置齐全时读取表记录字段并用真实“面试阶段”覆盖 `stageText/source=bitable`，后续仍需继续迁移 Bitable 阶段读取与缓存。
   - 当前关键词推导覆盖旧页面的核心展示需求；真实线上阶段字段如果包含更多自定义文案，需要在 Bitable 阶段读取落地时一起扩展。
+---
+
+### 快照 0067：保护面试中心过早回灌结果
+
+- 修改时间：2026-07-03 01:56:46 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在返回 sessions 或日历同步结果前，会检查已经存在 `interviewEvaluation` 但面试尚未到 `endTime + 10 分钟` 的 session，并清理这些过早写入的回灌结果，防止旧页面把未结束面试误展示为待复核/已回灌。
+  - 当前 FastAPI 版只有 `backfill_session()` 前置十分钟保护，缺少列表/日历同步响应阶段的旧数据保护；如果历史数据或异常流程已经写入面评，前端仍会看到 `needs_review` 和活跃 `interviewEvaluation`。
+  - 清理逻辑需要同时移动 session 上的面评、回灌来源、规则建议和错误信息，并把绑定简历库中的同一条 `interviewEvaluation` 移到 stale 记录，避免简历详情继续读取过早面评。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_list_sessions_clears_premature_backfill_from_session_and_resume()`，覆盖未来结束时间的面试若已有面评，`list_sessions()` 会恢复为 `prepared`、清空活跃回灌字段，并写入 `staleInterviewEvaluation` / `staleInterviewEvaluationHistory`。
+  - `InterviewCenterService` 复用注入的 `now`，新增 premature guard、清理 session、清理绑定 resume payload 的编排逻辑；普通列表使用 `sessions_response` 来源，日历同步刷新结果使用 `calendar_sync_result` 来源。
+  - 清理后会重置 `interviewEvaluation`、`backfillSource`、`ruleSuggestionIds`、`lastBackfillError`、`backfilledAt`，并按旧逻辑根据文档/题集/简历绑定恢复为 `prepared`、`prepared_local`、`questions_generated`、`matched` 或 `synced`。
+  - 绑定简历库中属于同一 session 的 `interviewEvaluation` 会被移除，并保存在 `staleInterviewEvaluation.evaluation` 中；如果简历上已有其他 session 的面评则不会误删。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，原因为 `listed["status"]` 仍是 `needs_review`，证明当前实现缺少响应阶段清理。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k premature_backfill`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：47 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：60 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：294 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮补齐的是列表/手动日历同步结果刷新时的清理保护；自动日历调度当前仍有部分编排直接走底层 `CalendarSyncService.sync()`，后续迁移需要继续审计它是否也应复用 service 层完整同步链路。
+  - 清理简历库时沿用当前 `ResumeRepository.save()` 写回规范化 payload；真实线上旧 payload 若有更多面评字段别名，后续端到端联调时还需要按实际数据形状扩展。

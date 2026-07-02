@@ -768,6 +768,54 @@ def test_backfill_blocks_until_ten_minutes_after_interview_end() -> None:
         asyncio.run(service.backfill_session(session.id))
 
 
+def test_list_sessions_clears_premature_backfill_from_session_and_resume() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.feishu_doc = {"documentId": "doc-1", "contentSynced": True}
+    session.interview_evaluation = {
+        "sessionId": session.id,
+        "summary": "premature evaluation",
+        "source": {"source": "fake_meeting"},
+    }
+    session.backfill_source = {"source": "fake_meeting"}
+    session.rule_suggestion_ids = ["rule-1"]
+    session.last_backfill_error = "old error"
+    store.save(session)
+    repository = ResumeRepository.in_memory(
+        [_resume_record({"interviewEvaluation": dict(session.interview_evaluation)})]
+    )
+    service = InterviewCenterService(
+        repository=repository,
+        store=store,
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 599,
+    )
+
+    [listed] = service.list_sessions()
+
+    assert listed["status"] == "prepared"
+    assert listed["interviewEvaluation"] == {}
+    assert listed["backfillSource"] == {}
+    assert listed["ruleSuggestionIds"] == []
+    assert listed["lastBackfillError"] == ""
+    stale = listed["staleInterviewEvaluation"]
+    assert stale["reason"] == "interview_not_finished"
+    assert stale["source"] == "sessions_response"
+    assert stale["evaluation"]["summary"] == "premature evaluation"
+    assert listed["staleInterviewEvaluationHistory"][0] == stale
+    saved = store.get(session.id)
+    assert saved.interview_evaluation == {}
+    assert saved.backfill_source == {}
+    assert saved.rule_suggestion_ids == []
+    saved_resume = repository.get("resume-1")
+    assert "interviewEvaluation" not in saved_resume.payload
+    assert (
+        saved_resume.payload["staleInterviewEvaluation"]["evaluation"]["summary"]
+        == "premature evaluation"
+    )
+
+
 def test_backfill_fails_when_sources_are_empty() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)
