@@ -53,12 +53,15 @@ def test_authenticated_resume_library_uses_carh_brand_header() -> None:
 
     brand_mark_block = styles.split(".ts-brand-mark {", 1)[1].split("}", 1)[0]
     brand_img_block = styles.split(".ts-brand-mark img {", 1)[1].split("}", 1)[0]
+    brand_block = styles.split(".ts-brand {", 1)[1].split("}", 1)[0]
     brand_text_block = styles.split(".ts-brand strong {", 1)[1].split("}", 1)[0]
     user_name_block = styles.split(".user-card strong {", 1)[1].split("}", 1)[0]
 
+    assert "justify-content: center" in brand_block
     assert "background: #fff" in brand_mark_block
     assert "object-fit: contain" in brand_img_block
     assert "color: #2563eb" in brand_text_block
+    assert "text-align: center" in brand_text_block
     assert "font-weight: 900" in user_name_block
     assert "font-size: 16px" in user_name_block
     assert "border-radius: 999px" in user_name_block
@@ -108,33 +111,30 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     assert "min-height: 100vh" in shell_block
 
 
-def test_global_search_uses_command_style_realtime_results() -> None:
-    """The topbar search should behave like a command/autocomplete search component."""
+def test_global_search_removes_realtime_result_panel() -> None:
+    """The topbar search should not render the autocomplete result panel."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'class="ts-global-search ts-command-search"' in html
-    assert 'role="combobox"' in html
-    assert 'aria-controls="globalSearchResults"' in html
-    assert 'id="globalSearchResults"' in html
-    assert "function bindGlobalSearchAutocomplete()" in script
-    assert "function searchGlobalResumes(query)" in script
-    assert "function positionGlobalSearchResults()" in script
-    assert "document.body.appendChild(panel)" in script
-    assert "positionGlobalSearchResults()" in script
-    assert 'window.addEventListener("scroll", positionGlobalSearchResults, true)' in script
-    assert "function renderGlobalSearchResults(items, query)" in script
-    assert 'globalSearch.addEventListener("input"' in script
-    assert 'api(`/api/resumes?${params.toString()}`)' in script
-    assert 'page_size", "6"' in script
-    assert "openGlobalSearchResult" in script
-    assert "ts-command-search__panel" in styles
-    assert "ts-command-search__item" in styles
-    panel_block = styles.split(".ts-command-search__panel {", 1)[1].split("}", 1)[0]
-    assert "position: fixed" in panel_block
-    assert "z-index: 1400" in panel_block
+    assert 'class="ts-global-search"' in html
+    assert 'id="globalSearch"' in html
+    assert 'role="combobox"' not in html
+    assert 'aria-controls="globalSearchResults"' not in html
+    assert 'id="globalSearchResults"' not in html
+    assert "function bindGlobalSearchToFilters()" in script
+    assert "bindGlobalSearchToFilters()" in script
+    assert 'globalSearch.addEventListener("keydown"' in script
+    assert '$("filters").q.value = globalSearch.value' in script
+    assert "function searchGlobalResumes(query)" not in script
+    assert "function positionGlobalSearchResults()" not in script
+    assert "function renderGlobalSearchResults(items, query)" not in script
+    assert "openGlobalSearchResult" not in script
+    assert 'globalSearch.addEventListener("input"' not in script
+    assert 'globalSearchResults' not in script
+    assert "ts-command-search__panel" not in styles
+    assert "ts-command-search__item" not in styles
 
 
 def test_member_resume_library_has_dock_job_filters_below_status_tabs() -> None:
@@ -227,6 +227,10 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     page_block = styles.split('[data-page="resumes"].active {', 1)[1].split("}", 1)[0]
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
+    primary_filter_button_block = styles.split(".filter-actions .ts-btn--primary {", 1)[1].split(
+        "}",
+        1,
+    )[0]
 
     assert "20260701-stitch-resume" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
@@ -235,6 +239,9 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in filters_block
     assert "grid-column: 1 / -1" not in filter_actions_block
     assert "align-self: center" in filter_actions_block
+    assert "rgba(239, 246, 255, 0.98)" in primary_filter_button_block
+    assert "rgba(219, 234, 254, 0.86)" in primary_filter_button_block
+    assert "color: var(--ts-primary)" in primary_filter_button_block
     assert "transition: max-height" in styles
 
 
@@ -478,40 +485,64 @@ def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
     assert "counts.set(job, Math.max" in script
 
 
-def test_member_resume_library_hides_more_info_action() -> None:
-    """Members do not need the needs-more-info review action."""
+def test_resume_action_dock_removes_viewed_and_more_info_actions() -> None:
+    """The review action dock should no longer render viewed or needs-more-info actions."""
 
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert ".member-resume-mode #moreInfoBtn" in styles
-    block = styles.split(".member-resume-mode #moreInfoBtn", 1)[1].split("}", 1)[0]
-    assert "display: none" in block
+    action_markup = html.split('<div class="ts-action-dock" id="actionDock">', 1)[1].split(
+        "</div>",
+        1,
+    )[0]
+    assert 'id="viewedBtn"' not in action_markup
+    assert 'id="moreInfoBtn"' not in action_markup
+    assert "已看" not in action_markup
+    assert "待补充" not in action_markup
+    assert 'id="suitableBtn"' in action_markup
+    assert 'id="unsuitableBtn"' in action_markup
+    assert 'id="interviewBtn"' in action_markup
+    assert '$("viewedBtn")' not in script
+    assert '$("moreInfoBtn")' not in script
+    assert ".member-resume-mode #moreInfoBtn" not in styles
 
 
-def test_member_action_dock_only_keeps_suitable_choices_at_bottom_right() -> None:
-    """Members should only see suitable/unsuitable actions under the summary cards."""
+def test_action_dock_uses_member_style_and_members_keep_suitable_choices() -> None:
+    """The shared action dock should use the member-style sticky horizontal layout."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    for selector in [
-        ".member-resume-mode #viewedBtn",
-        ".member-resume-mode #moreInfoBtn",
-        ".member-resume-mode #interviewBtn",
-    ]:
-        assert selector in styles
-        block = styles.split(selector, 1)[1].split("}", 1)[0]
-        assert "display: none" in block
+    assert ".member-resume-mode #interviewBtn" in styles
+    hidden_interview_block = styles.split(".member-resume-mode #interviewBtn", 1)[1].split("}", 1)[0]
+    assert "display: none" in hidden_interview_block
 
     summary_start = '<aside id="summaryContent" class="summary-content ts-summary-stack">'
     summary_markup = html.split(summary_start, 1)[1].split("</aside>", 1)[0]
     assert 'id="summaryCards"' in summary_markup
     assert 'id="actionDock"' in summary_markup
-    dock_block = styles.split(".member-resume-mode .ts-action-dock {", 1)[1].split("}", 1)[0]
+    dock_block = styles.split(".ts-action-dock {", 1)[1].split("}", 1)[0]
+    button_block = styles.split(".action-dock-btn {", 1)[1].split("}", 1)[0]
 
     assert "position: sticky" in dock_block
     assert "bottom: 0" in dock_block
     assert "justify-content: stretch" in dock_block
+    assert "padding: 10px 0 0" in dock_block
+    assert "flex: 1 1 0" in button_block
+
+
+def test_interview_action_uses_pale_blue_white_style() -> None:
+    """The interview action should not use the heavier primary blue fill."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    assert "#actionDock #interviewBtn {" in styles
+    interview_block = styles.split("#actionDock #interviewBtn {", 1)[1].split("}", 1)[0]
+
+    assert "color: var(--ts-primary)" in interview_block
+    assert "rgba(239, 246, 255, 0.98)" in interview_block
+    assert "rgba(219, 234, 254, 0.86)" in interview_block
+    assert "rgba(147, 197, 253, 0.82)" in interview_block
 
 
 def test_resume_filters_remove_visible_job_input_and_use_education_select() -> None:
@@ -676,13 +707,11 @@ def test_review_actions_advance_to_next_resume() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
     assert "async function advanceAfterReviewAction(id)" in script
-    assert "async function markViewedAndAdvance(id)" in script
-    assert 'api(`/api/resumes/${id}/view`, { method: "POST" })' in script
     assert "await advanceAfterReviewAction(id)" in script
     assert 'setDecision(state.selectedId, "suitable")' in script
     assert 'setDecision(state.selectedId, "unsuitable")' in script
-    assert 'setDecision(state.selectedId, "needs_more_info")' in script
-    assert "markViewedAndAdvance(state.selectedId)" in script
+    assert 'setDecision(state.selectedId, "needs_more_info")' not in script
+    assert "markViewedAndAdvance(state.selectedId)" not in script
 
 
 def test_resume_summary_shows_degree_and_import_time() -> None:
@@ -748,13 +777,40 @@ def test_candidate_card_metadata_uses_aligned_columns() -> None:
     assert 'class="candidate-card__meta-item candidate-card__meta-date"' in script
     assert 'class="candidate-card__meta-item candidate-card__meta-platform"' in script
     assert 'class="candidate-card__meta-item candidate-card__meta-read"' in script
+    assert '<span class="candidate-card__meta-label">院校</span>' not in script
+    assert "candidate-card__meta-label" not in script
+    assert "candidate-card__read-badge" in script
     meta_block = styles.split(".candidate-card__meta {", 1)[1].split("}", 1)[0]
 
     assert "display: grid" in meta_block
     assert "grid-template-columns:" in meta_block
     assert ".candidate-card__meta-item" in styles
     assert ".candidate-card__meta-school" in styles
+    assert ".candidate-card__meta-label" not in styles
     assert "text-overflow: ellipsis" in styles
+
+
+def test_candidate_cards_are_larger_and_read_status_is_frosted_badge() -> None:
+    """Candidate cards should be larger and make read status visually distinct."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    card_block = styles.split(".candidate-card {", 1)[1].split("}", 1)[0]
+    heading_block = styles.split(".candidate-card__heading strong {", 1)[1].split("}", 1)[0]
+    job_block = styles.split(".candidate-card__job {", 1)[1].split("}", 1)[0]
+    meta_block = styles.split(".candidate-card__meta {", 1)[1].split("}", 1)[0]
+    read_badge_block = styles.split(".candidate-card__read-badge {", 1)[1].split("}", 1)[0]
+    unread_block = styles.split(".candidate-card__read-badge--unread {", 1)[1].split("}", 1)[0]
+    viewed_block = styles.split(".candidate-card__read-badge--viewed {", 1)[1].split("}", 1)[0]
+
+    assert "min-height: 86px" in card_block
+    assert "padding: 12px" in card_block
+    assert "font-size: 16px" in heading_block
+    assert "font-size: 13px" in job_block
+    assert "font-size: 12px" in meta_block
+    assert "backdrop-filter: blur(10px)" in read_badge_block
+    assert "border-radius: 999px" in read_badge_block
+    assert "rgba(37, 99, 235" in unread_block
+    assert "rgba(0, 108, 73" in viewed_block
 
 
 def test_active_candidate_card_uses_blue_gradient_selection() -> None:
@@ -846,9 +902,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
     topbar_block = side_browser_block.split(".ts-topbar {", 1)[1].split("}", 1)[0]
     workspace_block = side_browser_block.split(".ts-resume-workspace {", 1)[1].split("}", 1)[0]
-    action_dock_block = side_browser_block.split(
-        ".member-resume-mode .ts-action-dock {", 1
-    )[1].split("}", 1)[0]
+    action_dock_block = side_browser_block.split(".ts-action-dock {", 1)[1].split("}", 1)[0]
 
     assert "overflow-x: hidden" in body_block
     assert "overflow-y: auto" in body_block

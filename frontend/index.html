@@ -61,10 +61,9 @@
           <button data-view="rules" type="button">规则库</button>
         </nav>
         <div class="ts-topbar-actions">
-          <label class="ts-global-search ts-command-search" role="combobox" aria-label="全局搜索" aria-controls="globalSearchResults" aria-expanded="false">
+          <label class="ts-global-search" aria-label="全局搜索">
             <span aria-hidden="true">⌕</span>
             <input id="globalSearch" placeholder="搜索候选人 / 手机 / 岗位" autocomplete="off" />
-            <div id="globalSearchResults" class="ts-command-search__panel" role="listbox" hidden></div>
           </label>
           <div class="user-card">
             <strong id="userName">加载中</strong>
@@ -235,10 +234,8 @@
                     <p class="muted">选择候选人后显示摘要和评分。</p>
                   </div>
                   <div class="ts-action-dock" id="actionDock">
-                    <button id="viewedBtn" class="ts-btn action-dock-btn" type="button">已看</button>
                     <button id="suitableBtn" class="ts-btn ts-btn--success action-dock-btn" type="button">合适</button>
                     <button id="unsuitableBtn" class="ts-btn ts-btn--danger action-dock-btn" type="button">不合适</button>
-                    <button id="moreInfoBtn" class="ts-btn ts-btn--warning action-dock-btn" type="button">待补充</button>
                     <button id="interviewBtn" class="ts-btn ts-btn--primary action-dock-btn" type="button">约面试</button>
                   </div>
                 </aside>

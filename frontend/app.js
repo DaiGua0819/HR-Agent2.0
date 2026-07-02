@@ -91,8 +91,6 @@ function tsSegmentClass(active) {
   return `ts-segment-button${active ? " active" : ""}`;
 }
 const multiFilterKeys = new Set([]);
-let globalSearchTimer = null;
-let globalSearchRequestId = 0;
 const resumeName = (resume) => resume?.name || resume?.parsedName || resume?.parsed_name || "未命名";
 function canonicalResumeJobType(value) {
   const text = String(value || "").trim();
@@ -668,7 +666,8 @@ function renderMiniList() {
     .map((resume) => {
       const tier = resumeSchoolTierBadge(resume);
       const review = resume.reviewState || {};
-      const readLabel = review.readStatus === "viewed" ? "已读" : "未读";
+      const readStatus = review.readStatus === "viewed" ? "viewed" : "unread";
+      const readLabel = readStatus === "viewed" ? "已读" : "未读";
       const decision = labelDecision(review.decision);
       const imported = resumeImportTime(resume);
       return `
@@ -680,7 +679,6 @@ function renderMiniList() {
           <span class="candidate-card__job">${escapeHtml(resumeJob(resume))}</span>
           <span class="candidate-card__meta">
             <span class="candidate-card__meta-item candidate-card__meta-school">
-              <span class="candidate-card__meta-label">院校</span>
               <span class="candidate-card__meta-value">${escapeHtml(resumeSchool(resume) || "待提取")}</span>
             </span>
             <span class="candidate-card__meta-item candidate-card__meta-tier">
@@ -688,7 +686,9 @@ function renderMiniList() {
             </span>
             <span class="candidate-card__meta-item candidate-card__meta-date">${escapeHtml(imported)}</span>
             <span class="candidate-card__meta-item candidate-card__meta-platform">${escapeHtml(platformName(resumePlatform(resume)))}</span>
-            <span class="candidate-card__meta-item candidate-card__meta-read">${escapeHtml(readLabel)}</span>
+            <span class="candidate-card__meta-item candidate-card__meta-read">
+              <span class="candidate-card__read-badge candidate-card__read-badge--${readStatus}">${escapeHtml(readLabel)}</span>
+            </span>
           </span>
         </button>
       `;
@@ -846,11 +846,6 @@ function renderContext() {
 async function setDecision(id, decision) {
   const reasonTags = { suitable: ["岗位匹配"], unsuitable: ["暂不匹配"], needs_more_info: ["信息待补充"] }[decision] || [];
   await api(`/api/resumes/${id}/review-decision`, { method: "POST", body: JSON.stringify({ decision, reasonTags, note: "" }) });
-  await clearResumePrefetchCacheAfterMutation();
-  await advanceAfterReviewAction(id);
-}
-async function markViewedAndAdvance(id) {
-  await api(`/api/resumes/${id}/view`, { method: "POST" });
   await clearResumePrefetchCacheAfterMutation();
   await advanceAfterReviewAction(id);
 }
@@ -1301,128 +1296,23 @@ function initializeSmoothFilterSelects() {
   window.addEventListener("resize", updateOpenSmoothSelectMenuPosition);
   window.addEventListener("scroll", updateOpenSmoothSelectMenuPosition, true);
 }
-function hideGlobalSearchResults() {
-  const panel = $("globalSearchResults");
-  const root = document.querySelector(".ts-command-search");
-  if (!panel) return;
-  panel.hidden = true;
-  panel.innerHTML = "";
-  root?.setAttribute("aria-expanded", "false");
-}
-function positionGlobalSearchResults() {
-  const panel = $("globalSearchResults");
-  const root = document.querySelector(".ts-command-search");
-  if (!panel || !root || panel.hidden) return;
-  const rect = root.getBoundingClientRect();
-  const viewportPadding = 12;
-  const width = Math.min(420, Math.max(280, rect.width));
-  const left = Math.max(viewportPadding, Math.min(rect.right - width, window.innerWidth - width - viewportPadding));
-  const top = Math.min(rect.bottom + 8, window.innerHeight - viewportPadding);
-  panel.style.left = `${left}px`;
-  panel.style.top = `${top}px`;
-  panel.style.width = `${width}px`;
-}
-async function searchGlobalResumes(query) {
-  const params = new URLSearchParams();
-  params.set("q", query);
-  params.set("page", "1");
-  params.set("page_size", "6");
-  const data = await api(`/api/resumes?${params.toString()}`);
-  return data.items || [];
-}
-function renderGlobalSearchResults(items, query) {
-  const panel = $("globalSearchResults");
-  const root = document.querySelector(".ts-command-search");
-  if (!panel || !root) return;
-  const cleaned = String(query || "").trim();
-  if (!cleaned) return hideGlobalSearchResults();
-  panel.hidden = false;
-  root.setAttribute("aria-expanded", "true");
-  positionGlobalSearchResults();
-  if (!items.length) {
-    panel.innerHTML = `<div class="ts-command-search__empty">没有找到相关候选人</div>`;
-    positionGlobalSearchResults();
-    return;
-  }
-  panel.innerHTML = items
-    .map((resume) => {
-      const id = escapeHtml(resume.id || "");
-      const name = escapeHtml(resumeName(resume));
-      const job = escapeHtml(resumeJob(resume) || "岗位待提取");
-      const meta = [resumeSchool(resume), platformName(resumePlatform(resume)), resumeOwner(resume)].filter(Boolean).join(" · ");
-      return `
-        <button class="ts-command-search__item" type="button" role="option" data-global-search-result="${id}">
-          <strong>${name}</strong>
-          <span>${job}</span>
-          <small>${escapeHtml(meta || "简历库候选人")}</small>
-        </button>
-      `;
-    })
-    .join("");
-  panel.querySelectorAll("[data-global-search-result]").forEach((button) => {
-    button.addEventListener("click", () => openGlobalSearchResult(button.dataset.globalSearchResult || ""));
-  });
-  positionGlobalSearchResults();
-}
-async function openGlobalSearchResult(id) {
-  if (!id) return;
-  hideGlobalSearchResults();
-  const input = $("globalSearch");
-  if (input) input.blur();
-  setView("resumes");
-  await openResume(id);
-}
-function bindGlobalSearchAutocomplete() {
+function bindGlobalSearchToFilters() {
   const globalSearch = $("globalSearch");
-  const panel = $("globalSearchResults");
-  if (!globalSearch || !panel) return;
-  if (panel.parentElement !== document.body) document.body.appendChild(panel);
-  globalSearch.addEventListener("input", () => {
-    const query = globalSearch.value.trim();
-    clearTimeout(globalSearchTimer);
-    if (query.length < 2) {
-      hideGlobalSearchResults();
-      return;
-    }
-    const requestId = ++globalSearchRequestId;
-    globalSearchTimer = setTimeout(async () => {
-      try {
-        const items = await searchGlobalResumes(query);
-        if (requestId !== globalSearchRequestId) return;
-        renderGlobalSearchResults(items, query);
-      } catch (error) {
-        if (requestId !== globalSearchRequestId) return;
-        renderGlobalSearchResults([], query);
-      }
-    }, 180);
-  });
+  if (!globalSearch) return;
   globalSearch.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") return hideGlobalSearchResults();
     if (event.key !== "Enter") return;
-    const first = $("globalSearchResults")?.querySelector("[data-global-search-result]");
-    if (first) {
-      event.preventDefault();
-      openGlobalSearchResult(first.dataset.globalSearchResult || "");
-      return;
-    }
+    event.preventDefault();
     $("filters").q.value = globalSearch.value;
     state.page = 1;
     clearResumePrefetchCache();
     setView("resumes");
   });
-  document.addEventListener("click", (event) => {
-    if (event.target?.closest?.(".ts-command-search")) return;
-    if (event.target?.closest?.("#globalSearchResults")) return;
-    hideGlobalSearchResults();
-  });
-  window.addEventListener("resize", positionGlobalSearchResults);
-  window.addEventListener("scroll", positionGlobalSearchResults, true);
 }
 function bindPageActions() {
   hrAuth.bindLogin(api, afterLogin);
   document.querySelectorAll("[data-view]").forEach((button) => (button.onclick = () => setView(button.dataset.view)));
   initializeSmoothFilterSelects();
-  bindGlobalSearchAutocomplete();
+  bindGlobalSearchToFilters();
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
   $("filterToggleBtn").onclick = toggleFilterPanel;
@@ -1443,10 +1333,8 @@ function bindPageActions() {
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
-  $("viewedBtn").onclick = () => state.selectedId && markViewedAndAdvance(state.selectedId);
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
-  $("moreInfoBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "needs_more_info");
   $("interviewBtn").onclick = requestInterview;
   $("logoutBtn").onclick = logout;
   $("prevBtn").onclick = () => move(-1);
