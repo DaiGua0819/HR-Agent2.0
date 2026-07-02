@@ -514,14 +514,17 @@ def test_member_action_dock_only_keeps_suitable_choices_at_bottom_right() -> Non
     assert "justify-content: stretch" in dock_block
 
 
-def test_member_filters_hide_duplicate_job_and_use_education_select() -> None:
-    """Member filters should rely on job tabs and offer fixed education choices."""
+def test_resume_filters_remove_visible_job_input_and_use_education_select() -> None:
+    """Resume filters should rely on job tabs without rendering a duplicate job input."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'class="job-filter-field"' in html
-    assert ".member-resume-mode .job-filter-field" in styles
+    assert 'class="job-filter-field"' not in html
+    assert "<span>岗位</span>" not in html
+    assert 'placeholder="岗位"' not in html
+    assert '<input name="job_type" type="hidden" />' in html
+    assert ".member-resume-mode .job-filter-field" not in styles
     assert '<select name="education">' in html
     for degree in ["大专", "本科", "硕士", "博士"]:
         assert f'<option value="{degree}">{degree}</option>' in html

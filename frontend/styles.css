@@ -1300,9 +1300,6 @@ h3 { font-size: 15px; }
 .member-resume-mode [data-page="resumes"].active {
   grid-template-rows: minmax(0, 1fr);
 }
-.member-resume-mode .job-filter-field {
-  display: none;
-}
 .member-resume-mode .ts-action-dock {
   position: sticky;
   bottom: 0;
