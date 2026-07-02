@@ -776,7 +776,7 @@ def test_bind_api_accepts_empty_body_like_old_node() -> None:
         response = client.post(f"/api/interview-center/sessions/{session.id}/bind")
 
     assert response.status_code == 404
-    assert response.json() == {"ok": False, "error": "resume_not_found"}
+    assert response.json() == {"ok": False, "error": "候选人简历不存在"}
 
 
 def test_unknown_interview_center_route_uses_old_error_payload() -> None:
@@ -1200,12 +1200,12 @@ def test_old_interview_center_errors_use_error_payload_for_frontend() -> None:
     assert missing.status_code == 404
     assert missing.json() == {
         "ok": False,
-        "error": "interview_session_not_found",
+        "error": "面试日程不存在",
     }
     assert unbound.status_code == 409
     assert unbound.json() == {
         "ok": False,
-        "error": "interview_session_resume_required",
+        "error": "该日程尚未绑定候选人",
     }
 
 

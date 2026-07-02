@@ -122,9 +122,18 @@ def _legacy_error_response(status_code: int, exc: Exception) -> JSONResponse:
 
 
 def _legacy_error_message(exc: Exception) -> str:
-    if isinstance(exc, KeyError) and exc.args:
-        return str(exc.args[0])
-    return str(exc)
+    message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+    return _LEGACY_INTERVIEW_ERROR_MESSAGES.get(message, message)
+
+
+_LEGACY_INTERVIEW_ERROR_MESSAGES = {
+    "resume_not_found": "候选人简历不存在",
+    "interview_session_not_found": "面试日程不存在",
+    "interview_session_resume_required": "该日程尚未绑定候选人",
+    "bound_resume_not_found": "绑定的候选人简历不存在",
+    "backfill_not_available": "面试结束后 10 分钟才可读取纪要",
+    "no_valid_interview_record": "未读取到有效面试记录",
+}
 
 
 @router.post("/api/interview/invite")

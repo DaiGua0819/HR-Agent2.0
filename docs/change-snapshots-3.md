@@ -1003,3 +1003,32 @@
 - 风险 / 待确认：
   - catch-all 仅放在本路由文件已有 `/api/interview-center/*` 路由之后；如果后续新增新的旧面试中心接口，需要继续确保新增路由定义位于 catch-all 之前。
   - bind 空 body 的错误内容仍沿用当前 service 错误码 `resume_not_found`，不是旧 Node 的中文 `候选人简历不存在`；如需前端逐字文案一致，还需继续补错误码到中文文案的映射。
+
+---
+
+### 快照 0080：恢复面试中心旧中文错误文案
+
+- 修改时间：2026-07-03 04:08:37 +08:00
+- 修改原因：
+  - 旧 Node 面试中心对旧前端暴露的是中文错误文案，例如缺少候选人简历时返回 `候选人简历不存在`，而上一轮 FastAPI 兼容层只把旧协议 payload 恢复为 `{ ok:false, error }`，内容仍可能是内部错误码。
+  - 旧前端会直接展示 `error/message` 字段；如果继续暴露 `resume_not_found`、`interview_session_not_found` 等内部码，页面提示会退化为工程错误码，不符合旧入口体验。
+  - 需要先覆盖当前已知 service 层错误码，后续如新增旧入口错误再继续补映射。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `_legacy_error_message()` 新增旧文案映射表，把 `resume_not_found`、`interview_session_not_found`、`interview_session_resume_required`、`bound_resume_not_found`、`backfill_not_available`、`no_valid_interview_record` 转为旧前端可读中文。
+  - 保留未知错误的原样透传，避免把尚未识别的新错误吞成泛化文案。
+  - 更新 bind 空 body 与旧错误 payload 测试期望，固定缺简历、缺面试日程、未绑定候选人的中文错误内容。
+- 验证结果：
+  - 红灯确认：中文文案测试期望切换后，旧实现仍返回内部错误码，聚焦用例首次失败，证明缺少错误码到旧中文文案的映射。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "bind_api_accepts_empty_body_like_old_node or old_interview_center_errors_use_error_payload_for_frontend"`：2 passed，59 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：61 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：74 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：308 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只覆盖当前 FastAPI service 已知会暴露到旧面试中心前端的错误码；真实联调中如果出现旧 Node 其它中文错误分支，还需要继续补充映射。
+  - 当前映射集中在路由兼容层，业务层仍保留内部错误码，便于测试和后端逻辑继续用稳定 code 判断。
