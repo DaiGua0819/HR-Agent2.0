@@ -2257,6 +2257,7 @@ def test_interview_center_frontend_page_and_assets_are_served() -> None:
 
     assert page.status_code == 200
     assert "面试中心 - 招聘智能体" in page.text
+    assert '<link rel="icon" href="data:," />' in page.text
     assert "/assets/interview-center/styles.css" in page.text
     assert "/assets/interview-center/api.js" in page.text
     assert style.status_code == 200

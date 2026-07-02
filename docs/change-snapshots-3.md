@@ -1558,3 +1558,51 @@
 - 风险 / 待确认：
   - 该行为只影响旧 `/api/interview-center/sessions` 列表语义；如果后续有新入口需要展示所有手工创建会话，应另走新接口或显式标记 `isInterviewLike`。
   - 本轮没有触碰 calendar sync 的识别规则，后续仍需通过本地服务烟测确认真实日历同步后的旧列表展示。
+
+---
+
+### 快照 0098：忽略面试中心本地运行产物
+
+- 修改时间：2026-07-03 07:18:36 +08:00
+- 修改原因：
+  - 本地迁移服务烟测创建面试会话时会生成 `data/interview_center/*_summary.png`，该目录属于运行时产物，不应进入 Git。
+  - 当前分支也缺少 `data/sync_packages/` 和 `data/backups/` 的忽略规则，简历同步包与数据库备份同样属于本地/部署运行数据。
+  - 需要降低后续提交时误提交候选人资料、面试图片和数据库备份的风险。
+- 修改文件：
+  - `.gitignore`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `.gitignore` 新增 `data/interview_center/`、`data/sync_packages/`、`data/backups/`。
+  - 本地烟测生成的 summary PNG 已被忽略，工作区不再暴露该运行时文件。
+- 验证结果：
+  - `git check-ignore -v data/interview_center/466aab36-88af-4f45-9300-47c7539c7f22_summary.png`：命中 `.gitignore:16:data/interview_center/`。
+  - `git check-ignore -v data/sync_packages/example.zip`：命中 `.gitignore:17:data/sync_packages/`。
+  - `git check-ignore -v data/backups/example.json`：命中 `.gitignore:18:data/backups/`。
+  - `git status --short --branch --untracked-files=all`：只剩 `.gitignore` 和本快照文档修改。
+- 风险 / 待确认：
+  - 本轮只调整 Git 忽略规则，不删除本地已有运行时文件，不改变面试中心业务逻辑。
+
+---
+
+### 快照 0099：消除面试中心独立页 favicon 404
+
+- 修改时间：2026-07-03 07:24:00 +08:00
+- 修改原因：
+  - 本地 Playwright 打开 `/interview-center.html` 时，页面业务资源均为 200，但 Chrome 控制台出现一个 404。
+  - 进一步捕捉 response 列表确认页面脚本、样式和 API 均无 4xx；根因是独立页没有 favicon 声明，浏览器自动请求缺失图标。
+  - 需要让面试中心独立页浏览器烟测达到无 4xx、无控制台错误，避免把无关资源缺失误判为业务问题。
+- 修改文件：
+  - `frontend/interview-center.html`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `/interview-center.html` 的 `<head>` 新增 `<link rel="icon" href="data:," />`，避免浏览器自动请求 `/favicon.ico`。
+  - 面试中心前端静态资源测试新增 favicon 声明断言。
+- 验证结果：
+  - 红灯确认：`python -m pytest tests/features/test_interview_center_migration.py -q -k frontend_page_and_assets_are_served` 首次失败，断言缺少 `<link rel="icon" href="data:," />`。
+  - 绿灯验证：同一命令再次运行：1 passed，76 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - `node --check frontend\interview-center\app.js`：通过。
+  - 本地服务 `http://127.0.0.1:18182/interview-center.html` 复查：favicon 声明和 `/assets/interview-center/*` 引用均可读。
+  - Playwright + 系统 Chrome 烟测：标题为“面试中心”，飞书状态为“飞书未授权”，会话数为 `1`，`bad_responses=[]`，`console_errors=[]`，截图写入 `data/diagnostics/interview-center-smoke.png`。
+- 风险 / 待确认：
+  - 本轮只影响独立面试中心 HTML 的浏览器资源加载，不改变业务 API 或面试中心状态流。
