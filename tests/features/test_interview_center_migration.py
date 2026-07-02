@@ -593,6 +593,107 @@ def test_interview_center_sync_api_defaults_to_auto_prepare_without_body() -> No
     assert len(doc_client.created) == 1
 
 
+def test_old_action_routes_treat_malformed_json_body_as_empty_like_old_node() -> None:
+    doc_client = FakeDocClient()
+    sync_service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        calendar_client=FakeCalendarClient(
+            [
+                {
+                    "event_id": "event-malformed-sync",
+                    "summary": "Alice 面试",
+                    "description": "phone 13800138000",
+                    "start_time": {"timestamp": "1783000000"},
+                    "end_time": {"timestamp": "1783003600"},
+                }
+            ]
+        ),
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+    sync_app = create_app()
+    sync_app.state.interview_center_service = sync_service
+
+    prepare_store = InMemoryInterviewStore()
+    prepare_session = _backfill_session(prepare_store)
+    prepare_service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=prepare_store,
+        llm=FakeLLM(),
+        doc_client=FakeDocClient(),
+    )
+    prepare_app = create_app()
+    prepare_app.state.interview_center_service = prepare_service
+
+    backfill_store = InMemoryInterviewStore()
+    backfill_session = _backfill_session(backfill_store)
+    backfill_service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=backfill_store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: backfill_session.end_time + 601,
+    )
+    backfill_app = create_app()
+    backfill_app.state.interview_center_service = backfill_service
+
+    review_store = InMemoryInterviewStore()
+    review_session_record = _backfill_session(review_store)
+    review_session_record.status = "needs_review"
+    review_session_record.interview_evaluation = {
+        "summary": "候选人项目扎实",
+        "humanReviewRequired": True,
+    }
+    review_store.save(review_session_record)
+    review_service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=review_store,
+        asset_sync=FakeAssetSync(),
+    )
+    review_app = create_app()
+    review_app.state.interview_center_service = review_service
+    malformed_body = "{"
+    headers = {"content-type": "application/json"}
+
+    with TestClient(sync_app) as client:
+        synced = client.post(
+            "/api/interview-center/sync",
+            content=malformed_body,
+            headers=headers,
+        )
+    with TestClient(prepare_app) as client:
+        prepared = client.post(
+            f"/api/interview-center/sessions/{prepare_session.id}/prepare",
+            content=malformed_body,
+            headers=headers,
+        )
+    with TestClient(backfill_app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{backfill_session.id}/backfill",
+            content=malformed_body,
+            headers=headers,
+        )
+    with TestClient(review_app) as client:
+        reviewed = client.post(
+            f"/api/interview-center/sessions/{review_session_record.id}/review",
+            content=malformed_body,
+            headers=headers,
+        )
+
+    assert synced.status_code == 200
+    assert synced.json()["ok"] is True
+    assert synced.json()["prepared"] == 1
+    assert prepared.status_code == 200
+    assert prepared.json()["session"]["status"] in {"prepared", "prepared_local"}
+    assert backfilled.status_code == 200
+    assert backfilled.json()["session"]["status"] == "needs_review"
+    assert reviewed.status_code == 200
+    assert reviewed.json()["session"]["status"] == "completed"
+    assert reviewed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
+
+
 def test_prepare_session_requires_bound_resume() -> None:
     store = InMemoryInterviewStore()
     session = store.create(resume_id="", candidate_name="", job_type="AI应用开发实习生")

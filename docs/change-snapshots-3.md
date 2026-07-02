@@ -1368,3 +1368,33 @@
 - 风险 / 待确认：
   - 本轮只恢复 OAuth callback 缺 `code` 的旧 HTML 文案，不改变授权码交换、token 保存或真实飞书 OAuth 联调路径。
   - 真实飞书 OAuth 授权码交换仍需在有飞书应用配置和授权用户的环境里端到端验证。
+
+---
+
+### 快照 0092：兼容旧入口畸形 JSON 请求体
+
+- 修改时间：2026-07-03 06:03:29 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在 `sync`、`prepare`、`backfill`、`review/confirm` 入口使用 `readJsonBody(request).catch(() => ({}))`，请求体 JSON 解析失败时会按空对象继续处理。
+  - 当前 FastAPI 这些入口直接声明 Pydantic body 参数，畸形 JSON 会在路由层返回 422，旧前端无法得到 `{ ok:true/false, ... }` 的旧协议响应。
+  - 这些入口都属于旧页面按钮动作，解析失败时默认空 body 的兼容行为需要保留；`bind` 旧实现没有 catch，本轮不改变。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `_legacy_optional_body()`，在旧 action 路由内部读取 JSON；解析失败、非对象 body 或校验失败时回退到对应请求模型默认值。
+  - `sync_calendar()`、`prepare_session()`、`backfill_session()`、`review_session()`、`confirm_session()` 改为内部调用该 helper，避免 FastAPI 在进入路由前返回 422。
+  - 新增 `test_old_action_routes_treat_malformed_json_body_as_empty_like_old_node()`，覆盖畸形 JSON 下 `sync` 默认自动准备、`prepare` 默认非 force、`backfill` 默认非 force、`review` 默认 passed。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k malformed_json_body_as_empty` 首次失败，`/api/interview-center/sync` 实际返回 422。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k malformed_json_body_as_empty`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - Action 路由切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "malformed_json_body_as_empty or sync_api or prepare_session_api_route_is_compatible or backfill_api_routes_are_compatible or review_confirm_and_logs_api_routes_are_compatible or review_and_confirm_api_accept_empty_body"`：7 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：70 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：83 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：317 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只改变旧 Node 明确容错的 action 路由；`bind` 保持原有严格解析路径，避免扩大行为差异。
+  - 对字段类型非法但 JSON 有效的请求，本轮按模型默认值容错；如旧前端存在特殊类型转换依赖，后续可继续按旧 Node 的 `Boolean()`/默认值规则补充用例。

@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 from html import escape
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.api.routes.auth import require_session_payload
 from app.domain.conversation.repository import ConversationRepository
@@ -21,6 +21,8 @@ from app.features.interview_invite.service import InterviewInviteError, Intervie
 from app.settings import load_settings
 
 router = APIRouter(tags=["interview-center"])
+
+_RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
 
 class InterviewInviteRequest(BaseModel):
@@ -132,6 +134,19 @@ def _legacy_error_message(exc: Exception) -> str:
     return _LEGACY_INTERVIEW_ERROR_MESSAGES.get(message, message)
 
 
+async def _legacy_optional_body(request: Request, model: type[_RequestModel]) -> _RequestModel:
+    try:
+        raw_body = await request.json()
+    except ValueError:
+        raw_body = {}
+    if not isinstance(raw_body, dict):
+        raw_body = {}
+    try:
+        return model.model_validate(raw_body)
+    except ValidationError:
+        return model()
+
+
 _LEGACY_INTERVIEW_ERROR_MESSAGES = {
     "resume_not_found": "候选人简历不存在",
     "interview_session_not_found": "面试日程不存在",
@@ -216,12 +231,11 @@ async def list_sessions(
 @router.post("/api/interview-center/sync")
 async def sync_calendar(
     request: Request,
-    payload: InterviewCenterSyncRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center Feishu calendar sync entry point."""
 
     service = _service(request)
-    resolved = payload or InterviewCenterSyncRequest()
+    resolved = await _legacy_optional_body(request, InterviewCenterSyncRequest)
     result = await service.sync_calendar(
         calendar_id=resolved.calendar_id,
         auto_prepare=resolved.auto_prepare,
@@ -271,11 +285,10 @@ async def bind_session(
 async def prepare_session(
     session_id: str,
     request: Request,
-    payload: InterviewPrepareRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center prepare-session endpoint."""
 
-    resolved = payload or InterviewPrepareRequest()
+    resolved = await _legacy_optional_body(request, InterviewPrepareRequest)
     try:
         result = await _service(request).prepare_session(session_id, force=resolved.force)
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
@@ -289,11 +302,10 @@ async def prepare_session(
 async def backfill_session(
     session_id: str,
     request: Request,
-    payload: InterviewBackfillRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center backfill endpoint."""
 
-    resolved = payload or InterviewBackfillRequest()
+    resolved = await _legacy_optional_body(request, InterviewBackfillRequest)
     try:
         result = await _service(request).backfill_session(
             session_id,
@@ -330,11 +342,18 @@ async def backfill_status(request: Request) -> dict[str, object]:
 async def review_session(
     session_id: str,
     request: Request,
-    payload: InterviewReviewRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center human review endpoint."""
 
-    resolved = payload or InterviewReviewRequest()
+    resolved = await _legacy_optional_body(request, InterviewReviewRequest)
+    return await _review_session_with_payload(session_id, request, resolved)
+
+
+async def _review_session_with_payload(
+    session_id: str,
+    request: Request,
+    resolved: InterviewReviewRequest,
+) -> dict[str, object]:
     try:
         result = await _service(request).review_session(
             session_id,
@@ -350,11 +369,11 @@ async def review_session(
 async def confirm_session(
     session_id: str,
     request: Request,
-    payload: InterviewReviewRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center confirm endpoint; same behavior as review."""
 
-    return await review_session(session_id, request, payload)
+    resolved = await _legacy_optional_body(request, InterviewReviewRequest)
+    return await _review_session_with_payload(session_id, request, resolved)
 
 
 @router.get("/api/interview-center/logs")
