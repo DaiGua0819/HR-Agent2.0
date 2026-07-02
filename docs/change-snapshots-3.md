@@ -239,3 +239,29 @@
 - 风险 / 待确认：
   - 当前 OAuth token 已入库，但日历、Docx、VC/妙记等真实 HTTP client 仍需继续接入该 token。
   - 真实飞书接口错误码映射目前只做了基础异常抛出，后续联调时需要按旧前端提示文案细化。
+---
+
+### 快照 0055：迁移面试中心最终回归与 18080 运行验证
+
+- 修改时间：2026-07-02 23:45:23 +08:00
+- 修改原因：
+  - Task 8 要求在迁移功能接入后运行全量回归、静态检查、编译检查，并启动本地 18080 服务验证旧面试中心接口。
+  - 全仓 `ruff check app tests` 发现 `tests/domain/test_frontend_resume_member_view.py` 中 5 处既有超长行，需做纯格式换行，确保最终静态门禁可通过。
+  - 本轮验证需使用临时 SQLite 数据库启动本地服务，避免污染已有 `data/` 运行数据。
+- 修改文件：
+  - `tests/domain/test_frontend_resume_member_view.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 将前端简历成员视图测试中的长链式表达式和长断言拆成多行，保持断言内容和测试语义不变。
+  - 用 `CONTROL_PLANE_PORT=18080`、临时 `DATABASE_PATH=%TEMP%\hr-agent-interview-center-smoke.sqlite` 启动本地 FastAPI 服务，完成后关闭进程并删除临时数据库文件。
+  - 通过本地 HTTP smoke test 验证 `/health`、`/api/interview-center/sessions`、`/api/interview-center/sync/status`、`POST /api/interview-center/sync`、`/api/interview-center/backfill/status`、`/api/interview-center/feishu/auth-url`、`/api/interview-center/feishu/status`、`POST /api/interview-center/feishu/disconnect` 均返回 200。
+- 验证结果：
+  - 迁移回归：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py -q`：32 passed，1 个既有 StarletteDeprecationWarning。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：273 passed，1 个既有 StarletteDeprecationWarning。
+  - 格式修复后目标验证：同一 Python 运行 `-m pytest tests/domain/test_frontend_resume_member_view.py -q`：50 passed。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 本地运行：18080 端口启动成功，HTTP smoke test 覆盖旧面试中心核心状态/同步/飞书授权接口，完成后端口已释放。
+- 风险 / 待确认：
+  - 本轮 18080 smoke test 使用临时空库验证路由和默认安全空实现；真实飞书日历、Docx、VC/妙记联调仍需要有效 OAuth token 和飞书线上权限。
+  - `/health` 中 worker 状态因本轮未启动 worker 进程而显示 unavailable，不影响面试中心 API smoke test。

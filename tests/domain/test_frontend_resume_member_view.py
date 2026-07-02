@@ -533,7 +533,9 @@ def test_action_dock_stacks_admin_actions_while_members_keep_horizontal_choices(
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     assert ".member-resume-mode #interviewBtn" in styles
-    hidden_interview_block = styles.split(".member-resume-mode #interviewBtn", 1)[1].split("}", 1)[0]
+    hidden_interview_block = styles.split(".member-resume-mode #interviewBtn", 1)[1].split(
+        "}", 1
+    )[0]
     assert "display: none" in hidden_interview_block
 
     summary_start = '<aside id="summaryContent" class="summary-content ts-summary-stack">'
@@ -542,8 +544,12 @@ def test_action_dock_stacks_admin_actions_while_members_keep_horizontal_choices(
     assert 'id="actionDock"' in summary_markup
     dock_block = styles.split(".ts-action-dock {", 1)[1].split("}", 1)[0]
     button_block = styles.split(".action-dock-btn {", 1)[1].split("}", 1)[0]
-    member_dock_block = styles.split(".member-resume-mode .ts-action-dock {", 1)[1].split("}", 1)[0]
-    member_button_block = styles.split(".member-resume-mode .action-dock-btn {", 1)[1].split("}", 1)[0]
+    member_dock_block = styles.split(".member-resume-mode .ts-action-dock {", 1)[1].split(
+        "}", 1
+    )[0]
+    member_button_block = styles.split(".member-resume-mode .action-dock-btn {", 1)[1].split(
+        "}", 1
+    )[0]
 
     assert "position: sticky" in dock_block
     assert "bottom: 0" in dock_block
@@ -912,7 +918,10 @@ def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
     assert 'role="separator"' in html
     assert 'aria-controls="summaryContent"' in html
     assert 'aria-valuemin="180"' in html
-    assert "grid-template-columns: minmax(0, 1fr) 10px var(--summary-panel-width)" in preview_grid_block
+    assert (
+        "grid-template-columns: minmax(0, 1fr) 10px var(--summary-panel-width)"
+        in preview_grid_block
+    )
     assert "--summary-panel-width: 276px" in preview_grid_block
     assert "cursor: col-resize" in resize_handle_block
     assert "touch-action: none" in resize_handle_block
@@ -929,14 +938,16 @@ def test_resume_summary_panel_uses_tighter_horizontal_padding() -> None:
 
 
 def test_resume_summary_panel_collapses_with_floating_actions() -> None:
-    """The summary panel should collapse smoothly and keep admin actions floating near the resume."""
+    """The summary panel should collapse smoothly with floating admin actions."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     preview_grid_block = styles.split(".ts-preview-grid {", 1)[1].split("}", 1)[0]
     collapse_button_block = styles.split(".summary-collapse-btn {", 1)[1].split("}", 1)[0]
-    collapsed_grid_block = styles.split(".ts-preview-grid.is-summary-collapsed {", 1)[1].split("}", 1)[0]
+    collapsed_grid_block = styles.split(".ts-preview-grid.is-summary-collapsed {", 1)[1].split(
+        "}", 1
+    )[0]
     collapsed_handle_block = styles.split(
         ".ts-preview-grid.is-summary-collapsed .summary-resize-handle {",
         1,
