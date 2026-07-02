@@ -233,16 +233,17 @@ async def get_session(session_id: str, request: Request) -> dict[str, object]:
 @router.post("/api/interview-center/sessions/{session_id}/bind")
 async def bind_session(
     session_id: str,
-    payload: InterviewBindRequest,
     request: Request,
+    payload: InterviewBindRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center manual resume binding endpoint."""
 
+    resolved = payload or InterviewBindRequest()
     try:
         result = await _service(request).bind_session(
             session_id,
-            resume_id=payload.resume_id,
-            prepare=payload.prepare,
+            resume_id=resolved.resume_id,
+            prepare=resolved.prepare,
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except KeyError as exc:
@@ -461,3 +462,17 @@ async def oauth_callback(code: str, state: str, request: Request) -> dict[str, o
         return await _service(request).oauth().handle_callback(code=code, state=state)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.api_route(
+    "/api/interview-center/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+async def unknown_interview_center_route(path: str) -> JSONResponse:
+    """Old interview-center fallback for unknown API paths."""
+
+    _ = path
+    return JSONResponse(
+        status_code=404,
+        content={"ok": False, "error": "未知面试中心接口"},
+    )

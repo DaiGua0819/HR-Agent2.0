@@ -757,6 +757,41 @@ def test_bind_and_sessions_api_routes_are_compatible() -> None:
     assert listed.json()["logs"][0]["message"] == "已人工绑定候选人"
 
 
+def test_bind_api_accepts_empty_body_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="",
+        candidate_name="",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 面试"},
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/interview-center/sessions/{session.id}/bind")
+
+    assert response.status_code == 404
+    assert response.json() == {"ok": False, "error": "resume_not_found"}
+
+
+def test_unknown_interview_center_route_uses_old_error_payload() -> None:
+    app = create_app()
+
+    with TestClient(app) as client:
+        unknown = client.get("/api/interview-center/unknown")
+        unknown_action = client.post("/api/interview-center/sessions/session-1/unknown")
+
+    assert unknown.status_code == 404
+    assert unknown.json() == {"ok": False, "error": "未知面试中心接口"}
+    assert unknown_action.status_code == 404
+    assert unknown_action.json() == {"ok": False, "error": "未知面试中心接口"}
+
+
 def test_bitable_asset_sync_skips_existing_resume_attachment() -> None:
     store = InMemoryInterviewStore()
     session = store.create(

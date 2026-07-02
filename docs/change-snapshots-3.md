@@ -971,3 +971,35 @@
 - 风险 / 待确认：
   - 本轮只恢复 OAuth callback 参数兼容和断开授权响应文案；真实飞书 OAuth 授权码交换仍需在有飞书应用配置和授权用户的环境里端到端联调。
   - 缺 `code` 的 HTML 失败页目前显示当前 service 错误码 `missing_feishu_oauth_code`，不是旧 Node 的完整中文缺 code 文案；如需逐字一致，可以继续补错误文案映射。
+
+---
+
+### 快照 0079：兼容绑定空请求体与未知面试中心接口
+
+- 修改时间：2026-07-03 03:53:39 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `POST /api/interview-center/sessions/{id}/bind` 会把请求体解析失败当作 `{}`，再进入正常绑定逻辑；当前 FastAPI 路由要求 `InterviewBindRequest` 必填，空 body 会在路由层返回 422，和旧入口行为不一致。
+  - 旧 Node 对未知 `/api/interview-center/*` 路径统一返回 `{ ok:false, error:"未知面试中心接口" }`；当前 FastAPI 默认 404 返回 `{"detail":"Not Found"}`，旧前端的 `requestJson()` 只能得到泛化错误。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_bind_api_accepts_empty_body_like_old_node()`，覆盖 bind 空 body 不再 422，而是进入旧逻辑并返回旧协议 JSON 错误。
+  - 新增 `test_unknown_interview_center_route_uses_old_error_payload()`，覆盖未知 `/api/interview-center/unknown` 和未知 session action 均返回旧协议 404。
+  - `bind_session()` 路由 payload 改为可选，缺省时构造 `InterviewBindRequest()`，保持显式 `resumeId/prepare` 行为不变。
+  - 在所有已知 `/api/interview-center/*` 路由之后新增 catch-all，只处理未匹配的旧面试中心 API 路径，返回 `{ ok:false, error:"未知面试中心接口" }`。
+- 验证结果：
+  - 红灯确认：新增 bind 空 body 测试首次失败，实际返回 422，证明路由层仍要求 body。
+  - 红灯确认：新增未知路由测试首次失败，实际返回 `{"detail":"Not Found"}`。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "bind_api_accepts_empty_body_like_old_node or unknown_interview_center_route_uses_old_error_payload"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：61 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：74 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check` 无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：308 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 本地 18080 smoke：使用 `%TEMP%\hr-agent-interview-center-route-smoke-18080.sqlite` 和 `DRY_RUN=true` 启动 `run_control_plane.py`，真实 HTTP 检查 4 项通过：`/health`、未知 `/api/interview-center/unknown` 404、未知 `/api/interview-center/sessions/session-1/unknown` 404、空 body `/api/interview-center/sessions/session-1/bind` 404；未知接口均确认旧协议 payload。服务已停止，临时 SQLite 已删除。
+- 风险 / 待确认：
+  - catch-all 仅放在本路由文件已有 `/api/interview-center/*` 路由之后；如果后续新增新的旧面试中心接口，需要继续确保新增路由定义位于 catch-all 之前。
+  - bind 空 body 的错误内容仍沿用当前 service 错误码 `resume_not_found`，不是旧 Node 的中文 `候选人简历不存在`；如需前端逐字文案一致，还需继续补错误码到中文文案的映射。
