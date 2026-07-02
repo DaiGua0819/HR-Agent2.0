@@ -14,8 +14,27 @@ from uuid import uuid4
 import httpx
 
 from app.core.dry_run import is_dry_run, record_dry_run_intent
+from app.core.text import clean_text
+from app.domain.resume.normalize import normalize_phone
 from app.features.interview_center.feishu.client import FeishuAuthClient, FeishuTokenProvider
 from app.settings import FeishuConfig, load_settings
+
+
+@dataclass(frozen=True)
+class ExistingBitableRecord:
+    """Result of matching a resume to an existing Bitable record."""
+
+    record: dict[str, Any] | None
+    reason: str
+    count: int = 0
+
+    @property
+    def record_id(self) -> str:
+        """Return the Feishu record id when a record was matched."""
+
+        if not self.record:
+            return ""
+        return str(self.record.get("record_id") or self.record.get("id") or "")
 
 
 class BitableClientProtocol(Protocol):
@@ -158,3 +177,139 @@ class MockFeishuBitableClient:
         self.calls.append({"method": "upload_file", "filePath": str(path), "token": token})
         self.uploaded_files.append(str(path))
         return token
+
+
+def find_existing_bitable_record(
+    records: list[dict[str, Any]],
+    resume: dict[str, Any],
+) -> ExistingBitableRecord:
+    """Match an existing Bitable record by phone first, then by unique exact name."""
+
+    phone = normalize_phone(
+        resume.get("phone")
+        or resume.get("phone_key")
+        or resume.get("candidatePhone")
+        or resume.get("candidate_phone")
+    )
+    if phone:
+        by_phone = next(
+            (
+                record
+                for record in records
+                if _field_contains_phone(
+                    record.get("fields", {}).get("候选人联系电话"),
+                    phone,
+                )
+            ),
+            None,
+        )
+        if by_phone:
+            return ExistingBitableRecord(record=by_phone, reason="phone_match")
+
+    name = _normalize_match_text(
+        resume.get("name") or resume.get("candidateName") or resume.get("candidate_name")
+    )
+    if not name:
+        return ExistingBitableRecord(record=None, reason="missing_name")
+    name_matches = [
+        record
+        for record in records
+        if any(
+            _normalize_match_text(_extract_field_text(value)) == name
+            for value in (
+                record.get("fields", {}).get("姓名"),
+                record.get("fields", {}).get("候选人姓名"),
+            )
+        )
+    ]
+    if len(name_matches) == 1:
+        return ExistingBitableRecord(record=name_matches[0], reason="name_match")
+    if len(name_matches) > 1:
+        return ExistingBitableRecord(
+            record=None,
+            reason="ambiguous_name_match",
+            count=len(name_matches),
+        )
+    return ExistingBitableRecord(record=None, reason="not_found")
+
+
+def pick_existing_bitable_fields(
+    fields: dict[str, Any],
+    field_map: Any,
+) -> dict[str, Any]:
+    """Keep only non-empty fields that exist in the target Bitable field map."""
+
+    existing_names = _field_names(field_map)
+    result: dict[str, Any] = {}
+    for name, value in fields.items():
+        if value is None or value == "":
+            continue
+        if name not in existing_names:
+            continue
+        result[name] = value
+    return result
+
+
+def _field_contains_phone(value: Any, phone: str) -> bool:
+    field_text = _extract_field_text(value)
+    normalized = normalize_phone(field_text)
+    if normalized == phone:
+        return True
+    digits = "".join(ch for ch in clean_text(field_text) if ch.isdigit())
+    return bool(digits and phone in digits)
+
+
+def _extract_field_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str | int | float):
+        return str(value)
+    if isinstance(value, list | tuple | set):
+        return " ".join(_extract_field_text(item) for item in value if _extract_field_text(item))
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key in ("text", "name", "email", "id", "link", "url"):
+            if value.get(key) not in (None, ""):
+                parts.append(str(value[key]))
+        text_arr = value.get("text_arr")
+        if isinstance(text_arr, list):
+            parts.append(_extract_field_text(text_arr))
+        return " ".join(part for part in parts if part)
+    return str(value)
+
+
+def _normalize_match_text(value: Any) -> str:
+    return clean_text(value).lower()
+
+
+def _field_names(field_map: Any) -> set[str]:
+    if field_map is None:
+        return set()
+    by_name = getattr(field_map, "by_name", None) or getattr(field_map, "byName", None)
+    if by_name is not None:
+        return set(_mapping_keys(by_name))
+    if isinstance(field_map, dict):
+        by_name = field_map.get("byName") or field_map.get("by_name")
+        if by_name is not None:
+            return set(_mapping_keys(by_name))
+        items = field_map.get("items")
+        if isinstance(items, list):
+            return set(_field_name_from_item(item) for item in items if _field_name_from_item(item))
+    if isinstance(field_map, list):
+        return set(_field_name_from_item(item) for item in field_map if _field_name_from_item(item))
+    return set()
+
+
+def _mapping_keys(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return [str(key) for key in value]
+    keys = getattr(value, "keys", None)
+    if callable(keys):
+        return [str(key) for key in keys()]
+    return []
+
+
+def _field_name_from_item(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("field_name") or item.get("name") or "")
+    return str(getattr(item, "field_name", "") or getattr(item, "name", "") or "")

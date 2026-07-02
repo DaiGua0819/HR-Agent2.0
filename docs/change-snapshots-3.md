@@ -53,3 +53,32 @@
 - 风险 / 待确认：
   - 当前只完成存储层迁移，日历客户端、Bitable 路由、飞书文档、回填逻辑仍待后续任务接入。
   - 真实线上库迁移已使用幂等补列，但最终上线前仍需对服务器数据库副本跑一次只读/副本迁移验证。
+
+---
+
+### 快照 0049：迁移面试中心 Bitable 路由与幂等匹配 helper
+
+- 修改时间：2026-07-02 22:36:55 +08:00
+- 修改原因：
+  - 旧面试中心会根据候选人岗位、日程标题、会话描述等文本选择不同飞书多维表；当前 Python 版只有固定 mock 表名，无法把 AI、HR、运营B 等岗位写到旧系统对应表。
+  - 旧面试中心写入多维表前会先按手机号匹配已有记录，再按唯一姓名匹配，同名多条必须跳过，避免重复创建或误写候选人记录；当前 Python 版缺少该幂等匹配边界。
+  - 旧面试中心真实写入飞书时会过滤不存在的字段，避免因为表结构差异导致整次写入失败；当前 Python 版缺少可复用字段过滤 helper。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/feishu/routes.py`
+  - `app/features/interview_center/feishu/bitable.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `BitableRoute`、`BitableTarget`、`DEFAULT_BITABLE_TABLE_ROUTES`、`resolve_bitable_target()`，迁移旧系统默认表 ID 和关键词路由。
+  - 新增 `ExistingBitableRecord`、`find_existing_bitable_record()`，实现手机号优先、唯一姓名命中、同名歧义跳过。
+  - 新增 `pick_existing_bitable_fields()`，只保留目标表字段图中存在且非空的字段。
+  - 新增测试覆盖 AI/HR/运营B 路由、手机号优先、唯一姓名、同名歧义、字段过滤。
+- 验证结果：
+  - 红灯确认：新增测试初次运行失败，原因是 `find_existing_bitable_record` 等 Task 2 接口尚不存在。
+  - 修复后：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q`：8 passed。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：21 passed，1 个既有 StarletteDeprecationWarning。
+  - 静态检查：同一 Python 运行 `-m ruff check app/features/interview_center/feishu/routes.py app/features/interview_center/feishu/bitable.py tests/features/test_interview_center_migration.py`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app/features/interview_center/feishu/routes.py app/features/interview_center/feishu/bitable.py tests/features/test_interview_center_migration.py`：通过。
+- 风险 / 待确认：
+  - 当前完成的是路由、匹配、字段过滤的纯逻辑边界；后续 Task 5 需要把这些 helper 接入真实资产同步写入路径。
+  - 旧系统支持环境变量覆盖 Bitable 路由，本轮暂按迁移计划落地默认路由；如线上仍依赖自定义路由，后续 OAuth/status 或配置兼容阶段需要补环境变量解析。
