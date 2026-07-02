@@ -687,7 +687,7 @@ class InterviewCenterService:
         review = {
             "status": normalized_decision,
             "decision": normalized_decision,
-            "note": str(note or "")[:1000],
+            "note": _legacy_clip_text(note, 1000),
             "reviewedAt": reviewed_at,
         }
         interview_evaluation = {
@@ -1364,6 +1364,15 @@ def _normalize_review_decision(value: str) -> str:
     if decision in {"passed", "rejected", "need_followup"}:
         return decision
     return "passed"
+
+
+def _legacy_clip_text(value: Any, max_length: int = 900) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > max_length:
+        return f"{text[:max_length]}..."
+    return text
 
 
 def _review_status_for_decision(decision: str) -> str:

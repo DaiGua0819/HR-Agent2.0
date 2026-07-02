@@ -1985,6 +1985,65 @@ def test_review_and_confirm_api_accept_empty_body_like_old_node() -> None:
     assert confirmed.json()["session"]["interviewEvaluation"]["review"]["decision"] == "passed"
 
 
+def test_review_api_preserves_decision_when_note_uses_old_js_string_semantics() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.interview_evaluation = {
+        "summary": "candidate completed project discussion",
+        "humanReviewRequired": True,
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        reviewed = client.post(
+            f"/api/interview-center/sessions/{session.id}/review",
+            json={"decision": "need_followup", "note": 123},
+        )
+
+    assert reviewed.status_code == 200
+    review = reviewed.json()["session"]["interviewEvaluation"]["review"]
+    assert reviewed.json()["session"]["status"] == "needs_review"
+    assert review["decision"] == "need_followup"
+    assert review["note"] == "123"
+
+
+def test_review_api_clips_note_like_old_node_clip_text() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.interview_evaluation = {
+        "summary": "candidate completed project discussion",
+        "humanReviewRequired": True,
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    note = f"  {'x' * 1001}  "
+
+    with TestClient(app) as client:
+        reviewed = client.post(
+            f"/api/interview-center/sessions/{session.id}/review",
+            json={"decision": "passed", "note": note},
+        )
+
+    assert reviewed.status_code == 200
+    review_note = reviewed.json()["session"]["interviewEvaluation"]["review"]["note"]
+    assert review_note == ("x" * 1000) + "..."
+
+
 def test_feishu_auth_url_route_includes_old_oauth_scopes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
     monkeypatch.setenv("FEISHU_APP_SECRET", "secret")

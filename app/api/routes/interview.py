@@ -182,6 +182,14 @@ async def _legacy_backfill_request(request: Request) -> InterviewBackfillRequest
     )
 
 
+async def _legacy_review_request(request: Request) -> InterviewReviewRequest:
+    raw_body = await _legacy_json_object(request)
+    return InterviewReviewRequest(
+        decision=_legacy_js_string(raw_body.get("decision")),
+        note=_legacy_js_string(raw_body.get("note")),
+    )
+
+
 def _legacy_js_boolean(value: Any) -> bool:
     if value is None or value is False:
         return False
@@ -190,6 +198,22 @@ def _legacy_js_boolean(value: Any) -> bool:
     if isinstance(value, str) and value == "":
         return False
     return True
+
+
+def _legacy_js_string(value: Any) -> str:
+    if value is None or value is False:
+        return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 0:
+            return ""
+        return str(int(value)) if float(value).is_integer() else str(value)
+    if value is True:
+        return "true"
+    if isinstance(value, list):
+        return ",".join(_legacy_js_string(item) for item in value)
+    if isinstance(value, dict):
+        return "[object Object]"
+    return str(value)
 
 
 _LEGACY_INTERVIEW_ERROR_MESSAGES = {
@@ -390,7 +414,7 @@ async def review_session(
 ) -> dict[str, object]:
     """Old interview-center human review endpoint."""
 
-    resolved = await _legacy_optional_body(request, InterviewReviewRequest)
+    resolved = await _legacy_review_request(request)
     return await _review_session_with_payload(session_id, request, resolved)
 
 
@@ -417,7 +441,7 @@ async def confirm_session(
 ) -> dict[str, object]:
     """Old interview-center confirm endpoint; same behavior as review."""
 
-    resolved = await _legacy_optional_body(request, InterviewReviewRequest)
+    resolved = await _legacy_review_request(request)
     return await _review_session_with_payload(session_id, request, resolved)
 
 

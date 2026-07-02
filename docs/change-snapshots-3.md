@@ -1461,3 +1461,36 @@
 - 风险 / 待确认：
   - 本轮只恢复 prepare/backfill 的旧布尔解析；如果旧入口其它字段还存在 JavaScript 类型转换依赖，后续继续按旧 Node 逐项补齐。
   - 对 JSON 对象/数组作为布尔字段的极端输入，当前按 JS 真值处理；这是为了贴齐旧入口，不代表新 API 推荐这样调用。
+
+---
+
+### 快照 0095：恢复复核入口旧备注解析与裁剪
+
+- 修改时间：2026-07-03 06:35:12 +08:00
+- 修改原因：
+  - 旧 Node `review/confirm` 入口对 `decision` 使用 `String(body.decision || "").trim()` 独立归一化，对 `note` 使用 `clipText(body.note || "", 1000)`。
+  - 当前 FastAPI 复核入口仍通过 Pydantic 对整个 body 做统一校验；当 `note` 是数字等旧 Node 可接受值时，会触发校验失败并把有效 `decision` 一起丢成默认 `passed`。
+  - 当前服务层保存备注只做 `[:1000]`，没有恢复旧 `clipText` 的 trim 和超长追加 `...` 行为。
+- 修改文件：
+  - `app/api/routes/interview.py`
+  - `app/features/interview_center/service.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `_legacy_review_request()`，让 `review` 和 `confirm` 按旧 Node 逐字段解析请求体，不再因为 `note` 类型导致 `decision` 回退。
+  - 新增 `_legacy_js_string()`，覆盖旧入口常见 JSON 值到 JavaScript `String()` 的兼容转换。
+  - `InterviewCenterService.review_session()` 保存备注时改用 `_legacy_clip_text(note, 1000)`，恢复 trim、空值归空、超长追加 `...` 的旧行为。
+  - 新增 `test_review_api_preserves_decision_when_note_uses_old_js_string_semantics()`，覆盖 `note:123` 时仍保留 `decision:"need_followup"` 并保存备注 `"123"`。
+  - 新增 `test_review_api_clips_note_like_old_node_clip_text()`，覆盖带空格的 1001 字符备注会 trim 后保存为前 1000 字符加 `...`。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "review_api_preserves_decision_when_note_uses_old_js_string_semantics or review_api_clips_note_like_old_node_clip_text"` 首次 2 failed；第一条状态从 `needs_review` 误变 `completed`，第二条备注保留前导空格且没有追加 `...`。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "review_api_preserves_decision_when_note_uses_old_js_string_semantics or review_api_clips_note_like_old_node_clip_text"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - Review 切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "review"`：5 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 迁移测试：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：75 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：88 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：322 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只恢复 review/confirm 的旧备注解析与裁剪；backfill 的 `earlyOverrideReason`/`earlyOverrideToken` 仍可继续按旧 Node 的更多类型转换细节逐项补齐。
+  - `_legacy_js_string()` 已覆盖常见 JSON 值；极端对象/数组输入按旧 JavaScript 字符串化近似处理，用于兼容旧入口，不代表新 API 推荐传入复杂类型。
