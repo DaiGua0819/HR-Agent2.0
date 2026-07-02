@@ -593,6 +593,42 @@ def test_interview_center_sync_api_defaults_to_auto_prepare_without_body() -> No
     assert len(doc_client.created) == 1
 
 
+def test_interview_center_sync_uses_old_js_body_defaults() -> None:
+    doc_client = FakeDocClient()
+    calendar_client = FakeCalendarClient(
+        [
+            {
+                "event_id": "event-sync-js-defaults",
+                "summary": "Alice 面试",
+                "description": "phone 13800138000",
+                "start_time": {"timestamp": "1783000000"},
+                "end_time": {"timestamp": "1783003600"},
+            }
+        ]
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=InMemoryInterviewStore(),
+        calendar_client=calendar_client,
+        llm=FakeLLM(),
+        doc_client=doc_client,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        synced = client.post(
+            "/api/interview-center/sync",
+            json={"calendarId": "", "autoPrepare": "false", "autoPrepareLimit": 0},
+        )
+
+    assert synced.status_code == 200
+    assert synced.json()["ok"] is True
+    assert synced.json()["prepared"] == 1
+    assert calendar_client.calls[0]["calendarId"] == "primary"
+    assert len(doc_client.created) == 1
+
+
 def test_old_action_routes_treat_malformed_json_body_as_empty_like_old_node() -> None:
     doc_client = FakeDocClient()
     sync_service = InterviewCenterService(

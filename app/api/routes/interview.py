@@ -135,16 +135,36 @@ def _legacy_error_message(exc: Exception) -> str:
 
 
 async def _legacy_optional_body(request: Request, model: type[_RequestModel]) -> _RequestModel:
+    raw_body = await _legacy_json_object(request)
+    try:
+        return model.model_validate(raw_body)
+    except ValidationError:
+        return model()
+
+
+async def _legacy_json_object(request: Request) -> dict[str, Any]:
     try:
         raw_body = await request.json()
     except ValueError:
         raw_body = {}
     if not isinstance(raw_body, dict):
-        raw_body = {}
+        return {}
+    return raw_body
+
+
+async def _legacy_sync_request(request: Request) -> InterviewCenterSyncRequest:
+    raw_body = await _legacy_json_object(request)
+    calendar_id = raw_body.get("calendarId") or "primary"
+    auto_prepare_limit = raw_body.get("autoPrepareLimit") or 12
     try:
-        return model.model_validate(raw_body)
-    except ValidationError:
-        return model()
+        resolved_limit = int(auto_prepare_limit)
+    except (TypeError, ValueError):
+        resolved_limit = 12
+    return InterviewCenterSyncRequest(
+        calendarId=str(calendar_id),
+        autoPrepare=raw_body.get("autoPrepare") is not False,
+        autoPrepareLimit=resolved_limit,
+    )
 
 
 _LEGACY_INTERVIEW_ERROR_MESSAGES = {
@@ -235,7 +255,7 @@ async def sync_calendar(
     """Old interview-center Feishu calendar sync entry point."""
 
     service = _service(request)
-    resolved = await _legacy_optional_body(request, InterviewCenterSyncRequest)
+    resolved = await _legacy_sync_request(request)
     result = await service.sync_calendar(
         calendar_id=resolved.calendar_id,
         auto_prepare=resolved.auto_prepare,
