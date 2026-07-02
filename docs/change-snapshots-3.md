@@ -671,3 +671,35 @@
 - 风险 / 待确认：
   - 本轮关闭了自动日历 tick 绕过 service 编排的问题，但真实飞书 OAuth、日历事件、Bitable 上传和本地 PDF 路径仍需在有授权环境下继续端到端联调。
   - `sync_calendar()` 的 `source/skip_if_running` 目前作为 service 内部参数使用；若后续 API 需要暴露自动来源，应继续保持默认手动行为，避免影响现有 `/sync` 调用方。
+---
+
+### 快照 0069：Bitable 面试阶段优先生成 InterviewFlow
+
+- 修改时间：2026-07-03 02:16:33 +08:00
+- 修改原因：
+  - 旧 Node 面试中心在返回 sessions 前会读取飞书 Bitable 面试表记录，按 `bitableRecordId`、候选人电话或姓名匹配 session，并优先使用真实 `面试阶段` 字段生成 `interviewFlow`。
+  - 当前 FastAPI 版只在 `InterviewSession.to_dict()` 中做 calendar fallback 推导，旧页面即使 Bitable 已有“二面通过/复试/已淘汰”等真实阶段，也只能看到 `source=calendar` 和空 `stageText`。
+  - Bitable 读取是异步 HTTP 能力，而当前 `list_sessions()` 是同步方法；需要在不破坏现有同步调用方的前提下，让旧 API 和同步结果使用异步 enrichment。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/features/interview_center/service.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_sessions_api_prefers_bitable_interview_flow_stage()`，覆盖 `/api/interview-center/sessions` 在 session 已有 `bitableTableId/bitableRecordId` 且 Bitable 记录含 `面试阶段=二面通过` 时，返回 `interviewFlow.source=bitable`、`stageText=二面通过`、`groupKey=completed`、`roundKey=second`。
+  - `InterviewCenterService` 新增 `list_sessions_enriched()`，保留原同步 `list_sessions()` 行为，同时为旧 API 和日历同步结果提供异步 Bitable flow enrichment。
+  - 新增 Bitable 记录匹配与字段解析 helper：按记录 ID 优先匹配，随后兼容候选人联系电话和姓名/候选人姓名；支持文本、数组、对象字段形态。
+  - Bitable flow 生成按旧逻辑优先使用 `面试阶段`，并结合 `面试记录`、`HR面试评价`、`复试结果评价`、结束时间等信息推导等待/已面试分组和初面/二面/其他轮次。
+  - `/api/interview-center/sessions` 改为 await `list_sessions_enriched()`；`sync_calendar()` 刷新的 sessions 也使用 enrichment，保持旧页面在手动/自动同步后立即看到 Bitable 阶段。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，原因为 `flow["source"]` 仍是 `calendar`，证明旧 API 未读取 Bitable 阶段。
+  - 新增切片验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k prefers_bitable_interview_flow_stage`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：49 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：62 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check`：无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：296 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮实现了读取 Bitable 阶段的旧 API 路径；真实飞书表字段如果存在更多阶段字段别名，仍需在端到端联调后继续扩展字段映射。
+  - 当前 enrichment 会在有可解析 tableId 时读取 Bitable 记录；真实环境的分页读取、字段权限和接口限流已经由 Bitable client 负责，但仍需要带真实 OAuth/tenant 配置做联调确认。

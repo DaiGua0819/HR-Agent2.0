@@ -413,6 +413,47 @@ def test_list_sessions_includes_old_interview_flow_payload() -> None:
     }
 
 
+def test_sessions_api_prefers_bitable_interview_flow_stage() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="resume-1",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"isInterviewLike": True, "title": "Alice 初面"},
+    )
+    session.bitable_table_id = "table-stage"
+    session.bitable_record_id = "rec-stage"
+    session.start_time = 4_000_000_000
+    session.end_time = 4_000_003_600
+    session.status = "matched"
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        bitable=MockFeishuBitableClient(
+            records={
+                "table-stage": [
+                    {
+                        "record_id": "rec-stage",
+                        "fields": {"面试阶段": "二面通过"},
+                    }
+                ]
+            }
+        ),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        response = client.get("/api/interview-center/sessions")
+
+    flow = response.json()["sessions"][0]["interviewFlow"]
+    assert flow["source"] == "bitable"
+    assert flow["stageText"] == "二面通过"
+    assert flow["recordId"] == "rec-stage"
+    assert flow["groupKey"] == "completed"
+    assert flow["roundKey"] == "second"
+
+
 def test_interview_center_sync_api_routes_are_compatible() -> None:
     service = InterviewCenterService(
         repository=ResumeRepository.in_memory([_resume_record()]),

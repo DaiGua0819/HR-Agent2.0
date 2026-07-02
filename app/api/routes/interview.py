@@ -166,7 +166,7 @@ async def list_sessions(
     """Old interview-center sessions list endpoint."""
 
     service = _service(request)
-    sessions = service.list_sessions(
+    sessions = await service.list_sessions_enriched(
         start_time=startTime,
         end_time=endTime,
         status=status,

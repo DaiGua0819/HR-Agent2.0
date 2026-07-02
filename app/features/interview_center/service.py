@@ -12,9 +12,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from app.core.text import clean_text
 from app.domain.conversation.models import ConversationSession
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
+from app.domain.resume.normalize import normalize_phone
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.backfill import (
@@ -53,6 +55,7 @@ from app.features.interview_center.feishu.oauth import (
     FeishuOAuthHttpClientProtocol,
     FeishuOAuthService,
 )
+from app.features.interview_center.feishu.routes import resolve_bitable_target
 from app.features.interview_center.question_generator import (
     InterviewQuestionGenerator,
     QuestionLLMProtocol,
@@ -349,7 +352,7 @@ class InterviewCenterService:
         next_result = {
             **result,
             "bitableResumeResults": bitable_resume_results,
-            "sessions": self.list_sessions(
+            "sessions": await self.list_sessions_enriched(
                 start_time=int(range_payload.get("startTime") or 0),
                 end_time=int(range_payload.get("endTime") or 0),
                 protection_source="calendar_sync_result",
@@ -401,7 +404,7 @@ class InterviewCenterService:
             **result,
             "prepared": len(prepared),
             "prepareErrors": prepare_errors,
-            "sessions": self.list_sessions(
+            "sessions": await self.list_sessions_enriched(
                 start_time=int(range_payload.get("startTime") or 0),
                 end_time=int(range_payload.get("endTime") or 0),
                 protection_source="calendar_sync_result",
@@ -730,6 +733,24 @@ class InterviewCenterService:
             sessions.append(session.to_dict())
         return sessions
 
+    async def list_sessions_enriched(
+        self,
+        *,
+        start_time: int = 0,
+        end_time: int = 0,
+        status: str = "",
+        protection_source: str = "sessions_response",
+    ) -> list[dict[str, Any]]:
+        """List sessions with old Bitable-backed interviewFlow metadata."""
+
+        sessions = self.list_sessions(
+            start_time=start_time,
+            end_time=end_time,
+            status=status,
+            protection_source=protection_source,
+        )
+        return await self._enrich_sessions_with_bitable_flow(sessions)
+
     def get_session(self, session_id: str) -> dict[str, Any]:
         """读取会话。"""
 
@@ -824,6 +845,48 @@ class InterviewCenterService:
             SessionFields.STATUS: session.status,
             SessionFields.SUMMARY_IMAGE: summary_file_token,
         }
+
+    async def _enrich_sessions_with_bitable_flow(
+        self,
+        sessions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not sessions:
+            return []
+        table_ids = sorted(
+            {
+                table_id
+                for session in sessions
+                if (table_id := _session_bitable_table_id(session))
+            }
+        )
+        if not table_ids:
+            return sessions
+        records_by_table: dict[str, list[dict[str, Any]]] = {}
+        bitable_error = ""
+        for table_id in table_ids:
+            try:
+                records_by_table[table_id] = await self.bitable.list_records(table_id)
+            except Exception as exc:
+                bitable_error = str(exc) or "read_bitable_interview_flow_failed"
+                records_by_table[table_id] = []
+        enriched = []
+        for session in sessions:
+            table_id = _session_bitable_table_id(session)
+            record = _find_bitable_record_for_session(
+                session,
+                records_by_table.get(table_id, []),
+            )
+            if record or bitable_error:
+                session = {
+                    **session,
+                    "interviewFlow": _make_bitable_interview_flow(
+                        session,
+                        record,
+                        bitable_error=bitable_error if not record else "",
+                    ),
+                }
+            enriched.append(session)
+        return enriched
 
     def _require_session(self, session_id: str) -> InterviewSession:
         session = self.store.get(session_id)
@@ -1007,6 +1070,261 @@ def _resume_pdf_path(resume: dict[str, Any]) -> str:
             if value not in (None, ""):
                 return str(value)
     return ""
+
+
+def _session_bitable_table_id(session: dict[str, Any]) -> str:
+    table_id = str(
+        session.get("bitableTableId")
+        or session.get("bitable_table_id")
+        or _dict_value(session.get("bitable")).get("tableId")
+        or ""
+    )
+    if table_id:
+        return table_id
+    target = resolve_bitable_target(
+        {
+            "session": session,
+            "resume": session.get("resume") or session.get("matchedResume") or {},
+        }
+    )
+    return target.table_id
+
+
+def _find_bitable_record_for_session(
+    session: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    direct_id = _session_bitable_record_id(session)
+    if direct_id:
+        matched = next(
+            (record for record in records if _bitable_record_id(record) == direct_id),
+            None,
+        )
+        if matched:
+            return matched
+    phone = normalize_phone(
+        _dict_value(session.get("resume")).get("phone")
+        or session.get("phone")
+        or session.get("candidatePhone")
+    )
+    if phone:
+        matched = next(
+            (
+                record
+                for record in records
+                if _bitable_field_contains_phone(
+                    record.get("fields", {}).get("候选人联系电话"),
+                    phone,
+                )
+            ),
+            None,
+        )
+        if matched:
+            return matched
+    names = {
+        _normalize_bitable_match_text(value)
+        for value in (
+            _dict_value(session.get("resume")).get("name"),
+            _dict_value(session.get("matchedResume")).get("name"),
+            session.get("candidateName"),
+            _dict_value(session.get("bitable")).get("fields", {}).get("姓名")
+            if isinstance(_dict_value(session.get("bitable")).get("fields"), dict)
+            else "",
+            _dict_value(session.get("bitable")).get("fields", {}).get("候选人姓名")
+            if isinstance(_dict_value(session.get("bitable")).get("fields"), dict)
+            else "",
+        )
+        if _normalize_bitable_match_text(value)
+    }
+    if not names:
+        return None
+    return next(
+        (
+            record
+            for record in records
+            if any(
+                _normalize_bitable_match_text(_extract_bitable_field_text(value)) in names
+                for value in (
+                    record.get("fields", {}).get("姓名"),
+                    record.get("fields", {}).get("候选人姓名"),
+                )
+            )
+        ),
+        None,
+    )
+
+
+def _make_bitable_interview_flow(
+    session: dict[str, Any],
+    record: dict[str, Any] | None,
+    *,
+    bitable_error: str = "",
+) -> dict[str, Any]:
+    fallback = dict(session.get("interviewFlow") or {})
+    if not record:
+        return {**fallback, "error": bitable_error or fallback.get("error", "")}
+    fields = record.get("fields") or {}
+    stage_text = _extract_bitable_field_text(
+        fields.get("面试阶段") or fields.get("interviewStage")
+    )
+    group = _derive_bitable_interview_group(
+        stage_text=stage_text,
+        fields=fields,
+        session=session,
+    )
+    round_payload = _derive_bitable_interview_round(stage_text=stage_text, session=session)
+    return {
+        "groupKey": group["key"],
+        "groupLabel": group["label"],
+        "roundKey": round_payload["key"],
+        "roundLabel": round_payload["label"],
+        "stageText": stage_text,
+        "source": "bitable",
+        "recordId": _bitable_record_id(record) or _session_bitable_record_id(session),
+        "error": bitable_error,
+    }
+
+
+def _derive_bitable_interview_group(
+    *,
+    stage_text: str,
+    fields: dict[str, Any],
+    session: dict[str, Any],
+) -> dict[str, str]:
+    compact_stage = clean_text(stage_text)
+    if compact_stage:
+        if any(
+            keyword in compact_stage
+            for keyword in (
+                "简历通过",
+                "待面试",
+                "待初面",
+                "待一面",
+                "待二面",
+                "待复试",
+                "已约",
+                "约面",
+                "邀约",
+            )
+        ):
+            return {"key": "waiting", "label": "等待面试"}
+        if any(
+            keyword in compact_stage
+            for keyword in (
+                "初面",
+                "初试",
+                "一面",
+                "二面",
+                "二试",
+                "复试",
+                "复面",
+                "终面",
+                "面试",
+                "通过",
+                "未通过",
+                "淘汰",
+                "不合适",
+                "完成",
+                "结束",
+            )
+        ):
+            return {"key": "completed", "label": "已经面试"}
+    if (
+        session.get("interviewEvaluation")
+        or _dict_value(session.get("bitableInterviewRecordImage")).get("fileToken")
+        or _extract_bitable_field_text(fields.get("面试记录"))
+        or _extract_bitable_field_text(fields.get("HR面试评价"))
+        or _extract_bitable_field_text(fields.get("复试结果评价"))
+    ):
+        return {"key": "completed", "label": "已经面试"}
+    end_time = _safe_int(session.get("endTime") or session.get("startTime"))
+    return (
+        {"key": "completed", "label": "已经面试"}
+        if end_time and end_time < int(time.time())
+        else {"key": "waiting", "label": "等待面试"}
+    )
+
+
+def _derive_bitable_interview_round(
+    *,
+    stage_text: str,
+    session: dict[str, Any],
+) -> dict[str, str]:
+    text = clean_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                stage_text,
+                session.get("title"),
+                session.get("description"),
+            )
+        )
+    ).lower()
+    if any(
+        keyword in text
+        for keyword in ("二面", "二试", "复试", "复面", "second", "2面", "2试")
+    ):
+        return {"key": "second", "label": "二面"}
+    if any(keyword in text for keyword in ("终面", "三面", "三试")):
+        return {"key": "other", "label": "其他轮次"}
+    if any(
+        keyword in text
+        for keyword in ("初面", "初试", "一面", "一试", "简历通过", "待面试", "面试")
+    ) or not text:
+        return {"key": "first", "label": "初面"}
+    return {"key": "other", "label": "其他轮次"}
+
+
+def _session_bitable_record_id(session: dict[str, Any]) -> str:
+    return str(
+        session.get("bitableRecordId")
+        or _dict_value(session.get("bitable")).get("recordId")
+        or _dict_value(session.get("bitableResumeImage")).get("recordId")
+        or _dict_value(session.get("bitableInterviewRecordImage")).get("recordId")
+        or _dict_value(session.get("bitableSkillEvaluationDocument")).get("recordId")
+        or ""
+    )
+
+
+def _bitable_record_id(record: dict[str, Any]) -> str:
+    return str(record.get("record_id") or record.get("id") or "")
+
+
+def _bitable_field_contains_phone(value: Any, phone: str) -> bool:
+    field_text = _extract_bitable_field_text(value)
+    normalized = normalize_phone(field_text)
+    if normalized == phone:
+        return True
+    digits = "".join(ch for ch in clean_text(field_text) if ch.isdigit())
+    return bool(digits and phone in digits)
+
+
+def _extract_bitable_field_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str | int | float | bool):
+        return clean_text(value)
+    if isinstance(value, list | tuple | set):
+        return clean_text(" ".join(_extract_bitable_field_text(item) for item in value))
+    if isinstance(value, dict):
+        parts = [
+            value.get("text"),
+            value.get("name"),
+            value.get("value"),
+            value.get("email"),
+            value.get("id"),
+            _extract_bitable_field_text(value.get("text_arr")),
+        ]
+        return clean_text(" ".join(str(part) for part in parts if part not in (None, "")))
+    return clean_text(value)
+
+
+def _normalize_bitable_match_text(value: Any) -> str:
+    return clean_text(value).lower()
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _backfill_available_at(session: InterviewSession) -> int:
