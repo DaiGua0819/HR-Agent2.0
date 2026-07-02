@@ -256,17 +256,18 @@ async def prepare_session(
 @router.post("/api/interview-center/sessions/{session_id}/backfill")
 async def backfill_session(
     session_id: str,
-    payload: InterviewBackfillRequest,
     request: Request,
+    payload: InterviewBackfillRequest | None = None,
 ) -> dict[str, object]:
     """Old interview-center backfill endpoint."""
 
+    resolved = payload or InterviewBackfillRequest()
     try:
         result = await _service(request).backfill_session(
             session_id,
-            force=payload.force,
-            early_override=payload.early_override,
-            early_override_token=payload.early_override_token,
+            force=resolved.force,
+            early_override=resolved.early_override,
+            early_override_token=resolved.early_override_token,
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except ValueError as exc:

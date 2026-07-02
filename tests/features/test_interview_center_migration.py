@@ -1120,6 +1120,28 @@ def test_backfill_api_routes_are_compatible() -> None:
     assert status.json()["lastResult"]["sessionId"] == session.id
 
 
+def test_backfill_api_accepts_empty_body_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+    with TestClient(app) as client:
+        backfilled = client.post(f"/api/interview-center/sessions/{session.id}/backfill")
+
+    assert backfilled.status_code == 200
+    assert backfilled.json()["ok"] is True
+    assert backfilled.json()["session"]["status"] == "needs_review"
+    assert backfilled.json()["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
+
+
 def test_auto_calendar_tick_skips_when_feishu_is_not_connected() -> None:
     calendar_client = FakeCalendarClient(
         [

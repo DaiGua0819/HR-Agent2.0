@@ -820,3 +820,32 @@
 - 风险 / 待确认：
   - 旧同步按钮默认会创建文档；本次恢复该行为后，如果某些内部调用不想自动准备，必须继续显式传 `autoPrepare:false`。
   - 本次仅兼容无 body 和默认值；如果旧前端存在非 JSON body 的调用路径，FastAPI 请求解析行为还需结合真实浏览器 smoke 再确认。
+---
+
+### 快照 0074：兼容回灌接口空请求体
+
+- 修改时间：2026-07-03 02:56:53 +08:00
+- 修改原因：
+  - 旧 Node 面试中心 `POST /api/interview-center/sessions/{id}/backfill` 会把请求体解析失败当作空对象，并用默认 `force=false / earlyOverride=false / earlyOverrideToken=""` 执行回灌。
+  - 当前 FastAPI 路由要求 `InterviewBackfillRequest` 请求体必须存在，旧前端或手动按钮如果不带 JSON body 会直接返回 422，不能进入正常回灌逻辑。
+  - 需要保持显式 body 的行为不变，同时兼容空 body 的旧入口调用。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_backfill_api_accepts_empty_body_like_old_node()`，覆盖无 body 调用 `/backfill` 也会执行默认回灌并返回 `needs_review` 和面试评价摘要。
+  - `backfill_session()` 路由 payload 改为可选，缺省时构造 `InterviewBackfillRequest()`，复用原有 service/backfill 逻辑。
+  - 原有显式 `{"force": true}` 回灌 API 测试保持不变，继续验证已有兼容入口。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，接口在无 body 时返回 `422 Unprocessable Entity`，证明当前实现不兼容旧 backfill 入口。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k "backfill_api"`，结果 `2 passed, 52 deselected`，仅有既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`，结果 `54 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`，结果 `67 passed`，仅有既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`，结果 `All checks passed!`。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`，通过。
+  - 空白检查：`git diff --check` 无空白错误，仅有 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`，结果 `301 passed`，仅有既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本次只兼容 backfill 空 body；旧 Node 的 review/confirm 也采用空对象默认解析，后续仍需继续逐项审计这些交互入口。
+  - 空 body 会按默认非强制回灌执行，因此仍受 10 分钟保护和数据源校验约束，不会绕过原有业务保护。
