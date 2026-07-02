@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -442,7 +443,7 @@ class BackfillService:
             "title": evaluation.get("summary") or "技能评价",
             "url": session.feishu_doc.get("url") or "",
         }
-        second_round = str(evaluation.get("round") or "").lower() == "second"
+        second_round = _is_second_interview_round(session, evaluation)
         await self.asset_sync.ensure_evaluation_document(
             session,
             resume,
@@ -458,7 +459,7 @@ class BackfillService:
         if self.asset_sync is None:
             return session
         evaluation = session.interview_evaluation
-        second_round = str(evaluation.get("round") or "").lower() == "second"
+        second_round = _is_second_interview_round(session, evaluation)
         existing_document = (
             session.bitable_second_interview_evaluation_document
             if second_round
@@ -493,6 +494,27 @@ class BackfillService:
 
 def _env_enabled(name: str) -> bool:
     return str(getenv(name, "true")).strip().lower() not in {"0", "false", "no"}
+
+
+def _is_second_interview_round(
+    session: InterviewSession,
+    evaluation: dict[str, Any],
+) -> bool:
+    if str(evaluation.get("round") or "").lower() == "second":
+        return True
+    text = " ".join(
+        str(value or "")
+        for value in (
+            session.payload.get("stageText"),
+            session.payload.get("interviewStage"),
+            session.payload.get("stage"),
+            session.payload.get("面试阶段"),
+            session.payload.get("title"),
+            session.payload.get("description"),
+            session.job_type,
+        )
+    )
+    return bool(re.search(r"二面|二试|复试|复面|second|2面|2试", text, flags=re.IGNORECASE))
 
 
 def _bounded_int(value: int | None, default: int, minimum: int, maximum: int) -> int:

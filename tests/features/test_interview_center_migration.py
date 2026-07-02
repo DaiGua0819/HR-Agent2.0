@@ -1145,6 +1145,45 @@ def test_backfill_syncs_missing_evaluation_document_without_force_like_old_node(
     assert result["session"]["bitableSkillEvaluationDocument"]["url"] == session.feishu_doc["url"]
 
 
+def test_backfill_existing_evaluation_uses_session_round_for_second_document() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    session.status = "needs_review"
+    session.payload = {
+        **session.payload,
+        "title": "Alice 二面面试",
+        "description": "复试安排",
+    }
+    session.interview_evaluation = {
+        "summary": "已有二面面评",
+        "humanReviewRequired": True,
+        "sessionId": session.id,
+    }
+    session.feishu_doc = {
+        "documentId": "doc-second",
+        "url": "https://example.feishu.cn/docx/doc-second",
+        "title": "Alice 二面题",
+    }
+    store.save(session)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="新的会议记录不应被读取"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+
+    result = asyncio.run(service.backfill_session(session.id, force=False))
+
+    assert result["session"]["interviewEvaluation"]["summary"] == "已有二面面评"
+    assert result["session"]["bitableSkillEvaluationDocument"] == {}
+    second_document = result["session"]["bitableSecondInterviewEvaluationDocument"]
+    assert second_document["field"] == "复试结果评价"
+    assert second_document["documentId"] == "evaluation:" + session.id
+    assert second_document["url"] == session.feishu_doc["url"]
+
+
 def test_review_session_updates_session_and_resume_evaluation() -> None:
     store = InMemoryInterviewStore()
     session = _backfill_session(store)

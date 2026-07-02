@@ -1160,3 +1160,33 @@
 - 风险 / 待确认：
   - 当前轮次判断沿用评价 payload 中的 `round == "second"` 来选择复试评价字段；旧 Node 使用 `deriveInterviewRound({ session })`，后续仍可继续扩展为完全复用 session 阶段推导。
   - 本轮验证使用 fake asset sync 和本地单测证明编排行为，真实 Bitable 字段权限和文档链接写入仍需在授权环境里端到端联调。
+
+---
+
+### 快照 0085：已有面评补同步按 session 推导二面字段
+
+- 修改时间：2026-07-03 04:53:44 +08:00
+- 修改原因：
+  - 旧 Node `deriveInterviewRound({ session })` 会从 session 标题、描述和阶段文本中识别 `二面/复试/second/2面` 等关键词，再决定评价文档写入初试字段还是复试字段。
+  - 上一轮 FastAPI 补同步已有面评评价文档时只看 `interviewEvaluation.round == "second"`；如果历史面评 payload 没有 round，但 session 标题或描述已经标明二面，就会错误写入 `bitableSkillEvaluationDocument`。
+  - 该偏差会导致复试评价文档链接落到初试字段，影响旧页面和 Bitable 中二面结果的查看。
+- 修改文件：
+  - `app/features/interview_center/backfill.py`
+  - `tests/features/test_interview_center_migration.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `_is_second_interview_round(session, evaluation)`，优先兼容既有 `evaluation.round == "second"`，再从 `stageText/interviewStage/stage/面试阶段/title/description/job_type` 中按旧关键词推导二面/复试。
+  - 新生成评价文档和已有面评补同步评价文档两条链路都改为复用该判断，避免 round 缺失时写错 Bitable 字段。
+  - 新增 `test_backfill_existing_evaluation_uses_session_round_for_second_document()`，覆盖已有面评、`force=false`、session 标题/描述标明二面但评价 payload 无 round 时，应写入 `bitableSecondInterviewEvaluationDocument`。
+- 验证结果：
+  - 红灯确认：新增测试首次运行失败，实际写入 `bitableSkillEvaluationDocument`，证明当前实现只看评价 payload 的 round。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k session_round_for_second_document`：1 passed，65 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - Backfill 切片验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "syncs_missing_evaluation_document or session_round_for_second_document or second_interview_evaluation_field or backfill_persists_evaluation"`：4 passed，62 deselected，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：66 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：79 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：313 passed，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 当前只补齐旧 Node 二面关键词推导中的关键字段来源；真实 Bitable 写入、飞书文档权限和线上历史 session 仍需在授权环境做端到端联调确认。
+  - 轮次关键词仍集中在 backfill 兼容层；后续如果面试中心其他链路也需要完全一致的轮次判断，可以再抽到共享 helper。
