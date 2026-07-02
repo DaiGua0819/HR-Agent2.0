@@ -25,6 +25,48 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def public_backfill_source(source: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the old frontend's stable backfill-source shape."""
+
+    raw = dict(source or {})
+    if not raw:
+        return {}
+    return {
+        **raw,
+        "types": _safe_list(raw.get("types")),
+        "rawTextLength": _safe_int(raw.get("rawTextLength")),
+        "linkedDocIds": _safe_list(raw.get("linkedDocIds")),
+        "minuteTokens": _safe_list(raw.get("minuteTokens")),
+        "sources": [_public_source_item(item) for item in _safe_list(raw.get("sources"))],
+        "errors": _safe_list(raw.get("errors")),
+    }
+
+
+def _safe_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _public_source_item(item: Any) -> dict[str, Any]:
+    source = item if isinstance(item, dict) else {}
+    return {
+        "type": str(source.get("type") or ""),
+        "id": str(source.get("id") or ""),
+        "url": str(source.get("url") or ""),
+        "length": _safe_int(source.get("length")),
+    }
+
+
 @dataclass
 class InterviewSession:
     """Interview-center session.
@@ -98,7 +140,7 @@ class InterviewSession:
             "interviewEvaluation": self.interview_evaluation,
             "humanReview": self.payload.get("humanReview") or {},
             "interviewFlow": _interview_flow(self),
-            "backfillSource": self.backfill_source,
+            "backfillSource": public_backfill_source(self.backfill_source),
             "ruleSuggestionIds": self.rule_suggestion_ids,
             "lastBackfillError": self.last_backfill_error,
             "backfillAttempts": self.backfill_attempts,

@@ -67,6 +67,7 @@ from app.features.interview_center.store import (
     InterviewSession,
     InterviewStoreProtocol,
     now_iso,
+    public_backfill_source,
 )
 from app.llm.client import LLMClient
 from app.settings import PROJECT_ROOT, load_settings
@@ -614,7 +615,7 @@ class InterviewCenterService:
         """Return the stored public backfill source for a session."""
 
         session = self._require_session(session_id)
-        return {"sessionId": session.id, "source": session.backfill_source}
+        return {"sessionId": session.id, "source": public_backfill_source(session.backfill_source)}
 
     async def bind_session(
         self,

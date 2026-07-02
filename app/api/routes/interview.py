@@ -10,7 +10,7 @@ from html import escape
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import require_session_payload
@@ -114,6 +114,19 @@ def _invite_service(request: Request) -> InterviewInviteService:
     return service
 
 
+def _legacy_error_response(status_code: int, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"ok": False, "error": _legacy_error_message(exc)},
+    )
+
+
+def _legacy_error_message(exc: Exception) -> str:
+    if isinstance(exc, KeyError) and exc.args:
+        return str(exc.args[0])
+    return str(exc)
+
+
 @router.post("/api/interview/invite")
 async def send_interview_invite(
     payload: InterviewInviteRequest,
@@ -214,7 +227,7 @@ async def get_session(session_id: str, request: Request) -> dict[str, object]:
     try:
         return _service(request).get_session(session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.post("/api/interview-center/sessions/{session_id}/bind")
@@ -233,7 +246,7 @@ async def bind_session(
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.post("/api/interview-center/sessions/{session_id}/prepare")
@@ -248,9 +261,9 @@ async def prepare_session(
     try:
         return await _service(request).prepare_session(session_id, force=resolved.force)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _legacy_error_response(409, exc)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.post("/api/interview-center/sessions/{session_id}/backfill")
@@ -271,9 +284,9 @@ async def backfill_session(
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _legacy_error_response(409, exc)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.get("/api/interview-center/sessions/{session_id}/backfill-source")
@@ -283,7 +296,7 @@ async def backfill_source(session_id: str, request: Request) -> dict[str, object
     try:
         return {"ok": True, **_service(request).backfill_source(session_id)}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.get("/api/interview-center/backfill/status")
@@ -310,7 +323,7 @@ async def review_session(
         )
         return {"ok": True, **result, "logs": _service(request).store.list_logs("", 50)}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.post("/api/interview-center/sessions/{session_id}/confirm")
@@ -342,7 +355,7 @@ async def sync_bitable(session_id: str, request: Request) -> dict[str, object]:
     try:
         return await _service(request).sync_session_to_bitable(session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.post("/api/interview-center/sessions/{session_id}/feedback-backfill")
@@ -361,7 +374,7 @@ async def feedback_backfill(
             interviewer=payload.interviewer,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _legacy_error_response(404, exc)
 
 
 @router.get("/api/interview-center/feishu/auth-url")
@@ -384,7 +397,7 @@ async def feishu_oauth_callback(
     except ValueError as exc:
         if not _wants_json(request):
             return _feishu_callback_failure_html(str(exc), status_code=400)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _legacy_error_response(400, exc)
     if _wants_json(request):
         return result
     return _feishu_callback_success_html()

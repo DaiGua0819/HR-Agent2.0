@@ -1142,6 +1142,78 @@ def test_backfill_api_accepts_empty_body_like_old_node() -> None:
     assert backfilled.json()["session"]["interviewEvaluation"]["summary"] == "候选人项目扎实"
 
 
+def test_old_interview_center_errors_use_error_payload_for_frontend() -> None:
+    store = InMemoryInterviewStore()
+    session = store.create(
+        resume_id="",
+        candidate_name="Alice",
+        job_type="AI应用开发实习生",
+        payload={"title": "Alice 面试"},
+    )
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        asset_sync=FakeAssetSync(),
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        missing = client.get("/api/interview-center/sessions/missing-session")
+        unbound = client.post(f"/api/interview-center/sessions/{session.id}/prepare")
+
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "ok": False,
+        "error": "interview_session_not_found",
+    }
+    assert unbound.status_code == 409
+    assert unbound.json() == {
+        "ok": False,
+        "error": "interview_session_resume_required",
+    }
+
+
+def test_backfill_source_payload_is_normalized_like_old_node() -> None:
+    store = InMemoryInterviewStore()
+    session = _backfill_session(store)
+    service = InterviewCenterService(
+        repository=ResumeRepository.in_memory([_resume_record()]),
+        store=store,
+        meeting_client=FakeMeetingClient(text="候选人项目扎实，建议通过"),
+        evaluation_generator=FakeEvaluationGenerator(),
+        asset_sync=FakeAssetSync(),
+        now=lambda: session.end_time + 601,
+    )
+    app = create_app()
+    app.state.interview_center_service = service
+
+    with TestClient(app) as client:
+        backfilled = client.post(
+            f"/api/interview-center/sessions/{session.id}/backfill",
+            json={"force": True},
+        )
+        source_response = client.get(
+            f"/api/interview-center/sessions/{session.id}/backfill-source"
+        )
+
+    expected_defaults = {
+        "source": "fake_meeting",
+        "types": [],
+        "rawTextLength": 0,
+        "linkedDocIds": [],
+        "minuteTokens": [],
+        "sources": [],
+        "errors": [],
+    }
+    assert backfilled.status_code == 200
+    for key, value in expected_defaults.items():
+        assert backfilled.json()["session"]["backfillSource"][key] == value
+    assert source_response.status_code == 200
+    for key, value in expected_defaults.items():
+        assert source_response.json()["source"][key] == value
+
+
 def test_auto_calendar_tick_skips_when_feishu_is_not_connected() -> None:
     calendar_client = FakeCalendarClient(
         [

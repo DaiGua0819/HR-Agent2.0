@@ -900,3 +900,39 @@
 - 风险 / 待确认：
   - 本轮 smoke 验证的是 dry-run/临时库下的本地 HTTP 运行态，未连接真实飞书 OAuth、真实日历事件、真实 Docx 写入和真实 Bitable 上传。
   - 后续还需要在有授权的环境中完成真实飞书 OAuth、calendar event、Docx、VC/妙记和 Bitable 写入的端到端联调，才能把总迁移目标标记完成。
+
+---
+
+### 快照 0077：兼容旧面试中心错误响应与回灌来源字段
+
+- 修改时间：2026-07-03 03:33:29 +08:00
+- 修改原因：
+  - 旧前端 `requestJson()` 在请求失败时只读取响应体里的 `error` 或 `message` 字段；当前 FastAPI 路由抛出的 `HTTPException` 默认返回 `detail`，会导致旧页面只能显示泛化的 HTTP 状态错误，和旧 Node 的 `{ ok:false, error:"..." }` 协议不一致。
+  - 旧 Node 的 `publicBackfillSource()` 会给回灌来源补齐 `types/rawTextLength/linkedDocIds/minuteTokens/sources/errors` 等稳定字段；当前服务在来源客户端只返回最小 source 时会把不完整对象直接暴露给旧页面。
+- 修改文件：
+  - `tests/features/test_interview_center_migration.py`
+  - `app/api/routes/interview.py`
+  - `app/features/interview_center/store.py`
+  - `app/features/interview_center/service.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 新增 `test_old_interview_center_errors_use_error_payload_for_frontend()`，覆盖旧面试中心 404/409 失败响应必须返回 `ok:false` 和 `error` 字段。
+  - `/api/interview-center/*` 旧路由的显式 `KeyError/ValueError` 捕获分支改为返回旧协议 JSON 错误响应；`KeyError` 会去掉 Python 字符串引号，避免前端显示 Python 异常形态。
+  - 新增 `test_backfill_source_payload_is_normalized_like_old_node()`，覆盖 backfill 结果和 `/backfill-source` 接口都补齐旧前端需要的来源字段。
+  - 新增 `public_backfill_source()` 并复用到 `InterviewSession.to_dict()` 与 `InterviewCenterService.backfill_source()`；空 source 仍保持 `{}`，避免过早回灌保护清理后的会话被误显示为有来源。
+- 验证结果：
+  - 红灯确认：新增旧错误响应测试首次失败，实际返回 `{"detail": ...}`，证明缺少旧协议 `error` 字段。
+  - 红灯确认：新增回灌来源规范化测试首次失败，实际 `backfillSource` 缺少 `types` 等字段。
+  - 聚焦验证：`C:\Users\24471\Documents\Codex\2026-06-25\codex-patchwork-recruit-gpt-agent-core\hr-agent\.venv312\Scripts\python.exe -m pytest tests/features/test_interview_center_migration.py -q -k old_interview_center_errors_use_error_payload_for_frontend`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 聚焦验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k backfill_source_payload_is_normalized_like_old_node`：1 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 边界回归：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q -k "premature_backfill or backfill_source_payload"`：2 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 目标验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py -q`：57 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 兼容验证：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_phase7a_persistence.py -q`：70 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 静态检查：同一 Python 运行 `-m ruff check app tests`：All checks passed。
+  - 编译检查：同一 Python 运行 `-m compileall app scripts run_control_plane.py run_worker.py`：通过。
+  - 空白检查：`git diff --check` 无空白错误，仅 Windows 换行提示。
+  - 全量回归：同一 Python 运行 `-m pytest -q`：304 passed，1 个既有 `StarletteDeprecationWarning`。
+  - 本地 18080 smoke：使用 `%TEMP%\hr-agent-interview-center-smoke-18080.sqlite` 和 `DRY_RUN=true` 启动 `run_control_plane.py`，真实 HTTP 检查 10 项通过：`/health`、`/interview-center.html`、`/assets/interview-center/app.js`、`/api/interview-center/sessions`、缺失 session 的 `/sessions/{id}` 404、缺失 session 的 `/prepare` 404、缺失 session 的 `/backfill-source` 404、`/feishu/status`、`/feishu/auth-url`、`/feishu/disconnect`；3 个 404 均确认包含 `ok:false` 和 `error`。服务已停止，临时 SQLite 已删除。
+- 风险 / 待确认：
+  - 本轮修复的是旧前端可见的本地协议兼容，不替代真实飞书 OAuth、真实日历、真实 Docx、真实 VC/妙记和真实 Bitable 写入联调。
+  - 错误内容目前沿用当前 service 层错误码，没有完整恢复旧 Node 的中文错误文案；如果产品侧需要逐字一致，还需要继续建立错误码到旧中文文案的映射表。
