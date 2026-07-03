@@ -115,6 +115,13 @@ READ_UNREAD_ROWS_JS = r"""
 
 READ_CHAT_CONTEXT_JS = r"""
 () => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
   const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) : "");
   const clean = (value) => String(value || "")
@@ -124,12 +131,47 @@ READ_CHAT_CONTEXT_JS = r"""
     .filter((line) => !["快捷回复", "不匹配"].includes(line))
     .join("\n")
     .trim();
+  const lines = (value) => clean(value).split("\n").map((line) => line.trim()).filter(Boolean);
+  const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const parseBatchPosition = (value) => {
+    const match = String(value || "").match(/沟通职位[:：]\s*([^\n]+)/);
+    return match ? clean(match[1]) : "";
+  };
+  const parseBatchName = (value) => {
+    const parts = lines(value);
+    const activeIndex = parts.findIndex((line) => /活跃|在线|刚刚/.test(line));
+    if (activeIndex > 0) return parts[activeIndex - 1];
+    return parts.find((line) => {
+      return !/^沟通职位[:：]/.test(line) &&
+        !/^求职意向[:：]/.test(line) &&
+        !/^\d+\s*岁$/.test(line) &&
+        !/\|/.test(line) &&
+        !/[,，、]/.test(line) &&
+        line.length <= 16;
+    }) || "";
+  };
+  const readBatchItem = (item) => {
+    const rawText = text(item);
+    const messageNode = item.querySelector(".item-container-message");
+    const rawMessage = text(messageNode) || lines(rawText).slice(-1)[0] || "";
+    const itemName = text(item.querySelector(
+      ".username, .username-text, .item-container-name, .candidate-name, [class*='user-name']"
+    )) || parseBatchName(rawText);
+    return {
+      id: attr(item, "id") || attr(item, "data-id") || rawText,
+      label: rawText,
+      name: itemName,
+      position: parseBatchPosition(rawText),
+      message: clean(rawMessage),
+      rawMessage,
+    };
+  };
   const selected = document.querySelector("#conversation-list .list-item.selected") ||
     document.querySelector("#conversation-list .list-item");
   const selectedText = text(selected);
-  const name = text(selected && selected.querySelector(".username")) ||
+  const name = text(selected && selected.querySelector(".username, .username-text")) ||
     selectedText.split("\n").find((line) => line && !/^\d+$/.test(line)) || "";
-  const position = text(selected && selected.querySelector(".jobname"));
+  const position = text(selected && selected.querySelector(".jobname, .job-name"));
   const lastMessage = text(selected && selected.querySelector(".last-message")) ||
     selectedText.split("\n").slice(-2, -1)[0] || "";
   const unreadBadge = selected && selected.querySelector(".el-badge__content, [class*='badge']");
@@ -144,13 +186,25 @@ READ_CHAT_CONTEXT_JS = r"""
     const rawText = text(node);
     return { sender, text: clean(rawText), rawText };
   }).filter((item) => item.text);
+  const batchItems = Array.from(document.querySelectorAll(
+    "section.batch-chat-panel .wrap-item, section.batch-chat-panel .batch-chat-item"
+  )).filter(visible).map(readBatchItem).filter((item) => item.message);
+  const batch = messages.length ? null : (
+    batchItems.find((item) => name && compact(item.name) === compact(name)) ||
+    batchItems.find((item) => name && compact(item.label).includes(compact(name))) ||
+    batchItems[0] ||
+    null
+  );
+  const effectiveMessages = messages.length ? messages : (
+    batch ? [{ sender: "candidate", text: batch.message, rawText: batch.rawMessage }] : []
+  );
   return {
-    id: attr(selected, "id") || selectedText,
-    label: selectedText,
-    name,
-    position,
-    messages,
-    latest_message: clean(lastMessage),
+    id: attr(selected, "id") || (batch && batch.id) || selectedText,
+    label: selectedText || (batch && batch.label) || "",
+    name: name || (batch && batch.name) || "",
+    position: position || (batch && batch.position) || "",
+    messages: effectiveMessages,
+    latest_message: clean(lastMessage) || (batch && batch.message) || "",
     unread_count: Number.parseInt(text(unreadBadge) || "0", 10) || 0,
   };
 }

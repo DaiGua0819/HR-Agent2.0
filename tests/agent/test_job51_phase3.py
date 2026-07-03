@@ -16,6 +16,7 @@ from app.platforms.job51.actions_chat import (
     _normalize_unread_rows,
     click_thread_by_state,
     find_next_thread,
+    read_chat_context,
     read_unread_conversations,
     select_positions,
     select_unread_filter,
@@ -35,6 +36,8 @@ from app.platforms.job51.actions_resume import (
 )
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
+from app.platforms.job51.dom_scripts import READ_CHAT_CONTEXT_JS
+from app.platforms.types import MessageSender
 from scripts.platform_once_common import (
     _find_candidate_row,
     _process,
@@ -198,6 +201,22 @@ def test_job51_verify_opened_candidate_uses_dom_context_fallback_until_stable() 
 
     assert opened["opened"] is True
     assert page.dom_context_reads == 2
+
+
+def test_job51_read_chat_context_parses_batch_panel_candidate_message() -> None:
+    """51job batch chat panels expose messages outside div.im-message-item."""
+
+    page = BatchPanelDomContextPage()
+
+    context = asyncio.run(read_chat_context(page, owner="宋峰峰"))
+
+    assert page.extension_reads == 1
+    assert page.dom_reads == 1
+    assert context.candidate.name == "郭超"
+    assert context.candidate.applied_position == "膨润土销售人员"
+    assert context.messages[-1].sender == MessageSender.CANDIDATE
+    assert context.messages[-1].text == "你好，简历已投递，期待回复~"
+    assert context.should_reply is True
 
 
 def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
@@ -640,6 +659,61 @@ class DelayedJob51ContextPage:
         index = min(self.dom_context_reads, len(self.contexts) - 1)
         self.dom_context_reads += 1
         return self.contexts[index]
+
+
+class BatchPanelDomContextPage:
+    """Simulates a live 51job batch panel evaluated through READ_CHAT_CONTEXT_JS."""
+
+    batch_label = "\n".join(
+        [
+            "沟通职位：膨润土销售人员",
+            "求职意向：15000-20000/月",
+            "上海,杭州,南京",
+            "郭超",
+            "1小时前活跃",
+            "55岁",
+            "24年 | 大专 | 上海-嘉定区",
+            "你好，简历已投递，期待回复~",
+        ]
+    )
+
+    def __init__(self) -> None:
+        self.extension_reads = 0
+        self.dom_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == "job51.read_chat_context":
+            self.extension_reads += 1
+            return {}
+        if script == READ_CHAT_CONTEXT_JS:
+            self.dom_reads += 1
+            if "batch-chat-panel" not in script or "item-container-message" not in script:
+                return {
+                    "id": self.batch_label,
+                    "label": self.batch_label,
+                    "name": "郭超",
+                    "position": "膨润土销售人员",
+                    "messages": [],
+                    "latest_message": "",
+                    "unread_count": 1,
+                }
+            return {
+                "id": self.batch_label,
+                "label": self.batch_label,
+                "name": "郭超",
+                "position": "膨润土销售人员",
+                "messages": [
+                    {
+                        "sender": "candidate",
+                        "text": "你好，简历已投递，期待回复~",
+                        "rawText": "你好，简历已投递，期待回复~",
+                    }
+                ],
+                "latest_message": "你好，简历已投递，期待回复~",
+                "unread_count": 1,
+            }
+        return {}
 
 
 class GuardedPreflightClickPage(FakePage):
