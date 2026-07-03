@@ -32,3 +32,18 @@ def test_load_settings_exports_dotenv_values_for_feishu(monkeypatch, tmp_path) -
     assert loaded.feishu.app_id == "cli_test"
     assert loaded.feishu.app_secret == "secret_test"
     assert loaded.feishu.redirect_uri == "http://example.test/callback"
+
+
+def test_env_example_documents_interview_center_feishu_keys() -> None:
+    env_example = settings_module.PROJECT_ROOT / ".env.example"
+    content = env_example.read_text(encoding="utf-8")
+
+    for key in (
+        "FEISHU_APP_ID=",
+        "FEISHU_APP_SECRET=",
+        "FEISHU_REDIRECT_URI=",
+        "FEISHU_BITABLE_APP_TOKEN=",
+        "FEISHU_CANDIDATE_TABLE_ID=",
+        "FEISHU_INTERVIEW_TABLE_ID=",
+    ):
+        assert key in content

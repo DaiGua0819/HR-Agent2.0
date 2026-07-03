@@ -1662,3 +1662,27 @@
 - 风险 / 待确认：
   - 本轮仅同步计划/快照文档状态，不改变 Python、前端或数据库逻辑。
   - 计划勾选代表本地迁移与兼容测试范围已闭环；真实 Feishu 外部系统联调仍按新增 `Remaining External Verification` 保留为环境依赖项。
+
+---
+
+### 快照 0102：补齐面试中心飞书联调样例环境项
+
+- 修改时间：2026-07-03 08:21:45 +08:00
+- 修改原因：
+  - 18080 已切换到迁移 worktree 后，飞书 OAuth 配置已能读到 `FEISHU_REDIRECT_URI`，但真实 Bitable 写入仍缺 `FEISHU_BITABLE_APP_TOKEN`。
+  - 进一步审计发现主 `.env` 和 `.env.example` 都没有 Bitable app token 相关变量；其中 `.env.example` 也缺少 `FEISHU_REDIRECT_URI`、候选人表和面试表配置项。
+  - `.env.example` 是本地部署和真实联调的入口说明，缺少这些键会让后续环境准备继续误判为代码问题。
+- 修改文件：
+  - `.env.example`
+  - `tests/domain/test_settings_env_file.py`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - `.env.example` 的飞书配置块新增 `FEISHU_REDIRECT_URI`、`FEISHU_BITABLE_APP_TOKEN`、`FEISHU_CANDIDATE_TABLE_ID`、`FEISHU_INTERVIEW_TABLE_ID`。
+  - 新增 `test_env_example_documents_interview_center_feishu_keys()`，防止样例配置再次漏掉面试中心真实联调所需飞书键。
+- 验证结果：
+  - 红灯确认：同一 Python 运行 `-m pytest tests/domain/test_settings_env_file.py -q` 首次失败，实际缺少 `FEISHU_REDIRECT_URI=`。
+  - 绿灯验证：同一命令再次运行：`2 passed`。
+  - 面试中心兼容切片：同一 Python 运行 `-m pytest tests/features/test_interview_center_migration.py tests/features/test_phase6_interview_center.py tests/domain/test_settings_env_file.py -q`：`86 passed`，1 个既有 `StarletteDeprecationWarning`。
+- 风险 / 待确认：
+  - 本轮只补 `.env.example` 和对应测试，不写入真实密钥，不改变 18080 当前运行环境。
+  - 真实 Bitable 写入仍需要在本机 `.env` 中配置有效 `FEISHU_BITABLE_APP_TOKEN`，并确认飞书应用拥有对应 Base/Bitable 权限。
