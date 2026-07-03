@@ -1638,3 +1638,27 @@
 - 风险 / 待确认：
   - 本轮只修正 OAuth 配置完整性展示，不改变授权码交换、token 保存、日历读取、Docx 写入或 Bitable 写入逻辑。
   - 真实飞书 OAuth 端到端仍需要在设置了有效 `FEISHU_REDIRECT_URI` 且飞书应用后台已登记同一回调地址的环境中联调确认。
+
+---
+
+### 快照 0101：闭环面试中心迁移计划勾选状态
+
+- 修改时间：2026-07-03 07:58:27 +08:00
+- 修改原因：
+  - 完成度审计发现 `docs/superpowers/plans/2026-07-02-interview-center-migration.md` 仍保留 34 个 `- [ ]` 未完成项。
+  - 当前代码、测试、快照和本地烟测已经覆盖 Task 1-8 的本地迁移验收范围；计划文件继续显示未完成会让后续审计误判迁移状态。
+  - 需要在计划文件中显式补充最新验证证据和真实 Feishu 环境仍需联调的边界，避免把本地 mock/dry-run 证据扩大解释成真实外部系统已联通。
+- 修改文件：
+  - `docs/superpowers/plans/2026-07-02-interview-center-migration.md`
+  - `docs/change-snapshots-3.md`
+- 修改结果：
+  - 将 Task 1-8 的执行复选项从 `- [ ]` 更新为 `- [x]`。
+  - 在计划末尾新增 `Completion Evidence`，记录当前分支、已验证提交、快照范围、核心旧路由、前端入口和 2026-07-03 的测试/静态/HTTP/Playwright 证据。
+  - 新增 `Remaining External Verification`，明确真实 Feishu OAuth、日历、Docx、妙记/会议纪要和 Bitable 写入仍依赖授权环境联调。
+- 验证结果：
+  - `rg -n "^- \[ \]" docs/superpowers/plans/2026-07-02-interview-center-migration.md`：无输出，计划中不再有未勾选执行项。
+  - `rg -n "Completion Evidence|Remaining External Verification|^- \[x\]" docs/superpowers/plans/2026-07-02-interview-center-migration.md`：能定位完成证据、剩余外部验证段落和已勾选任务。
+  - `git diff --check`：通过，无空白错误。
+- 风险 / 待确认：
+  - 本轮仅同步计划/快照文档状态，不改变 Python、前端或数据库逻辑。
+  - 计划勾选代表本地迁移与兼容测试范围已闭环；真实 Feishu 外部系统联调仍按新增 `Remaining External Verification` 保留为环境依赖项。
