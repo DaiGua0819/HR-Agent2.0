@@ -6,6 +6,8 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +23,7 @@ from app.settings import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 SESSION_COOKIE = "hr_agent_session"
+SESSION_TTL_SECONDS = 60 * 60 * 12
 
 
 class LoginRequest(BaseModel):
@@ -82,6 +85,84 @@ AUTH_PROFILES = {
         "zhanghuaibin",
     ),
 }
+
+
+class AuthSessionStore:
+    """Small SQLite-backed session store for browser login payloads."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_schema()
+
+    def set(self, token: str, payload: dict[str, object], *, ttl_seconds: int) -> None:
+        now = _now()
+        expires_at = now + ttl_seconds
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now,))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO auth_sessions
+                    (token, payload_json, created_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (token, body, now, expires_at),
+            )
+
+    def get(self, token: str) -> dict[str, object] | None:
+        if not token:
+            return None
+        now = _now()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload_json, expires_at
+                FROM auth_sessions
+                WHERE token = ?
+                """,
+                (token,),
+            ).fetchone()
+            if row is None:
+                return None
+            payload_json, expires_at = row
+            if float(expires_at) <= now:
+                conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                return None
+            try:
+                payload = json.loads(str(payload_json))
+            except json.JSONDecodeError:
+                conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                return None
+            return payload if isinstance(payload, dict) else None
+
+    def delete(self, token: str) -> None:
+        if not token:
+            return
+        with self._connect() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    token TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at
+                ON auth_sessions (expires_at)
+                """
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.path)
 
 
 @router.get("/me")
@@ -168,8 +249,7 @@ async def logout(request: Request, response: Response) -> dict[str, str]:
     """Clear the current local session."""
 
     token = request.cookies.get(SESSION_COOKIE, "")
-    if token:
-        _session_store(request).pop(token, None)
+    _session_store(request).delete(token)
     response.delete_cookie(SESSION_COOKIE)
     return {"status": "ok"}
 
@@ -205,13 +285,14 @@ def current_user_id(request: Request) -> str:
 
 def _set_session(request: Request, response: Response, payload: dict[str, object]) -> None:
     token = secrets.token_urlsafe(32)
-    _session_store(request)[token] = payload
+    ttl_seconds = _session_ttl_seconds(request)
+    _session_store(request).set(token, payload, ttl_seconds=ttl_seconds)
     response.set_cookie(
         SESSION_COOKIE,
         token,
         httponly=True,
         samesite="lax",
-        max_age=60 * 60 * 12,
+        max_age=ttl_seconds,
     )
 
 
@@ -219,12 +300,30 @@ def _session_payload(request: Request) -> dict[str, object] | None:
     return _session_store(request).get(request.cookies.get(SESSION_COOKIE, ""))
 
 
-def _session_store(request: Request) -> dict[str, dict[str, object]]:
-    sessions = getattr(request.app.state, "auth_sessions", None)
-    if sessions is None:
-        sessions = {}
-        request.app.state.auth_sessions = sessions
-    return sessions
+def _session_store(request: Request) -> AuthSessionStore:
+    store = getattr(request.app.state, "auth_session_store", None)
+    path = _session_store_path(request)
+    if not isinstance(store, AuthSessionStore) or store.path != path:
+        store = AuthSessionStore(path)
+        request.app.state.auth_session_store = store
+    return store
+
+
+def _session_store_path(request: Request) -> Path:
+    path = getattr(request.app.state, "auth_session_store_path", None)
+    return Path(path) if path else PROJECT_ROOT / "data" / "auth_sessions.sqlite"
+
+
+def _session_ttl_seconds(request: Request) -> int:
+    value = getattr(request.app.state, "auth_session_ttl_seconds", SESSION_TTL_SECONDS)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return SESSION_TTL_SECONDS
+
+
+def _now() -> float:
+    return time.time()
 
 
 def _oauth_state_store(request: Request) -> dict[str, bool]:

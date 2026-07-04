@@ -90,14 +90,40 @@ const RESUME_JOB_DISPLAY_LABELS = {
 };
 const $ = (id) => document.getElementById(id);
 async function api(path, options = {}) {
-  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const { skipAuthExpiredHandler = false, headers = {}, ...fetchOptions } = options;
+  const response = await fetch(path, { headers: { "Content-Type": "application/json", ...headers }, ...fetchOptions });
   if (!response.ok) {
     const text = await response.text();
     const error = new Error(`${response.status} ${text}`);
     error.status = response.status;
+    if (error.status === 401 && !skipAuthExpiredHandler) handleAuthExpired(error);
     throw error;
   }
   return response.json();
+}
+function handleAuthExpired(error) {
+  const message = "登录已失效，请重新使用飞书授权登录";
+  state.user = null;
+  state.resumes = [];
+  state.selectedId = "";
+  state.context = null;
+  state.total = 0;
+  state.pages = 0;
+  state.interviewSessions = [];
+  state.selectedInterviewId = "";
+  clearResumePrefetchCache();
+  const emptyState = $("emptyState");
+  if (emptyState) {
+    $("emptyState").textContent = "登录已失效，请重新使用飞书授权登录";
+    emptyState.style.display = "block";
+  }
+  if ($("miniList")) $("miniList").innerHTML = "";
+  if ($("resumePagination")) $("resumePagination").innerHTML = "";
+  if ($("summaryCards")) $("summaryCards").innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+  if ($("resumePreview")) $("resumePreview").textContent = message;
+  setResumeMemberMode();
+  hrAuth.showLogin(message);
+  return error;
 }
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -394,7 +420,7 @@ function setView(view) {
   if (view === "automation") renderAutomationControls();
 }
 async function loadUser() {
-  const data = await api("/api/auth/me");
+  const data = await api("/api/auth/me", { skipAuthExpiredHandler: true });
   state.user = data;
   hrAuth.updateUserCard(data);
   return data;

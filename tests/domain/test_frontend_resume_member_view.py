@@ -78,6 +78,20 @@ def test_frontend_lands_on_resume_library_after_login() -> None:
     assert "setView(landingView)" in script
 
 
+def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever() -> None:
+    """A 401 from a resume API request should send the user back to Feishu login."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert "/assets/app.js?v=20260704-auth-session-fix" in html
+    assert "function handleAuthExpired" in script
+    assert "登录已失效，请重新使用飞书授权登录" in script
+    assert 'error.status === 401' in script
+    assert "handleAuthExpired(error)" in script
+    assert '$("emptyState").textContent = "登录已失效，请重新使用飞书授权登录"' in script
+
+
 def test_member_resume_library_uses_single_stitch_workspace() -> None:
     """Normal members should land in the same airy resume workspace without the legacy table."""
 

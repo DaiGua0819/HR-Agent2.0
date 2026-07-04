@@ -46,6 +46,85 @@ def test_admin_login_returns_full_ui_access() -> None:
         assert me.json()["user"]["id"] == "local-admin"
 
 
+def test_login_session_survives_control_plane_restart(tmp_path: Path) -> None:
+    """A valid login cookie should survive a control-plane process restart."""
+
+    session_store = tmp_path / "auth_sessions.sqlite"
+    first_app = create_app()
+    first_app.state.auth_session_store_path = session_store
+    with TestClient(first_app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+
+    assert response.status_code == 200
+    token = response.cookies.get("hr_agent_session")
+    assert token
+
+    restarted_app = create_app()
+    restarted_app.state.auth_session_store_path = session_store
+    with TestClient(restarted_app) as client:
+        me = client.get("/api/auth/me", headers={"cookie": f"hr_agent_session={token}"})
+
+    assert me.status_code == 200
+    assert me.json()["user"]["id"] == "local-admin"
+
+
+def test_logout_invalidates_persisted_login_session(tmp_path: Path) -> None:
+    """Logout should remove the stored session so old cookies cannot be reused."""
+
+    session_store = tmp_path / "auth_sessions.sqlite"
+    app = create_app()
+    app.state.auth_session_store_path = session_store
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        token = response.cookies.get("hr_agent_session")
+        assert token
+        logout = client.post(
+            "/api/auth/logout",
+            headers={"cookie": f"hr_agent_session={token}"},
+        )
+
+    assert logout.status_code == 200
+
+    restarted_app = create_app()
+    restarted_app.state.auth_session_store_path = session_store
+    with TestClient(restarted_app) as client:
+        me = client.get("/api/auth/me", headers={"cookie": f"hr_agent_session={token}"})
+
+    assert me.status_code == 401
+    assert me.json()["detail"] == "not_authenticated"
+
+
+def test_expired_persisted_login_session_is_rejected(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Expired persisted sessions should behave the same as anonymous requests."""
+
+    session_store = tmp_path / "auth_sessions.sqlite"
+    times = iter([1000.0, 1002.0])
+    monkeypatch.setattr("app.api.routes.auth._now", lambda: next(times))
+    app = create_app()
+    app.state.auth_session_store_path = session_store
+    app.state.auth_session_ttl_seconds = 1
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin"},
+        )
+        token = response.cookies.get("hr_agent_session")
+        assert token
+        me = client.get("/api/auth/me", headers={"cookie": f"hr_agent_session={token}"})
+
+    assert me.status_code == 401
+    assert me.json()["detail"] == "not_authenticated"
+
+
 def test_member_login_is_limited_to_resume_library() -> None:
     """Normal members only receive resume-library navigation and actions."""
 
