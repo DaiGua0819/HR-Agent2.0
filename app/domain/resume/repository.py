@@ -14,12 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from app.db.engine import connect, run_migrations
-from app.domain.resume.job_types import OPERATION_A, OPERATION_B, canonical_resume_job_type
+from app.domain.resume.job_types import (
+    AI_PRODUCT_MANAGER,
+    OPERATION_A,
+    OPERATION_B,
+    canonical_resume_job_type,
+)
 from app.domain.resume.models import Resume, ResumeRecord
 from app.domain.scoring.engine import score_resume_for_profile
 from app.settings import AppSettings, load_settings
 
 _BASE_COLUMNS = ["id", "payload", "phone_key", "job_type", "match_score", "updated_at"]
+_AUTO_SCORE_JOB_TYPES = {OPERATION_A, OPERATION_B, AI_PRODUCT_MANAGER}
 _BRIDGE_COLUMNS = [
     "parsed_name",
     "linked_session_id",
@@ -291,7 +297,7 @@ def _with_auto_score(record: ResumeRecord) -> ResumeRecord:
         or record.payload.get("applied_position")
     )
     canonical = canonical_resume_job_type(job_type)
-    if canonical not in {OPERATION_A, OPERATION_B}:
+    if canonical not in _AUTO_SCORE_JOB_TYPES:
         return record
     result = score_resume_for_profile(record.payload, canonical)
     return ResumeRecord(

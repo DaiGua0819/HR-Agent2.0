@@ -276,23 +276,56 @@
         </section>
 
         <section class="page" data-page="interviews">
-          <div class="interview-layout">
-            <section class="panel">
-              <div class="panel-head"><h3>面试会话</h3></div>
-              <div class="task-list" id="interviewSessions"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-head"><h3>候选人详情</h3></div>
-              <div id="interviewDetail" class="detail-block ts-preflight-panel">从简历库点击“约面试”，或在这里选择已有会话。</div>
-            </section>
-            <section class="panel">
-              <div class="panel-head"><h3>题目与飞书</h3></div>
-              <div class="stack">
-                <button id="generateQuestionsBtn" class="ts-btn" type="button">生成题目</button>
-                <button id="syncFeishuBtn" class="ts-btn" type="button">同步飞书</button>
-                <button id="renderImageBtn" class="ts-btn" type="button">生成图片</button>
-                <button id="backfillBtn" class="ts-btn" type="button">反馈回填</button>
-                <p class="muted" id="interviewStatus">真实飞书仍按后端接口保护。</p>
+          <div class="ts-interview-workspace">
+            <aside class="ts-filter-card ts-interview-sidebar" aria-label="面试会话列表">
+              <div class="ts-filter-head">
+                <h2>面试中心</h2>
+                <div class="ts-filter-head-actions">
+                  <button id="interviewRefreshBtn" class="ts-filter-toggle" type="button">刷新</button>
+                  <button id="syncFeishuBtn" class="ts-filter-toggle" type="button">同步</button>
+                </div>
+              </div>
+              <div class="ts-interview-status-strip">
+                <span id="interviewConnectionPill" class="safety-pill">飞书状态读取中</span>
+                <span id="interviewSyncPill" class="safety-pill">同步状态读取中</span>
+              </div>
+              <div class="ts-interview-filter-panel">
+                <label>
+                  <span>会话状态</span>
+                  <select id="interviewStatusFilter">
+                    <option value="">全部状态</option>
+                    <option value="needs_match">待匹配</option>
+                    <option value="matched">已绑定</option>
+                    <option value="prepared">已准备</option>
+                    <option value="prepared_local">本地准备</option>
+                    <option value="needs_review">待复核</option>
+                    <option value="completed">已完成</option>
+                  </select>
+                </label>
+                <label>
+                  <span>开始日期</span>
+                  <input id="interviewDateStart" type="date" />
+                </label>
+                <label>
+                  <span>结束日期</span>
+                  <input id="interviewDateEnd" type="date" />
+                </label>
+                <button id="interviewApplyDateBtn" class="ts-btn" type="button">应用筛选</button>
+              </div>
+              <div class="ts-candidate-list ts-interview-list" id="interviewSessions"></div>
+            </aside>
+
+            <section class="ts-resume-surface ts-interview-surface">
+              <div class="preview-toolbar">
+                <strong id="interviewWorkspaceTitle">请选择面试会话</strong>
+                <div class="ts-preview-actions">
+                  <button id="generateQuestionsBtn" class="ts-btn" type="button">准备面试</button>
+                  <button id="openInterviewDocBtn" class="ts-btn" type="button">打开文档</button>
+                  <button id="backfillBtn" class="ts-btn" type="button">回填评价</button>
+                </div>
+              </div>
+              <div id="interviewDetail" class="detail-block ts-preflight-panel">
+                <div class="ts-empty-state">从左侧选择面试会话，或在简历库点击“约面试”。</div>
               </div>
             </section>
           </div>
@@ -320,6 +353,6 @@
       </main>
     </div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260702-resume-fill-frame"></script>
+    <script src="/assets/app.js?v=20260703-admin-interviews"></script>
   </body>
 </html>

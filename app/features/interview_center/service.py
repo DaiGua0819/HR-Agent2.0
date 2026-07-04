@@ -357,13 +357,11 @@ class InterviewCenterService:
                     str(exc) or "sync_resume_image_failed",
                     payload,
                 )
-        range_payload = result.get("range") or {}
         next_result = {
             **result,
             "bitableResumeResults": bitable_resume_results,
-            "sessions": await self.list_sessions_enriched(
-                start_time=int(range_payload.get("startTime") or 0),
-                end_time=int(range_payload.get("endTime") or 0),
+            "sessions": await self._refresh_synced_result_sessions(
+                result,
                 protection_source="calendar_sync_result",
             ),
         }
@@ -408,14 +406,12 @@ class InterviewCenterService:
                 }
                 prepare_errors.append(error)
                 self.store.append_log(error["sessionId"], "error", error["error"], {})
-        range_payload = result.get("range") or {}
         next_result = {
             **result,
             "prepared": len(prepared),
             "prepareErrors": prepare_errors,
-            "sessions": await self.list_sessions_enriched(
-                start_time=int(range_payload.get("startTime") or 0),
-                end_time=int(range_payload.get("endTime") or 0),
+            "sessions": await self._refresh_synced_result_sessions(
+                result,
                 protection_source="calendar_sync_result",
             ),
         }
@@ -426,6 +422,32 @@ class InterviewCenterService:
                 "prepareErrors": len(prepare_errors),
             }
         return next_result
+
+    async def _refresh_synced_result_sessions(
+        self,
+        result: dict[str, Any],
+        *,
+        protection_source: str,
+    ) -> list[dict[str, Any]]:
+        sessions = []
+        seen: set[str] = set()
+        for session_payload in list(result.get("sessions") or []):
+            session_id = str(session_payload.get("id") or "")
+            if not session_id or session_id in seen:
+                continue
+            seen.add(session_id)
+            session = self.store.get(session_id)
+            if session is None:
+                sessions.append(dict(session_payload))
+                continue
+            if not session.payload.get("isInterviewLike"):
+                continue
+            session = self._protect_premature_backfill(
+                session,
+                source=protection_source,
+            )
+            sessions.append(session.to_dict())
+        return await self._enrich_sessions_with_bitable_flow(sessions)
 
     @property
     def scheduler_running(self) -> bool:

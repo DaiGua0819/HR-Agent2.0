@@ -115,3 +115,60 @@ def test_operation_profiles_penalize_pure_execution_without_strategy() -> None:
     assert result["profile"] == "运营A"
     assert result["score"] <= 45
     assert result["risks"]["count"] >= 2
+
+
+def test_ai_product_manager_scores_against_ai_native_product_jd() -> None:
+    """AI 产品经理按 PDF JD 识别工作流拆解、Agent 产品设计、Prompt/RAG 和 Eval 闭环。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 4年产品经理 B2B 企业服务 AI SaaS Agent Copilot Workflow "
+            "用户访谈 真实工作流拆解 痛点分析 付费动机 PRD 用户故事 验收标准 上线复盘 "
+            "Prompt RAG Tool Calling LLM 质量指标 任务完成率 采纳率 bad case golden set "
+            "Cursor Claude Code ChatGPT SQL Python 0到1 产品 商业化 定价 客户试点"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["profile"] == "AI产品经理"
+    assert result["score"] >= 75
+    assert {item["label"] for item in result["must"]["items"]} >= {
+        "2年以上产品/创业/咨询/解决方案/业务分析经验",
+        "用户访谈与真实工作流拆解",
+        "AI Agent/Copilot/Workflow 产品设计",
+        "Prompt/RAG/Tool Calling/LLM 基础理解",
+        "Eval/质量指标/Bad case 闭环",
+        "PRD/用户故事/验收标准/上线复盘能力",
+    }
+    assert result["bonus"]["count"] >= 4
+    assert result["risks"]["count"] == 0
+
+
+def test_ai_product_manager_penalizes_traditional_prd_only_profile() -> None:
+    """只有传统 PRD/界面功能经验且无 AI 产品证据时不能高分。"""
+
+    result = calculate_jd_match(
+        "只会写 PRD 只关注界面功能 传统 SaaS 聊天框 不愿学习 Prompt Eval Agent RAG",
+        "AI Product Manager",
+    )
+
+    assert result["profile"] == "AI产品经理"
+    assert result["score"] <= 45
+    assert result["risks"]["count"] >= 2
+
+
+def test_ai_product_manager_risks_cap_score_below_priority_level() -> None:
+    """AI 产品经理命中多个风险项时，即使有部分经验也不能进入 A 优先。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 3年产品经理 用户访谈 工作流拆解 Agent Workflow Prompt RAG "
+            "PRD 验收标准 只转述用户需求 缺少业务价值判断 只关注界面功能 "
+            "不关心 AI 输出质量和业务结果"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["profile"] == "AI产品经理"
+    assert result["score"] <= 74
+    assert result["risks"]["count"] >= 2

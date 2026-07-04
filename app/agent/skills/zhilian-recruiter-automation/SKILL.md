@@ -23,7 +23,7 @@ description: Use when operating Zhilian recruiter automation for unread message 
 - 智联聊天入口是 `https://rd6.zhaopin.com/app/im`，推荐人才入口是 `https://rd6.zhaopin.com/app/recommend`。
 - 智联使用自己的 textarea、联系人列表、职位筛选、未读筛选和“要附件简历”控件，不复用 BOSS/51job DOM selector。
 - 业务规则复用 `boss_chat_rules.json`：岗位筛选问题、候选人问答、通过/失败规则、未知问题记录方式都沿用同一份知识库。
-- 未配置到知识库的岗位只记录并跳过，不回复、不求简历。已配置的直求简历岗位包括运营 A/B、外部财务产品顾问、AI智能体解决方案负责人等；运营 A/B 在智联不答疑、不筛选，先发送 `你好可以看看简历吗` 或 `你好，方便发一份简历过来吗`，再通过 `directResume` 驱动要附件简历/附件下载。
+- 未配置到知识库的岗位只记录并跳过，不回复、不求简历。已配置的直求简历岗位包括运营 A/B、外部财务产品顾问、AI智能体解决方案负责人、AI产品经理等；运营 A/B 在智联不答疑、不筛选，先发送 `你好可以看看简历吗` 或 `你好，方便发一份简历过来吗`，再通过 `directResume` 驱动要附件简历/附件下载。
 
 ## 未读消息处理流程
 
@@ -34,7 +34,7 @@ description: Use when operating Zhilian recruiter automation for unread message 
 5. AI 应用开发相关岗位走基础条件流程：未发送基础条件则发送；候选人明确接受后求附件简历；拒绝或不明确则等待后续或跳过。
 6. 销售、HRBP/人力资源、应用技术、电气、国际业务等非 AI 岗位走岗位专属筛选问题和知识库，不发送 AI 岗位常用语。
 7. 运营 A/B（企业内容运营负责人（B2B/短视频方向）、B端社交媒体运营）在智联不回答岗位问题、不发送筛选问题；未收到简历且未求过简历时，先发送 `你好可以看看简历吗` 或 `你好，方便发一份简历过来吗`，再执行 `zhilian_request_resume` 要附件简历/附件下载。
-8. 财务 AI 团队新增直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer）不发送筛选问题；先用智联专用发送函数发送岗位配置的 `resumeRequestPrompt`，再执行 `zhilian_request_resume` 要附件简历。
+8. 财务/AI 直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer、AI产品经理/AI Product Manager/AI PM）不发送筛选问题；先用智联专用发送函数发送岗位配置的 `resumeRequestPrompt`，再执行 `zhilian_request_resume` 要附件简历。Skill 只是操作协议说明，运行时实际规则由 `boss_chat_rules.json`、policy、`ConversationRunner` 和平台 Adapter 生效。
 9. 候选人提问时先用岗位知识库答疑；知识库没有答案时不回复，只记录为待补充问题。
 10. 候选人通过筛选后使用 `zhilian_request_resume`，点击智联页面里的“要附件简历”或等价控件。
 11. 发送或求简历后必须观察页面状态和最新消息，记录候选人处理结果、岗位、问题、回复、是否求简历。

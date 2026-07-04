@@ -161,6 +161,37 @@
         "已收到或已求过简历时不重复发送话术、不重复求简历。",
         "简历入库岗位归类为投资交易策略研究员。"
       ]
+    },
+    "AI产品经理": {
+      "category": "ai_product_manager_direct_resume",
+      "template": "该岗位不发送筛选问题，先从两句简历话术里随机发送一句，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "AI产品经理",
+      "aliases": [
+        "AI 产品经理",
+        "AI Product Manager",
+        "AI PM"
+      ],
+      "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+      "resumeRequestPrompts": [
+        "你好，方便发一份简历过来吗",
+        "你好，可以看看简历吗"
+      ],
+      "rolePrompt": "AI产品经理 / AI Product Manager按直求简历流程处理：不发送筛选问题；若未收到简历且未求过简历，先在“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再执行求简历；若候选人已请求发送附件简历，则直接同意/求简历。简历入库岗位为AI产品经理，入库后按AI产品经理JD评分规则评分。",
+      "talkingPoints": [
+        "AI产品经理",
+        "AI Product Manager",
+        "Agent/Copilot/Workflow",
+        "Prompt/RAG/Eval",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "未收到简历且未求过简历时，从两句简历话术里随机发送一句，再点击求简历。",
+        "候选人请求发送附件简历时直接同意/求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为AI产品经理，并按AI产品经理JD评分规则评分。"
+      ]
     }
   },
   "rules": [
@@ -2698,6 +2729,26 @@
         "description": "投资交易策略研究员（量化与市场情绪方向）直求简历岗位。不发送筛选问题；未收到简历且未求过简历时从“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再点击求简历；候选人请求发送附件简历时直接同意/求简历。",
         "directResume": true,
         "resumeJobType": "投资交易策略研究员",
+        "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+        "resumeRequestPrompts": [
+          "你好，方便发一份简历过来吗",
+          "你好，可以看看简历吗"
+        ],
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "AI产品经理": {
+        "matchPositions": [
+          "AI产品经理",
+          "AI 产品经理",
+          "AI Product Manager",
+          "AI PM"
+        ],
+        "inheritsRoot": true,
+        "description": "AI产品经理 / AI Product Manager直求简历岗位。不发送筛选问题；未收到简历且未求过简历时从“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再点击求简历；候选人请求发送附件简历时直接同意/求简历。简历入库岗位为AI产品经理，入库后按AI产品经理JD评分规则评分。",
+        "directResume": true,
+        "resumeJobType": "AI产品经理",
         "resumeRequestPrompt": "你好，方便发一份简历过来吗",
         "resumeRequestPrompts": [
           "你好，方便发一份简历过来吗",

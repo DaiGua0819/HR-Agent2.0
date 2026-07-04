@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.resume.job_types import OPERATION_A, OPERATION_B
+from app.domain.resume.job_types import AI_PRODUCT_MANAGER, OPERATION_A, OPERATION_B
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,88 @@ JD_PROFILES: dict[str, JdProfile] = {
         ),
         risks=(
             JdRule("无技术证据", ("无编程", "不会编程")),
+        ),
+    ),
+    AI_PRODUCT_MANAGER: JdProfile(
+        name=AI_PRODUCT_MANAGER,
+        aliases=("AI 产品经理", "AI Product Manager", "AI PM", "AI产品", "AI产品负责人"),
+        must_have=(
+            JdRule(
+                "2年以上产品/创业/咨询/解决方案/业务分析经验",
+                (
+                    "2年",
+                    "3年",
+                    "4年",
+                    "5年",
+                    "产品经理",
+                    "创业",
+                    "咨询",
+                    "解决方案",
+                    "业务分析",
+                ),
+            ),
+            JdRule(
+                "用户访谈与真实工作流拆解",
+                ("用户访谈", "真实工作流", "工作流拆解", "痛点分析", "付费动机", "用户场景"),
+            ),
+            JdRule(
+                "AI Agent/Copilot/Workflow 产品设计",
+                ("AI Agent", "Agent", "Copilot", "Workflow", "工作流", "AI产品设计"),
+            ),
+            JdRule(
+                "Prompt/RAG/Tool Calling/LLM 基础理解",
+                ("Prompt", "RAG", "Tool Calling", "Tool", "LLM", "大模型"),
+            ),
+            JdRule(
+                "Eval/质量指标/Bad case 闭环",
+                ("Eval", "评测", "质量指标", "bad case", "golden set", "任务完成率", "采纳率"),
+            ),
+            JdRule(
+                "PRD/用户故事/验收标准/上线复盘能力",
+                ("PRD", "用户故事", "验收标准", "上线复盘", "产品方案", "任务定义"),
+            ),
+        ),
+        bonus=(
+            JdRule(
+                "AI SaaS/Agent/Copilot/RPA/知识库/数据分析产品经验",
+                ("AI SaaS", "Agent", "Copilot", "RPA", "知识库", "数据分析"),
+            ),
+            JdRule("B2B/企业服务/垂直行业软件经验", ("B2B", "企业服务", "垂直行业", "行业软件")),
+            JdRule(
+                "FDE/售前/咨询/客户成功/客户试点经验",
+                ("FDE", "售前", "咨询", "客户成功", "客户试点", "试点"),
+            ),
+            JdRule(
+                "Cursor/Claude Code/ChatGPT/Perplexity/v0/Replit 等 AI 工具使用",
+                ("Cursor", "Claude Code", "ChatGPT", "Perplexity", "v0", "Replit"),
+            ),
+            JdRule("SQL/Python/脚本能力", ("SQL", "Python", "脚本")),
+            JdRule(
+                "0 到 1 产品或商业化/定价/增长经验",
+                ("0到1", "0 到 1", "商业化", "定价", "增长"),
+            ),
+        ),
+        risks=(
+            JdRule(
+                "只会写 PRD，不做用户访谈/原型/试点",
+                ("只会写 PRD", "不做用户访谈", "不做原型", "不做试点"),
+            ),
+            JdRule(
+                "只关注界面功能，不关心 AI 输出质量和业务结果",
+                ("只关注界面功能", "不关心 AI 输出质量", "不关心业务结果"),
+            ),
+            JdRule(
+                "只转述需求，缺少业务价值判断",
+                ("只转述需求", "缺少业务价值判断", "不能判断真实业务价值"),
+            ),
+            JdRule(
+                "不愿学习 Prompt/Eval/Agent/RAG",
+                ("不愿学习 Prompt", "不愿学习 Eval", "不愿学习 Agent", "不愿学习 RAG"),
+            ),
+            JdRule(
+                "把 AI 产品理解成传统 SaaS + 聊天框",
+                ("传统 SaaS", "聊天框", "SaaS + 一个聊天框", "SaaS+聊天框"),
+            ),
         ),
     ),
 }

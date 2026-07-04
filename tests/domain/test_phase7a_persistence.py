@@ -113,6 +113,35 @@ def test_resume_repository_auto_scores_negative_placeholder_operation_score(
     assert stored.match_score >= 75
 
 
+def test_resume_repository_auto_scores_ai_product_manager_resume_on_save(
+    tmp_path: Path,
+) -> None:
+    """AI 产品经理新简历入库时也应立即按 JD 规则写入 match_score。"""
+
+    repository = ResumeRepository(tmp_path / "ai_product_manager_scores.sqlite")
+    repository.save(
+        Resume(
+            id="ai-pm-1",
+            name="Carol",
+            job_type="AI产品经理",
+            match_score=-1,
+            payload={
+                "name": "Carol",
+                "rawText": (
+                    "4年产品经理 AI SaaS Agent Copilot Workflow 用户访谈 真实工作流拆解 "
+                    "PRD 用户故事 验收标准 上线复盘 Prompt RAG Tool Calling LLM "
+                    "质量指标 bad case golden set Cursor ChatGPT SQL Python 0到1 商业化"
+                ),
+            },
+        )
+    )
+
+    stored = repository.get("ai-pm-1")
+    assert stored is not None
+    assert stored.match_score is not None
+    assert stored.match_score >= 75
+
+
 def test_batch_suggestions_evaluation_and_interview_persist(tmp_path: Path) -> None:
     """批量、规则建议、评估日志和面试会话都写入临时 SQLite。"""
 

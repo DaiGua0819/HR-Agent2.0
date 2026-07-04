@@ -485,6 +485,7 @@ def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
         "外部财务产品顾问",
         "投资交易策略研究员（量化与市场情绪方向）",
         "AI智能体解决方案负责人",
+        "AI产品经理",
     ]:
         assert f'"{job_type}"' in script
     for label in [
@@ -495,6 +496,7 @@ def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
         "财务顾问",
         "投资策略研究",
         "AI方案负责人",
+        "AI产品经理",
     ]:
         assert f'"{label}"' in script
     assert "if (values.includes(\"*\")) return uniqueJobTypes(RESUME_LIBRARY_JOB_TYPES)" in script

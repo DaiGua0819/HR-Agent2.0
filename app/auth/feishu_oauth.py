@@ -41,12 +41,13 @@ class FeishuOAuthService:
         """Return the Feishu authorization URL for a freshly generated state."""
 
         assert self.config is not None
-        if not self.config.app_id or not self.config.redirect_uri:
+        redirect_uri = self.config.login_redirect_uri
+        if not self.config.app_id or not redirect_uri:
             raise ValueError("missing_feishu_oauth_config")
         query = urlencode(
             {
                 "app_id": self.config.app_id,
-                "redirect_uri": self.config.redirect_uri,
+                "redirect_uri": redirect_uri,
                 "state": state,
             }
         )

@@ -45,5 +45,6 @@ def test_env_example_documents_interview_center_feishu_keys() -> None:
         "FEISHU_BITABLE_APP_TOKEN=",
         "FEISHU_CANDIDATE_TABLE_ID=",
         "FEISHU_INTERVIEW_TABLE_ID=",
+        "FEISHU_AI_PRODUCT_MANAGER_TABLE_ID=",
     ):
         assert key in content

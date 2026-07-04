@@ -16,7 +16,7 @@ description: Use when operating BOSS recruiter automation for unread message han
 - 只回答候选人最近 1-3 条未回复问题：`recruiter_answer_candidate_questions`
 - 发送 AI 实习生公司基本情况/基础条件/常用语：`recruiter_send_company_info`
 - 发送指定常用语：`recruiter_send_common_phrase`
-- 求简历、同意候选人主动发来的附件简历，都必须调用 `recruiter_request_resume`；BOSS 运营 A/B、外部财务产品顾问、AI智能体解决方案负责人等直求简历岗位由工作流先发固定话术再求简历
+- 求简历、同意候选人主动发来的附件简历，都必须调用 `recruiter_request_resume`；BOSS 运营 A/B、外部财务产品顾问、AI智能体解决方案负责人、AI产品经理等直求简历岗位由工作流先发固定话术再求简历
 - 最近 N 个联系人处理并观察后续回复：`recruiter_screen_recent_with_followup`
 - 推荐牛人/主动打招呼/主动联系候选人：`recruiter_proactive_contact_recommended_candidates`
 - 需要标记不合适且用户明确允许时：`recruiter_mark_unsuitable`
@@ -37,7 +37,7 @@ description: Use when operating BOSS recruiter automation for unread message han
 2. 打开候选人后读取岗位、最近 1-3 条对方未回复消息、历史状态和是否已经求过简历。
 3. 如果岗位是 AI 应用开发实习生：未发送基础情况就发常用语；对方接受关键条件就求简历；不接受线下、单休、六个月、薪资等硬条件就跳过；“考虑下”直接跳过等待后续回复。
 4. 如果岗位是 BOSS 运营 A/B（`运营A`、`运营B`、企业内容运营负责人（B2B/短视频方向）、B端社交媒体运营）：不发送筛选问题，不主动回答岗位细节/是否还招等泛问题；未收到简历且未求过简历时，先在聊天界面发送 `你好可以看看简历吗` 或 `你好，方便发一份简历过来吗`，再执行“求简历”；已收到或已求过则不重复发送话术、不重复求简历。
-5. 如果岗位是财务 AI 团队新增直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer）：不发送筛选问题；先按岗位配置发送 `resumeRequestPrompt`，再执行“求简历”；简历入库分别归类为 `外部财务产品顾问`、`AI智能体解决方案负责人`。
+5. 如果岗位是财务/AI 直求简历岗位（外部财务产品顾问/业财智能化顾问/AI财务场景顾问、AI智能体解决方案负责人/AI Solution Architect/AI FDE/AI Workflow Engineer、AI产品经理/AI Product Manager/AI PM）：不发送筛选问题；先按岗位配置发送 `resumeRequestPrompt`，再执行“求简历”；简历入库分别归类为 `外部财务产品顾问`、`AI智能体解决方案负责人`、`AI产品经理`。Skill 只是操作协议说明，运行时实际规则由 `boss_chat_rules.json`、policy、`ConversationRunner` 和平台 Adapter 生效。
 6. 如果岗位有 `companyKnowledgeBase.sections[岗位].screening`：按岗位配置的问题推进；必须项不满足就跳过；满足规则后求简历。
 7. 需要发送筛选问题的岗位，先判断候选人当前是否有可回答的问题：知识库能答则先回复答案，再继续发送配置好的筛选问题；知识库不能答或规则外问题，不回复“暂时还不清楚”、不标记停在 `unknown_question`，直接跳过答疑并发送下一条配置筛选问题。
 8. 不能因为候选人主动发了简历附件就直接求简历；必须结合最近几轮对话判断是否仍然合适。

@@ -288,6 +288,22 @@ def test_job51_operation_and_finance_have_prompt() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
+    """AI 产品经理在 51job 走直求简历，不发筛选题。"""
+
+    state, page = run_case(
+        conversation("AI Product Manager", [{"sender": "other", "text": "您好，我想了解岗位"}])
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好，方便发一份简历过来吗"],
+        ["你好，可以看看简历吗"],
+    )
+    assert page.resume_requests == 1
+
+
 def test_direct_resume_candidate_rejection_skips_without_requesting_resume() -> None:
     """候选人明确拒绝时，直求简历岗位也不能继续求简历。"""
 
@@ -900,6 +916,18 @@ def sample_rules() -> dict[str, object]:
                 "directResume": True,
                 "resumeJobType": "外部财务产品顾问",
                 "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+            },
+            "AI产品经理": {
+                "category": "ai_product_manager_direct_resume",
+                "directResume": True,
+                "resumeJobType": "AI产品经理",
+                "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+                "resumeRequestPrompts": [
+                    "你好，方便发一份简历过来吗",
+                    "你好，可以看看简历吗",
+                ],
+                "aliases": ["AI 产品经理", "AI Product Manager", "AI PM"],
+                "screeningQuestions": [],
             },
         },
         "companyKnowledgeBase": {},

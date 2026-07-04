@@ -377,6 +377,10 @@ h3 { font-size: 15px; }
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
+[data-page="interviews"].active {
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
 [data-page="queue"].active,
 [data-page="automation"].active,
 [data-page="rules"].active {
@@ -1390,11 +1394,143 @@ h3 { font-size: 15px; }
 .table-wrap.compact {
   padding: 0;
 }
-.interview-layout {
+.ts-interview-workspace {
   display: grid;
-  grid-template-columns: 280px minmax(360px, 1fr) 320px;
-  gap: 16px;
+  grid-template-columns: 408px minmax(0, 1fr);
+  gap: 24px;
+  height: calc(100vh - 88px);
+  min-height: 620px;
+}
+.ts-interview-sidebar {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+.ts-interview-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(191, 219, 254, 0.24);
+}
+.ts-interview-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(191, 219, 254, 0.24);
+  background: rgba(239, 246, 255, 0.38);
+}
+.ts-interview-filter-panel label {
+  display: grid;
+  gap: 6px;
+  color: var(--ts-on-surface-variant);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ts-interview-filter-panel button {
+  align-self: end;
+}
+.ts-interview-list {
+  padding: 12px;
+}
+.ts-interview-session-card {
+  align-content: start;
+  min-height: 112px;
+}
+.ts-interview-surface {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.ts-interview-surface .preview-toolbar {
+  min-height: 76px;
+}
+.ts-interview-surface .ts-preview-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.ts-interview-detail,
+#interviewDetail {
   min-height: 0;
+  overflow: auto;
+  padding: 22px;
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.72), #fff 180px);
+}
+.ts-interview-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid rgba(191, 219, 254, 0.5);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--ts-shadow-soft);
+}
+.ts-interview-hero h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+.ts-interview-hero p {
+  margin: 0;
+  color: var(--muted);
+}
+.ts-interview-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.ts-interview-info-card {
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid rgba(191, 219, 254, 0.46);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: var(--ts-shadow-soft);
+}
+.ts-interview-info-card--wide {
+  grid-column: 1 / -1;
+}
+.ts-interview-info-card h3 {
+  margin-bottom: 12px;
+}
+.ts-interview-info-card p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.7;
+}
+.ts-interview-info-card dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.ts-interview-info-card dl div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.ts-interview-info-card dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ts-interview-info-card dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ts-interview-question-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+  line-height: 1.6;
+}
+.ts-interview-evaluation {
+  display: grid;
+  gap: 12px;
 }
 .detail-block {
   padding: 16px;
@@ -1487,8 +1623,15 @@ h3 { font-size: 15px; }
   .service-grid,
   .quick-grid,
   .control-grid,
-  .interview-layout {
+  .ts-interview-workspace {
     grid-template-columns: 1fr;
+  }
+  .ts-interview-workspace {
+    height: auto;
+    min-height: 0;
+  }
+  .ts-interview-sidebar {
+    min-height: 540px;
   }
 }
 

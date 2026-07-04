@@ -76,12 +76,14 @@ class FeishuConfig(BaseModel):
     app_id_env: str = "FEISHU_APP_ID"
     app_secret_env: str = "FEISHU_APP_SECRET"
     redirect_uri_env: str = "FEISHU_REDIRECT_URI"
+    login_redirect_uri_env: str = "FEISHU_LOGIN_REDIRECT_URI"
     allowed_tenant_keys_env: str = "FEISHU_ALLOWED_TENANT_KEYS"
     admin_open_ids_env: str = "FEISHU_ADMIN_OPEN_IDS"
     bootstrap_admin_names_env: str = "FEISHU_BOOTSTRAP_ADMIN_NAMES"
     bitable_app_token_env: str = "FEISHU_BITABLE_APP_TOKEN"
     candidate_table_id_env: str = "FEISHU_CANDIDATE_TABLE_ID"
     interview_table_id_env: str = "FEISHU_INTERVIEW_TABLE_ID"
+    ai_product_manager_table_id_env: str = "FEISHU_AI_PRODUCT_MANAGER_TABLE_ID"
 
     @property
     def app_id(self) -> str:
@@ -94,6 +96,10 @@ class FeishuConfig(BaseModel):
     @property
     def redirect_uri(self) -> str:
         return os.getenv(self.redirect_uri_env, "")
+
+    @property
+    def login_redirect_uri(self) -> str:
+        return os.getenv(self.login_redirect_uri_env, "") or self.redirect_uri
 
     @property
     def allowed_tenant_keys(self) -> list[str]:
@@ -119,6 +125,10 @@ class FeishuConfig(BaseModel):
     @property
     def interview_table_id(self) -> str:
         return os.getenv(self.interview_table_id_env, "interview_sessions")
+
+    @property
+    def ai_product_manager_table_id(self) -> str:
+        return os.getenv(self.ai_product_manager_table_id_env, "")
 
 
 class AppSettings(BaseSettings):

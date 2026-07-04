@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlparse
 
 from app.auth.feishu_oauth import FeishuProfile
 from app.control_plane.main import create_app
@@ -43,6 +44,32 @@ def test_feishu_start_redirects_to_authorization_url() -> None:
 
     assert response.status_code == 307
     assert response.headers["location"].startswith("https://feishu.example/oauth?state=")
+
+
+def test_feishu_start_uses_login_redirect_uri_when_interview_redirect_is_configured(
+    monkeypatch,
+) -> None:
+    """The first login authorization should return to the admin console callback."""
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret_test")
+    monkeypatch.setenv(
+        "FEISHU_REDIRECT_URI",
+        "http://127.0.0.1:18080/api/interview-center/feishu/oauth/callback",
+    )
+    monkeypatch.setenv(
+        "FEISHU_LOGIN_REDIRECT_URI",
+        "http://127.0.0.1:18080/api/auth/feishu/callback",
+    )
+    load_settings.cache_clear()
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.get("/api/auth/feishu/start", follow_redirects=False)
+
+    load_settings.cache_clear()
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["redirect_uri"] == ["http://127.0.0.1:18080/api/auth/feishu/callback"]
 
 
 def test_feishu_callback_rejects_invalid_state() -> None:

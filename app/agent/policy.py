@@ -18,6 +18,7 @@ ALL_PLATFORM_DIRECT_RESUME_TYPES = {
     "外部财务产品顾问",
     "AI智能体解决方案负责人",
     "投资交易策略研究员",
+    "AI产品经理",
 }
 ALL_PLATFORM_DIRECT_RESUME_ALIASES = {
     "外部财务产品顾问",
@@ -32,6 +33,10 @@ ALL_PLATFORM_DIRECT_RESUME_ALIASES = {
     "投资交易策略研究员",
     "投资交易策略研究员（量化与市场情绪方向）",
     "量化与市场情绪方向",
+    "AI产品经理",
+    "AI 产品经理",
+    "AI Product Manager",
+    "AI PM",
 }
 
 

@@ -134,12 +134,14 @@ def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
         "AI智能体解决方案负责人",
         "外部财务产品顾问",
         "投资交易策略研究员（量化与市场情绪方向）",
+        "AI产品经理",
     ]
     assert {item["id"] for item in listed.json()["items"]} == {
         "resume-ai",
         "resume-finance",
         "resume-investment",
         "resume-investment-short",
+        "resume-ai-product-manager",
     }
     assert [
         item
@@ -232,6 +234,7 @@ def _app_for_member(open_id: str, name: str):
             _record("resume-finance", "外部财务产品顾问"),
             _record("resume-investment", "投资交易策略研究员（量化与市场情绪方向）"),
             _record("resume-investment-short", "投资交易策略研究员"),
+            _record("resume-ai-product-manager", "AI Product Manager"),
             _record("resume-ai-intern", "AI应用开发实习生"),
         ]
     )

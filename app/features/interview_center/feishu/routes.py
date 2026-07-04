@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.text import clean_text
+from app.settings import load_settings
 
 
 @dataclass(frozen=True)
@@ -199,15 +200,30 @@ def resolve_bitable_target(
 
 
 def _default_routes(default_table_id: str = "") -> tuple[BitableRoute, ...]:
+    routes = [*DEFAULT_BITABLE_TABLE_ROUTES]
+    ai_product_manager_table_id = load_settings().feishu.ai_product_manager_table_id
+    if ai_product_manager_table_id:
+        routes.append(
+            BitableRoute(
+                table_id=ai_product_manager_table_id,
+                table_name="AI产品经理",
+                keywords=(
+                    "AI产品经理",
+                    "AI 产品经理",
+                    "AI Product Manager",
+                    "AI PM",
+                ),
+            )
+        )
     if not default_table_id:
-        return DEFAULT_BITABLE_TABLE_ROUTES
+        return tuple(routes)
     return tuple(
         BitableRoute(
             table_id=default_table_id if route.table_name == "AI实习生" else route.table_id,
             table_name=route.table_name,
             keywords=route.keywords,
         )
-        for route in DEFAULT_BITABLE_TABLE_ROUTES
+        for route in routes
     )
 
 

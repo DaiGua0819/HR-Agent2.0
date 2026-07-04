@@ -13,6 +13,15 @@ const state = {
   jobType: "",
   jobFacets: [],
   interviewSelection: null,
+  interviewSessions: [],
+  selectedInterviewId: "",
+  interviewLogs: [],
+  interviewStatus: null,
+  interviewSyncStatus: null,
+  interviewStatusFilter: "",
+  interviewDateStart: "",
+  interviewDateEnd: "",
+  interviewBusy: false,
   resumePageCache: new Map(),
   resumeContextCache: new Map(),
   resumePrefetchingPages: new Set(),
@@ -34,6 +43,22 @@ const SUMMARY_PANEL_MAX_WIDTH = 460;
 const SUMMARY_PANEL_MIN_PREVIEW_WIDTH = 380;
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
+const INTERVIEW_STATUS_LABELS = {
+  synced: "已同步",
+  non_interview: "非面试",
+  ignored: "已忽略",
+  needs_match: "待匹配",
+  needs_confirmation: "需确认",
+  matched: "已绑定",
+  questions_generated: "已生成问题",
+  prepared: "已准备",
+  prepared_local: "本地准备",
+  backfilling: "回灌中",
+  backfill_failed: "回灌失败",
+  needs_review: "待复核",
+  completed: "已完成",
+  created: "已创建",
+};
 const RESUME_LIBRARY_JOB_TYPES = [
   "AI应用开发实习生",
   "应用技术经理（工业涂料领域）",
@@ -49,6 +74,7 @@ const RESUME_LIBRARY_JOB_TYPES = [
   "外部财务产品顾问",
   "投资交易策略研究员（量化与市场情绪方向）",
   "AI智能体解决方案负责人",
+  "AI产品经理",
 ];
 const RESUME_JOB_DISPLAY_LABELS = {
   "AI应用开发实习生": "AI实习生",
@@ -60,6 +86,7 @@ const RESUME_JOB_DISPLAY_LABELS = {
   "外部财务产品顾问": "财务顾问",
   "投资交易策略研究员（量化与市场情绪方向）": "投资策略研究",
   "AI智能体解决方案负责人": "AI方案负责人",
+  "AI产品经理": "AI产品经理",
 };
 const $ = (id) => document.getElementById(id);
 async function api(path, options = {}) {
@@ -113,6 +140,13 @@ function canonicalResumeJobType(value) {
     text.includes("市场情绪研究员") ||
     text.includes("量化与市场情绪方向")
   ) return "投资交易策略研究员（量化与市场情绪方向）";
+  if (
+    compact.includes("ai产品经理") ||
+    compact.includes("aiproductmanager") ||
+    compact.includes("aipm") ||
+    text.toLowerCase().includes("ai product manager") ||
+    text.toLowerCase().includes("ai pm")
+  ) return "AI产品经理";
   return text.replace("(", "（").replace(")", "）");
 }
 function uniqueJobTypes(values) {
@@ -932,31 +966,299 @@ async function selectInterviewSession(sessionId) {
   state.interviewSelection = { resume, preflight: payload, live: null };
   renderInterviewDetail();
 }
-async function loadInterviewSessions() {
+function toInterviewDateValue(date) {
+  const value = new Date(date);
+  if (Number.isNaN(value.getTime())) return "";
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+function setDefaultInterviewDateRange() {
+  if (state.interviewDateStart && state.interviewDateEnd) return;
+  const start = new Date();
+  start.setDate(start.getDate() - 1);
+  const end = new Date();
+  end.setDate(end.getDate() + 14);
+  state.interviewDateStart = toInterviewDateValue(start);
+  state.interviewDateEnd = toInterviewDateValue(end);
+  if ($("interviewDateStart")) $("interviewDateStart").value = state.interviewDateStart;
+  if ($("interviewDateEnd")) $("interviewDateEnd").value = state.interviewDateEnd;
+}
+function interviewDateRangeParams() {
+  setDefaultInterviewDateRange();
+  const query = new URLSearchParams();
+  const start = state.interviewDateStart ? new Date(`${state.interviewDateStart}T00:00:00`) : null;
+  const end = state.interviewDateEnd ? new Date(`${state.interviewDateEnd}T23:59:59`) : null;
+  if (start && !Number.isNaN(start.getTime())) query.set("startTime", String(Math.floor(start.getTime() / 1000)));
+  if (end && !Number.isNaN(end.getTime())) query.set("endTime", String(Math.floor(end.getTime() / 1000)));
+  if (state.interviewStatusFilter) query.set("status", state.interviewStatusFilter);
+  return query.toString();
+}
+function formatInterviewTime(seconds) {
+  const value = Number(seconds || 0);
+  if (!value) return "未排期";
+  return new Date(value * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+function interviewStatusLabel(value) {
+  return INTERVIEW_STATUS_LABELS[value] || value || "未识别";
+}
+function interviewStatusClass(value) {
+  if (["prepared", "completed", "matched", "questions_generated"].includes(value)) return "success";
+  if (["backfill_failed", "non_interview", "ignored"].includes(value)) return "danger";
+  if (["needs_match", "needs_confirmation", "needs_review", "prepared_local"].includes(value)) return "warning";
+  return "";
+}
+function selectedInterviewSession() {
+  return state.interviewSessions.find((item) => item.id === state.selectedInterviewId) || null;
+}
+function updateInterviewButtons() {
+  const session = selectedInterviewSession();
+  const busy = state.interviewBusy;
+  const docUrl = session?.feishuDoc?.url || "";
+  if ($("generateQuestionsBtn")) $("generateQuestionsBtn").disabled = busy || !session;
+  if ($("backfillBtn")) $("backfillBtn").disabled = busy || !session;
+  if ($("openInterviewDocBtn")) $("openInterviewDocBtn").disabled = busy || !docUrl;
+  if ($("interviewRefreshBtn")) $("interviewRefreshBtn").disabled = busy;
+  if ($("syncFeishuBtn")) $("syncFeishuBtn").disabled = busy;
+}
+function setInterviewMessage(text, tone = "") {
+  if (!$("interviewSyncPill")) return;
+  $("interviewSyncPill").textContent = text;
+  $("interviewSyncPill").className = ["safety-pill", tone].filter(Boolean).join(" ");
+}
+function renderInterviewStatus() {
+  const status = state.interviewStatus || {};
+  const sync = state.interviewSyncStatus || {};
+  const connected = Boolean(status.connected);
+  if ($("interviewConnectionPill")) {
+    $("interviewConnectionPill").textContent = connected ? "飞书已连接" : "飞书未连接";
+    $("interviewConnectionPill").className = `safety-pill ${connected ? "safe" : "live"}`;
+  }
+  if ($("interviewSyncPill")) {
+    const total = sync.lastResult?.interviewLike ?? sync.lastResult?.total ?? 0;
+    const label = sync.lastRunAt ? `最近同步 ${total} 场` : "尚未同步";
+    $("interviewSyncPill").textContent = sync.running ? "同步中" : label;
+    $("interviewSyncPill").className = `safety-pill ${sync.lastError ? "live" : "safe"}`;
+  }
+}
+function renderInterviewSessions() {
+  const items = state.interviewSessions || [];
+  const target = $("interviewSessions");
+  if (!target) return;
+  if (!items.length) {
+    target.innerHTML = `<div class="empty-inline ts-empty-state">当前日期范围内暂无面试会话。</div>`;
+    return;
+  }
+  target.innerHTML = items.map((item) => {
+    const statusClass = interviewStatusClass(item.status);
+    const flow = item.interviewFlow || {};
+    return `
+      <button class="candidate-card ts-interview-session-card ${item.id === state.selectedInterviewId ? "active" : ""}" data-open-interview-session="${escapeHtml(item.id)}">
+        <span class="candidate-card__heading">
+          <strong>${escapeHtml(item.candidateName || "未命名候选人")}</strong>
+          <span class="${tsTagClass(statusClass === "success" ? "suitable" : statusClass === "danger" ? "unsuitable" : statusClass === "warning" ? "needs_more_info" : "")}">${escapeHtml(interviewStatusLabel(item.status))}</span>
+        </span>
+        <span class="candidate-card__job">${escapeHtml(item.jobType || item.position || "未识别岗位")}</span>
+        <span class="candidate-card__meta">
+          <span class="candidate-card__meta-item">${escapeHtml(formatInterviewTime(item.startTime))}</span>
+          <span class="candidate-card__meta-item">${escapeHtml(flow.roundLabel || "面试")}</span>
+          <span class="candidate-card__meta-item">${escapeHtml(item.bitableTableName || "未路由表")}</span>
+        </span>
+      </button>
+    `;
+  }).join("");
+}
+function updateInterviewSession(nextSession) {
+  if (!nextSession?.id) return;
+  const index = state.interviewSessions.findIndex((item) => item.id === nextSession.id);
+  if (index >= 0) state.interviewSessions[index] = nextSession;
+  else state.interviewSessions.unshift(nextSession);
+  state.selectedInterviewId = nextSession.id;
+}
+async function loadInterviewSyncStatus() {
+  const sync = await api("/api/interview-center/sync/status");
+  state.interviewSyncStatus = sync;
+  renderInterviewStatus();
+}
+async function loadInterviewSessions(options = {}) {
+  setDefaultInterviewDateRange();
+  if ($("interviewStatusFilter")) $("interviewStatusFilter").value = state.interviewStatusFilter;
+  const suffix = interviewDateRangeParams();
   try {
-    const data = await api("/api/interview-center/sessions");
-    $("interviewSessions").innerHTML = (data.items || []).length
-      ? data.items.map((item) => `<button class="candidate-card">${escapeHtml(item.candidateName || item.id)}</button>`).join("")
-      : `<div class="empty-inline">暂无面试会话。</div>`;
+    const data = await api(`/api/interview-center/sessions${suffix ? `?${suffix}` : ""}`);
+    state.interviewStatus = data.status || null;
+    state.interviewLogs = data.logs || [];
+    state.interviewSessions = data.items || data.sessions || [];
+    if (!options.keepSelection || !state.interviewSessions.some((item) => item.id === state.selectedInterviewId)) {
+      state.selectedInterviewId = state.interviewSessions[0]?.id || "";
+    }
+    renderInterviewStatus();
+    renderInterviewSessions();
+    await loadInterviewSyncStatus().catch(() => {});
   } catch (error) {
     $("interviewSessions").innerHTML = `<div class="empty-inline">面试会话读取失败：${escapeHtml(error.message)}</div>`;
+    setInterviewMessage("读取失败", "live");
   }
   renderInterviewDetail();
 }
+async function openInterviewSession(sessionId) {
+  if (!sessionId) return;
+  state.interviewSelection = null;
+  state.selectedInterviewId = sessionId;
+  renderInterviewSessions();
+  renderInterviewDetail();
+  try {
+    const payload = await api(`/api/interview-center/sessions/${encodeURIComponent(sessionId)}`);
+    updateInterviewSession(payload.session);
+    renderInterviewSessions();
+    renderInterviewDetail();
+  } catch (error) {
+    setInterviewMessage(error.message || "详情读取失败", "live");
+  }
+}
+async function runInterviewAction(label, task) {
+  try {
+    state.interviewBusy = true;
+    setInterviewMessage(label, "");
+    updateInterviewButtons();
+    const payload = await task();
+    if (payload?.session) updateInterviewSession(payload.session);
+    if (payload?.sessions || payload?.items) state.interviewSessions = payload.items || payload.sessions || state.interviewSessions;
+    if (payload?.logs) state.interviewLogs = payload.logs;
+    await loadInterviewSyncStatus().catch(() => {});
+    renderInterviewSessions();
+    renderInterviewDetail();
+    setInterviewMessage("操作完成", "safe");
+  } catch (error) {
+    setInterviewMessage(error.message || "操作失败", "live");
+  } finally {
+    state.interviewBusy = false;
+    updateInterviewButtons();
+  }
+}
+async function syncInterviewCalendar() {
+  await runInterviewAction("正在同步飞书日历", async () => {
+    const payload = await api("/api/interview-center/sync", { method: "POST", body: JSON.stringify({ autoPrepare: false }) });
+    await loadInterviewSessions({ keepSelection: true });
+    return payload;
+  });
+}
+async function prepareSelectedInterview() {
+  const session = selectedInterviewSession();
+  if (!session) return;
+  await runInterviewAction("正在准备面试", () =>
+    api(`/api/interview-center/sessions/${encodeURIComponent(session.id)}/prepare`, {
+      method: "POST",
+      body: JSON.stringify({ force: true }),
+    }),
+  );
+}
+async function backfillSelectedInterview() {
+  const session = selectedInterviewSession();
+  if (!session) return;
+  await runInterviewAction("正在回填面试评价", () =>
+    api(`/api/interview-center/sessions/${encodeURIComponent(session.id)}/backfill`, {
+      method: "POST",
+      body: JSON.stringify({ force: true }),
+    }),
+  );
+}
+function openSelectedInterviewDoc() {
+  const url = selectedInterviewSession()?.feishuDoc?.url;
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
+}
 function renderInterviewDetail() {
-  const selected = state.interviewSelection;
-  if (!selected) return;
-  const resume = selected.resume || {};
-  $("interviewDetail").innerHTML = `
-    <h3>${escapeHtml(resumeName(resume))}</h3>
-    <p>岗位：${escapeHtml(resumeJob(resume))}</p>
-    <p>来源：${escapeHtml(platformName(resumePlatform(resume)))} / ${escapeHtml(resumeOwner(resume))}</p>
-    ${renderInterviewPreflight(selected)}
+  const target = $("interviewDetail");
+  if (!target) return;
+  if (state.interviewSelection) {
+    const selected = state.interviewSelection;
+    const resume = selected.resume || {};
+    $("interviewWorkspaceTitle").textContent = resumeName(resume);
+    target.innerHTML = `
+      <section class="ts-interview-hero">
+        <div>
+          <p class="eyebrow">Invite Preflight</p>
+          <h2>${escapeHtml(resumeName(resume))}</h2>
+          <p>${escapeHtml(resumeJob(resume))} · ${escapeHtml(platformName(resumePlatform(resume)))} / ${escapeHtml(resumeOwner(resume))}</p>
+        </div>
+        <span class="badge warning">待确认</span>
+      </section>
+      ${renderInterviewPreflight(selected)}
+    `;
+    bindInterviewDetailActions();
+    updateInterviewButtons();
+    return;
+  }
+  const session = selectedInterviewSession();
+  updateInterviewButtons();
+  if (!session) {
+    $("interviewWorkspaceTitle").textContent = "请选择面试会话";
+    target.innerHTML = `<div class="ts-empty-state">从左侧选择面试会话，或在简历库点击“约面试”。</div>`;
+    return;
+  }
+  const evaluation = session.interviewEvaluation || {};
+  const docUrl = session.feishuDoc?.url || "";
+  $("interviewWorkspaceTitle").textContent = session.candidateName || "未命名候选人";
+  target.innerHTML = `
+    <section class="ts-interview-hero">
+      <div>
+        <p class="eyebrow">Interview Workspace</p>
+        <h2>${escapeHtml(session.candidateName || "未命名候选人")}</h2>
+        <p>${escapeHtml(session.jobType || "未识别岗位")} · ${escapeHtml(formatInterviewTime(session.startTime))}</p>
+      </div>
+      <span class="${tsTagClass(interviewStatusClass(session.status) === "success" ? "suitable" : interviewStatusClass(session.status) === "danger" ? "unsuitable" : "needs_more_info")}">${escapeHtml(interviewStatusLabel(session.status))}</span>
+    </section>
+    <div class="ts-interview-detail-grid">
+      <section class="ts-interview-info-card">
+        <h3>会话信息</h3>
+        <dl>
+          <div><dt>阶段</dt><dd>${escapeHtml(session.interviewFlow?.stageText || session.currentStage || "未识别")}</dd></div>
+          <div><dt>候选表</dt><dd>${escapeHtml(session.bitableTableName || "未路由")}</dd></div>
+          <div><dt>日程 ID</dt><dd>${escapeHtml(session.feishuEventId || "-")}</dd></div>
+          <div><dt>飞书文档</dt><dd>${docUrl ? "已创建" : "未创建"}</dd></div>
+        </dl>
+      </section>
+      <section class="ts-interview-info-card">
+        <h3>下一步</h3>
+        <p>${escapeHtml(session.nextAction || nextInterviewAction(session))}</p>
+      </section>
+      <section class="ts-interview-info-card ts-interview-info-card--wide">
+        <h3>面试题</h3>
+        ${renderInterviewQuestions(session)}
+      </section>
+      <section class="ts-interview-info-card ts-interview-info-card--wide">
+        <h3>评价回填</h3>
+        ${renderInterviewEvaluation(evaluation, session)}
+      </section>
+    </div>
   `;
+}
+function bindInterviewDetailActions() {
   document.querySelector("[data-confirm-interview]")?.addEventListener("click", confirmInterviewInvite);
   document.querySelectorAll("[data-select-interview-session]").forEach((button) => {
     button.addEventListener("click", () => selectInterviewSession(button.dataset.selectInterviewSession || ""));
   });
+}
+function nextInterviewAction(session) {
+  if (!session.resumeId) return "先确认候选人匹配，再准备面试材料。";
+  if (!session.feishuDoc?.url) return "准备面试题并创建飞书文档。";
+  if (!session.interviewEvaluation?.summary) return "面试结束后读取飞书纪要并回填评价。";
+  if (session.status === "needs_review") return "人工复核评价并确认结果。";
+  return "当前会话已具备主要材料，可继续跟进候选人。";
+}
+function renderInterviewQuestions(session) {
+  const questions = session.questions || session.questionSet?.questions || [];
+  if (!questions.length) return `<p class="muted">尚未生成面试题。</p>`;
+  return `<ol class="ts-interview-question-list">${questions.slice(0, 6).map((item) => `<li>${escapeHtml(item.question || item.title || item.text || item)}</li>`).join("")}</ol>`;
+}
+function renderInterviewEvaluation(evaluation, session) {
+  if (!evaluation || !Object.keys(evaluation).length) {
+    return `<p class="muted">${escapeHtml(session.lastBackfillError || "尚未回填面试评价。")}</p>`;
+  }
+  return `
+    <div class="ts-interview-evaluation">
+      <p>${escapeHtml(evaluation.summary || "已有评价，等待复核。")}</p>
+      ${evaluation.review?.decision ? `<span class="badge success">复核：${escapeHtml(evaluation.review.decision)}</span>` : `<span class="badge warning">待复核</span>`}
+    </div>
+  `;
 }
 function renderInterviewPreflight(selected) {
   const preflight = selected.preflight || {};
@@ -1475,8 +1777,23 @@ function bindPageActions() {
   $("prevBtn").onclick = () => move(-1);
   $("nextBtn").onclick = () => move(1);
   bindDockEffect($("actionDock"), ".action-dock-btn", { maxScale: 1.3, radius: 110, marginFactor: 15 });
-  ["generateQuestionsBtn", "syncFeishuBtn", "renderImageBtn", "backfillBtn"].forEach((id) => {
-    $(id).onclick = () => ($("interviewStatus").textContent = "当前首版界面已保留入口，真实调用继续复用后端面试中心接口。");
+  $("interviewRefreshBtn").onclick = () => loadInterviewSessions({ keepSelection: true });
+  $("syncFeishuBtn").onclick = syncInterviewCalendar;
+  $("generateQuestionsBtn").onclick = prepareSelectedInterview;
+  $("openInterviewDocBtn").onclick = openSelectedInterviewDoc;
+  $("backfillBtn").onclick = backfillSelectedInterview;
+  $("interviewApplyDateBtn").onclick = () => {
+    state.interviewDateStart = $("interviewDateStart").value;
+    state.interviewDateEnd = $("interviewDateEnd").value;
+    loadInterviewSessions();
+  };
+  $("interviewStatusFilter").onchange = () => {
+    state.interviewStatusFilter = $("interviewStatusFilter").value;
+    loadInterviewSessions();
+  };
+  $("interviewSessions").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-open-interview-session]");
+    if (button) openInterviewSession(button.dataset.openInterviewSession || "");
   });
   bindResumeKeyboardNavigation();
 }

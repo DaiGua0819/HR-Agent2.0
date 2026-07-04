@@ -26,6 +26,7 @@ from app.features.interview_center.feishu.meeting import FeishuMeetingSourceClie
 from app.features.interview_center.feishu.routes import resolve_bitable_target
 from app.features.interview_center.service import InterviewCenterService
 from app.features.interview_center.store import InMemoryInterviewStore, SQLiteInterviewStore
+from app.settings import load_settings
 from fastapi.testclient import TestClient
 
 
@@ -42,6 +43,26 @@ def test_bitable_route_resolution_uses_old_default_tables() -> None:
     assert hr.table_name == "HR"
     assert ops_b.table_id == "tblXyHjYr0Ba1rhe"
     assert ops_b.table_name == "运营B表"
+
+
+def test_ai_product_manager_bitable_route_uses_configured_new_table(monkeypatch) -> None:
+    """AI 产品经理只在配置专属表后路由，不能混入投资岗或 AI 方案岗表。"""
+
+    monkeypatch.delenv("FEISHU_AI_PRODUCT_MANAGER_TABLE_ID", raising=False)
+    load_settings.cache_clear()
+    missing = resolve_bitable_target({"resume": {"jobType": "AI产品经理"}})
+    assert missing.route_matched is False
+    assert missing.table_id == ""
+
+    monkeypatch.setenv("FEISHU_AI_PRODUCT_MANAGER_TABLE_ID", "tblAiProductManager")
+    load_settings.cache_clear()
+    target = resolve_bitable_target({"resume": {"jobType": "AI Product Manager"}})
+
+    load_settings.cache_clear()
+    assert target.table_id == "tblAiProductManager"
+    assert target.table_name == "AI产品经理"
+    assert target.route_matched is True
+    assert target.route_keyword == "AI Product Manager"
 
 
 def test_bitable_record_matching_prefers_phone_over_name() -> None:

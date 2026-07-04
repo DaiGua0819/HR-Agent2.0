@@ -111,6 +111,7 @@ def test_local_dev_login_can_preview_zhang_huaibin_scope() -> None:
         "AI智能体解决方案负责人",
         "外部财务产品顾问",
         "投资交易策略研究员（量化与市场情绪方向）",
+        "AI产品经理",
     ]
 
 
