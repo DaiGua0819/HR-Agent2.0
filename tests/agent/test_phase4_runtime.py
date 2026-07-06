@@ -14,6 +14,7 @@ from app.control_plane.main import create_app
 from app.control_plane.worker_client import InProcessWorkerClient
 from app.core.constants import Platform
 from app.platforms.job51.adapter import Job51Adapter
+from app.platforms.types import ConversationRef
 from app.worker.runtime import WorkerRuntime
 from fastapi.testclient import TestClient
 
@@ -74,6 +75,20 @@ def test_worker_status_ready_with_fake_pages() -> None:
     assert status["pageCount"] == 3
 
 
+def test_worker_drain_counts_unique_contact_payloads() -> None:
+    """Dry-run can leave unread rows visible; stale duplicate reads must not count twice."""
+
+    runtime = DuplicateContactRuntime()
+
+    payload = asyncio.run(runtime.drain_messages(Platform.JOB51, max_contacts=2))
+
+    assert payload["processed"] == 2
+    assert [item["conversationId"] for item in payload["contacts"]] == [
+        "candidate-a",
+        "candidate-b",
+    ]
+
+
 def test_job51_generic_visible_attachment_href_downloads_for_any_owner() -> None:
     """51 通用可见附件 href 真实下载对任意账号生效，预览文字仍拒绝。"""
 
@@ -124,6 +139,51 @@ class TrackingWorkerClient:
 
     async def pause(self, platform: Platform) -> dict[str, Any]:
         return {"owner": self.owner, "platform": platform.value, "paused": True}
+
+
+class DuplicateContactRuntime(WorkerRuntime):
+    def __init__(self) -> None:
+        super().__init__(owner="和新红", port=8801, cdp_port=9222)
+        self.refs = [
+            ConversationRef(Platform.JOB51, "和新红", "ref-a"),
+            ConversationRef(Platform.JOB51, "和新红", "ref-stale"),
+            ConversationRef(Platform.JOB51, "和新红", "ref-b"),
+        ]
+        self.states = [
+            {"conversation_id": "candidate-a", "next_action": "request_resume", "stage": "one"},
+            {"conversation_id": "candidate-a", "next_action": "request_resume", "stage": "stale"},
+            {"conversation_id": "candidate-b", "next_action": "request_resume", "stage": "two"},
+        ]
+
+    async def start(self) -> None:
+        self.agent_ready = True
+
+    def _adapter(self, platform: Platform) -> object:
+        _ = platform
+        return object()
+
+    async def _prepare_message_adapter(self, adapter: object) -> None:
+        _ = adapter
+
+    async def _find_next_unread_thread(
+        self,
+        adapter: object,
+        seen: set[str],
+    ) -> ConversationRef | None:
+        _ = adapter
+        while self.refs:
+            ref = self.refs.pop(0)
+            if ref.conversation_id not in seen:
+                return ref
+        return None
+
+    async def _run_current_conversation(self, adapter: object) -> dict[str, object]:
+        _ = adapter
+        return self.states.pop(0)
+
+    async def _graph_stage(self, state: dict[str, object]) -> str:
+        _ = state
+        return "rules_loaded"
 
 
 def _runtime_clients() -> dict[str, InProcessWorkerClient]:

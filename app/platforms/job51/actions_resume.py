@@ -113,6 +113,17 @@ async def request_or_download_resume(
         if result.get("ok"):
             return {"requested": False, "resumeReceived": True, **result}
         if result.get("blocked"):
+            if payload.get("hasOnlineResumeButton") or payload.get("previewOnly"):
+                online = await _download_online_resume(
+                    page,
+                    candidate_name=candidate_name,
+                    applied_position=position,
+                    memory=memory,
+                )
+                if online.get("ok"):
+                    return {"requested": False, "resumeReceived": True, **online}
+                if online.get("blocked") and online.get("buttonFound"):
+                    return {"requested": False, "downloaded": False, **online}
             return {"requested": False, "downloaded": False, **result}
         if not payload.get("previewOnly"):
             clicked, confirmed = await _request_resume_with_confirm(page)
@@ -314,12 +325,14 @@ async def _open_attachment_resume_preview(page: BrowserPage) -> bool:
         if result.get("ok"):
             return True
     opened = await _safe_eval_dict(page, "job51.click_attachment_resume")
-    if not opened:
-        opened = await _safe_eval_dict(page, CLICK_ATTACHMENT_RESUME_JS)
-    if not opened.get("clicked"):
+    if opened.get("clicked"):
+        visible = await _wait_annex_download_visible(page)
+        if visible.get("verified"):
+            return True
+    fallback = await _safe_eval_dict(page, CLICK_ATTACHMENT_RESUME_JS)
+    if not fallback.get("clicked"):
         return False
-    await asyncio.sleep(1)
-    visible = await _annex_download_visible(page)
+    visible = await _wait_annex_download_visible(page)
     return bool(visible.get("verified"))
 
 
@@ -451,6 +464,21 @@ async def _annex_download_visible(page: BrowserPage) -> dict[str, object]:
         "verified": bool(payload.get("href")),
         "reason": "" if payload.get("href") else "annex_download_link_missing",
     }
+
+
+async def _wait_annex_download_visible(
+    page: BrowserPage,
+    *,
+    timeout_ms: int = 5000,
+    interval_ms: int = 150,
+) -> dict[str, object]:
+    deadline = asyncio.get_running_loop().time() + max(timeout_ms, 0) / 1000
+    last = {"verified": False, "reason": "annex_download_link_missing"}
+    while True:
+        last = await _annex_download_visible(page)
+        if last.get("verified") or asyncio.get_running_loop().time() >= deadline:
+            return last
+        await asyncio.sleep(max(interval_ms, 0) / 1000)
 
 
 async def _online_resume_download_visible(page: BrowserPage) -> dict[str, object]:

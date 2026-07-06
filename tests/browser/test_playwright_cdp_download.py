@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from app.browser.playwright_cdp import PlaywrightCDPPage
@@ -54,6 +55,24 @@ def test_job51_download_sets_uuid_download_behavior_before_clicking_save() -> No
     assert raw.save_clicks == 0
 
 
+def test_job51_download_reads_uuid_file_when_artifact_path_is_missing(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "playwright-artifacts" / "uuid-download"
+    uuid_file = tmp_path / "uuid-download"
+    uuid_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(artifact_path), suggested_filename="resume.pdf"),
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["bytes"] == b"%PDF-1.7\nbody\n%%EOF"
+    assert result["path"] == str(uuid_file)
+    assert raw.save_clicks == 1
+
+
 class _FetchingCDPPage(PlaywrightCDPPage):
     def __init__(self, page: Any) -> None:
         super().__init__(page)
@@ -84,11 +103,26 @@ class _RawPage:
         self.closed = True
 
 
+class _Job51UUIDDownloadPage(PlaywrightCDPPage):
+    def __init__(self, page: Any, download_dir: Path) -> None:
+        super().__init__(page)
+        self.download_dir = download_dir
+
+    async def _setup_job51_uuid_download_behavior(self) -> dict[str, Any]:
+        return {"ok": True, "downloadPath": str(self.download_dir)}
+
+
 class _Job51DownloadRawPage:
-    def __init__(self, *, cdp_should_fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        cdp_should_fail: bool = False,
+        download: _Download | None = None,
+    ) -> None:
         self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
         self.save_clicks = 0
         self.url = "https://ehire.51job.com/Revision/chat"
+        self.download = download
 
     def locator(self, selector: str) -> _Job51Locator:
         return _Job51Locator(self, selector)
@@ -98,7 +132,36 @@ class _Job51DownloadRawPage:
 
     def expect_download(self, timeout: int):  # noqa: ANN001
         _ = timeout
-        raise AssertionError("download should not be awaited when CDP setup fails")
+        if self.download is None:
+            raise AssertionError("download should not be awaited when CDP setup fails")
+        return _ExpectDownload(self.download)
+
+
+class _ExpectDownload:
+    def __init__(self, download: _Download) -> None:
+        self.download = download
+
+    async def __aenter__(self) -> _ExpectDownload:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = exc_type, exc, tb
+
+    @property
+    async def value(self) -> _Download:
+        return self.download
+
+
+class _Download:
+    def __init__(self, *, path: str | None, suggested_filename: str) -> None:
+        self._path = path
+        self.suggested_filename = suggested_filename
+
+    async def path(self) -> str | None:
+        return self._path
+
+    async def save_as(self, target: str) -> None:
+        Path(target).write_bytes(b"%PDF-1.7\nbody\n%%EOF")
 
 
 class _DownloadContext:

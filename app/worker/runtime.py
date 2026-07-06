@@ -116,7 +116,10 @@ class WorkerRuntime:
                 await self._prepare_message_adapter(adapter)
                 contacts: list[dict[str, object]] = []
                 seen: set[str] = set()
-                while len(contacts) < max_contacts:
+                counted_contact_ids: set[str] = set()
+                attempts = 0
+                max_attempts = max(max_contacts * 3, max_contacts + 3)
+                while len(contacts) < max_contacts and attempts < max_attempts:
                     ref = await self._find_next_unread_thread(adapter, seen)
                     if ref is None:
                         return self._drain_payload(
@@ -125,6 +128,7 @@ class WorkerRuntime:
                             drained=True,
                             stop_reason="drained",
                         )
+                    attempts += 1
                     if ref.conversation_id:
                         seen.add(ref.conversation_id)
                     state = await self._run_current_conversation(adapter)
@@ -135,7 +139,17 @@ class WorkerRuntime:
                     conversation_id = str(contact.get("conversationId") or "")
                     if conversation_id:
                         seen.add(conversation_id)
+                        if conversation_id in counted_contact_ids:
+                            continue
+                        counted_contact_ids.add(conversation_id)
                     contacts.append(contact)
+                if len(contacts) < max_contacts:
+                    return self._drain_payload(
+                        platform,
+                        contacts,
+                        drained=False,
+                        stop_reason="max_attempts_reached",
+                    )
                 return self._drain_payload(
                     platform,
                     contacts,

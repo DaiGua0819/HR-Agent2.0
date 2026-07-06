@@ -372,6 +372,70 @@ def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
     assert page.selected_index == 1
 
 
+def test_job51_click_thread_by_state_relocates_by_identity_when_index_is_stale() -> None:
+    """51job virtual rows can reuse indexes; identity must beat stale index."""
+
+    page = FakePage(
+        conversations=[
+            {
+                "id": "wrong-row",
+                "name": "错误候选人",
+                "position": "国际业务管培生",
+                "label": "错误候选人 国际业务管培生",
+                "latest_message": "你好",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "你好"}],
+            },
+            {
+                "id": "target-row",
+                "name": "目标候选人",
+                "position": "B端社交媒体运营",
+                "label": "目标候选人 B端社交媒体运营\n简历已发送",
+                "latest_message": "简历已发送",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "简历已发送"}],
+            },
+        ]
+    )
+
+    result = asyncio.run(
+        click_thread_by_state(
+            page,
+            {
+                "index": 0,
+                "id": "",
+                "label": "目标候选人\nB端社交媒体运营\n简历已发送",
+                "name": "目标候选人",
+                "position": "B端社交媒体运营",
+                "latest_message": "简历已发送",
+            },
+            expected={
+                "id": "",
+                "label": "目标候选人\nB端社交媒体运营\n简历已发送",
+                "name": "目标候选人",
+                "position": "B端社交媒体运营",
+                "latest_message": "简历已发送",
+            },
+        )
+    )
+
+    assert result["clicked"] is True
+    assert page.selected_index == 1
+
+
+def test_job51_find_next_thread_skips_repeated_identity_mismatch_in_session() -> None:
+    """A bad virtual row should not be clicked again on the next drain iteration."""
+
+    page = AlwaysMismatchedJob51Page()
+
+    first = asyncio.run(find_next_thread(page, owner="和新红"))
+    second = asyncio.run(find_next_thread(page, owner="和新红"))
+
+    assert first is None
+    assert second is None
+    assert page.identity_click_attempts == 1
+
+
 def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
     """Live 51job rows need name and position for post-click identity verification."""
 
@@ -395,6 +459,7 @@ def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
             "label": "3\nAlice AI Intern\n9:32\nhello",
             "name": "Alice",
             "position": "AI Intern",
+            "latest_message": "",
             "unread_count": 3,
         }
     ]
@@ -653,6 +718,62 @@ def test_job51_attachment_preview_uses_dom_fallback_when_click_is_intercepted() 
 
     assert opened is True
     assert page.dom_clicked is True
+
+
+def test_job51_attachment_preview_falls_back_to_top_right_annex_entry() -> None:
+    """聊天附件入口不可用时，右上角附件简历入口也能打开预览。"""
+
+    page = TopRightAttachmentPage()
+
+    opened = asyncio.run(_open_attachment_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened is True
+    assert page.top_right_clicked is True
+
+
+def test_job51_attachment_preview_retries_dom_fallback_when_legacy_click_not_verified() -> None:
+    """旧页面脚本声称已点击但没打开预览时，继续执行新 DOM fallback。"""
+
+    page = LegacyAttachmentClickNotVerifiedPage()
+
+    opened = asyncio.run(_open_attachment_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened is True
+    assert page.legacy_clicked is True
+    assert page.top_right_clicked is True
+
+
+def test_job51_attachment_dom_script_prefers_message_card_before_header_annex() -> None:
+    """真实页右上角附件可能卡加载，DOM fallback 应先点聊天卡片。"""
+
+    script = job51_dom_scripts.CLICK_ATTACHMENT_RESUME_JS
+
+    assert "messageCandidates" in script
+    assert "headerCandidates" in script
+    assert script.index("messageCandidates") < script.index("headerCandidates")
+
+
+def test_job51_attachment_failure_falls_back_to_online_resume_download() -> None:
+    """附件入口打不开但在线简历可用时，不应直接 blocked。"""
+
+    state, page = run_case(
+        conversation(
+            "销售管培生",
+            [
+                {"sender": "me", "text": "你是否接受出差？"},
+                {"sender": "other", "text": "可以接受"},
+            ],
+            has_attachment_card=True,
+            online_resume_bytes=b"%PDF-1.7\nbody\n%%EOF",
+            online_resume_filename="候选人_销售管培生.pdf",
+        )
+    )
+
+    result = state["decision"]["result"]
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert result["sourceKind"] == "online_resume"
+    assert page.resume_requests == 0
 
 
 def test_job51_does_not_download_resume_before_candidate_qualifies() -> None:
@@ -1200,6 +1321,45 @@ class InterceptedAttachmentElement:
         return None
 
 
+class TopRightAttachmentPage:
+    """Simulates a page where only the header annex entry opens the preview."""
+
+    def __init__(self) -> None:
+        self.top_right_clicked = False
+
+    async def query_all(self, selector: str) -> list[InterceptedAttachmentElement]:
+        _ = selector
+        return []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == "job51.click_attachment_resume":
+            return {"clicked": False, "reason": "message_card_not_found"}
+        if "file-style.annex" in script:
+            self.top_right_clicked = True
+            return {"clicked": True, "source": "top_right_attachment"}
+        if "annex-resume" in script:
+            return {
+                "found": self.top_right_clicked,
+                "href": "blob:resume" if self.top_right_clicked else "",
+            }
+        return {}
+
+
+class LegacyAttachmentClickNotVerifiedPage(TopRightAttachmentPage):
+    """Simulates a stale page helper that reports clicked without opening preview."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.legacy_clicked = False
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_attachment_resume":
+            self.legacy_clicked = True
+            return {"clicked": True, "source": "legacy_message_card"}
+        return await super().eval_js(script, arg)
+
+
 class OnlineResumeEntryPage(FakePage):
     def __init__(
         self,
@@ -1276,6 +1436,43 @@ class OnlineResumeEntryElement:
     async def attr(self, name: str) -> str | None:
         _ = name
         return None
+
+
+class AlwaysMismatchedJob51Page(FakePage):
+    def __init__(self) -> None:
+        super().__init__(
+            conversations=[
+                {
+                    "id": "wrong-row",
+                    "name": "错误候选人",
+                    "position": "国际业务管培生",
+                    "label": "错误候选人 国际业务管培生",
+                    "latest_message": "你好",
+                    "unread_count": 1,
+                    "messages": [{"sender": "other", "text": "你好"}],
+                }
+            ]
+        )
+        self.identity_click_attempts = 0
+
+    def _fake_unread_rows(self) -> list[dict[str, object]]:
+        return [
+            {
+                "index": 0,
+                "id": "target-row",
+                "label": "目标候选人\nB端社交媒体运营\n简历已发送",
+                "name": "目标候选人",
+                "position": "B端社交媒体运营",
+                "latestMessage": "简历已发送",
+                "unreadCount": 1,
+            }
+        ]
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_thread_by_identity":
+            self.identity_click_attempts += 1
+            return {"clicked": True, "source": "fake_identity_click"}
+        return await super().eval_js(script, arg)
 
 
 class RowPage:

@@ -344,6 +344,11 @@ class PlaywrightCDPPage:
             download = await download_info.value
             path = await download.path()
             filename = str(download.suggested_filename or "")
+            if path:
+                artifact = Path(path)
+                uuid_path = Path(str(behavior.get("downloadPath") or "")) / artifact.name
+                if not artifact.exists() and uuid_path.exists():
+                    path = str(uuid_path)
             if path is None:
                 target = Path(gettempdir()) / (filename or "job51_resume_download")
                 await download.save_as(str(target))

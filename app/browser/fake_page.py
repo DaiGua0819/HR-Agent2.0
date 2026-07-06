@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def _compact(value: str) -> str:
+    return "".join(str(value or "").split()).lower()
+
+
 @dataclass
 class FakeElement:
     """FakePage 返回的元素。"""
@@ -238,21 +242,29 @@ class FakePage:
             actual_label = str(current.get("label") or "")
             actual_name = str(current.get("name") or "")
             actual_position = str(current.get("position") or current.get("appliedPosition") or "")
+            name_ok = bool(expected_name and expected_name == actual_name)
+            position_ok = bool(expected_position and expected_position == actual_position)
+            position_conflict = bool(
+                expected_position and actual_position and expected_position != actual_position
+            )
             opened = bool(
                 expected_label and expected_label == actual_label
-                or expected_name and expected_name == actual_name
-                or expected_position and expected_position == actual_position
+                or name_ok and not position_conflict
+                or position_ok
             )
             return {
                 "opened": opened,
                 "chatReady": True,
                 "reason": "" if opened else "candidate_identity_mismatch",
             }
+        if script == "job51.click_thread_by_identity":
+            return self._job51_click_thread_by_identity(arg)
         if "thread_row_not_found" in script and "#conversation-list .list-item" in script:
             expected = arg if isinstance(arg, dict) else {}
             label = str(expected.get("label") or "")
             row_id = str(expected.get("id") or "")
             index = int(expected.get("index") or 0)
+            allow_index = bool(expected.get("allowIndexFallback"))
             for current_index, item in enumerate(self.conversations):
                 current_label = str(
                     item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"
@@ -261,7 +273,7 @@ class FakePage:
                 if (row_id and row_id == current_id) or (label and label == current_label):
                     self.selected_index = current_index
                     return {"clicked": True, "source": "fake_dom_click", "label": current_label}
-            if 0 <= index < len(self.conversations):
+            if allow_index and 0 <= index < len(self.conversations):
                 self.selected_index = index
                 return {"clicked": True, "source": "fake_dom_click", "index": index}
             return {"clicked": False, "reason": "thread_row_not_found"}
@@ -580,11 +592,58 @@ class FakePage:
                 "label": str(
                     item.get("label") or f"{item.get('name', '')} {item.get('position', '')}"
                 ),
+                "name": str(item.get("name") or ""),
                 "position": str(item.get("position") or ""),
+                "latestMessage": str(item.get("latest_message") or ""),
                 "unreadCount": int(item.get("unread_count") or 0),
             }
             for index, item in enumerate(self.conversations)
         ]
+
+    def _job51_click_thread_by_identity(self, arg: Any | None) -> dict[str, Any]:
+        expected = arg if isinstance(arg, dict) else {}
+        expected_name = _compact(str(expected.get("name") or ""))
+        expected_position = _compact(str(expected.get("position") or ""))
+        expected_latest = _compact(
+            str(expected.get("latest_message") or expected.get("latestMessage") or "")
+        )
+        expected_label = _compact(str(expected.get("label") or ""))
+        expected_id = str(expected.get("id") or "").lstrip("_")
+        matches: list[tuple[int, dict[str, Any], int]] = []
+        for index, item in enumerate(self.conversations):
+            label = str(item.get("label") or f"{item.get('name', '')} {item.get('position', '')}")
+            name = str(item.get("name") or "")
+            position = str(item.get("position") or "")
+            latest = str(item.get("latest_message") or "")
+            item_id = str(item.get("id") or index).lstrip("_")
+            haystack = _compact("\n".join([label, name, position, latest]))
+            score = 0
+            if expected_id and item_id == expected_id:
+                score += 100
+            if expected_name and expected_name in haystack:
+                score += 45
+            if expected_position and expected_position in haystack:
+                score += 30
+            if expected_latest and expected_latest in haystack:
+                score += 12
+            if expected_label and expected_label == _compact(label):
+                score += 45
+            if score > 0:
+                matches.append((index, item, score))
+        matches.sort(key=lambda item: (-item[2], item[0]))
+        if not matches:
+            return {"clicked": False, "reason": "thread_identity_not_found"}
+        if len(matches) > 1 and matches[0][2] == matches[1][2]:
+            return {"clicked": False, "reason": "thread_identity_ambiguous"}
+        index, item, score = matches[0]
+        self.selected_index = index
+        return {
+            "clicked": True,
+            "source": "fake_identity_click",
+            "index": index,
+            "score": score,
+            "label": str(item.get("label") or ""),
+        }
 
     def _interview_invite_search(self, arg: Any | None) -> dict[str, Any]:
         payload = arg if isinstance(arg, dict) else {}

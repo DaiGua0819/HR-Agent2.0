@@ -100,15 +100,124 @@ READ_UNREAD_ROWS_JS = r"""
       const count = parseBadge(row);
       const name = text(row.querySelector(".username, .username-text"));
       const position = text(row.querySelector(".jobname"));
+      const latestMessage = text(row.querySelector(".last-message, .msg, .message"));
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
         label,
         name,
         position,
+        latestMessage,
         unreadCount: count || (unreadState ? 1 : 0),
       };
     }),
+  };
+}
+"""
+
+CLICK_THREAD_BY_IDENTITY_JS = r"""
+(expected) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) : "");
+  const compact = (value) => String(value || "").replace(/\s+/g, "").toLowerCase();
+  const contains = (actual, expectedValue) => {
+    const left = compact(actual);
+    const right = compact(expectedValue);
+    return Boolean(left && right && (left.includes(right) || right.includes(left)));
+  };
+  const exact = (actual, expectedValue) => {
+    const left = compact(actual);
+    const right = compact(expectedValue);
+    return Boolean(left && right && left === right);
+  };
+  const expectedName = String(expected && expected.name || "").trim();
+  const expectedPosition = String(expected && expected.position || "").trim();
+  const expectedLatest = String(
+    expected && (expected.latest_message || expected.latestMessage) || ""
+  ).trim();
+  const expectedLabel = String(expected && expected.label || "").trim();
+  const expectedId = String(expected && expected.id || "").replace(/^_/, "").trim();
+  if (!expectedName && !expectedPosition && !expectedLabel && !expectedId) {
+    return { clicked: false, reason: "thread_identity_fields_missing" };
+  }
+  const rows = Array.from(document.querySelectorAll(
+    "#conversation-list .list-item, .conversation-list .list-item, " +
+    "[class*='conversation'] [class*='list-item'], [class*='im'] [class*='list-item']"
+  )).filter(visible);
+  const scored = rows.map((row, index) => {
+    const rowText = text(row);
+    const rowId = String(attr(row, "id") || attr(row, "data-id") ||
+      attr(row, "data-uid") || "").replace(/^_/, "");
+    const rowName = text(row.querySelector(".username, .username-text"));
+    const rowPosition = text(row.querySelector(".jobname, .job-name"));
+    const rowLatest = text(row.querySelector(".last-message, .msg, .message"));
+    let score = 0;
+    if (expectedId && rowId && rowId === expectedId) score += 100;
+    if (expectedLabel && exact(rowText, expectedLabel)) score += 45;
+    else if (expectedLabel && contains(rowText, expectedLabel)) score += 18;
+    if (expectedName && exact(rowName || rowText, expectedName)) score += 60;
+    else if (expectedName && contains(rowName || rowText, expectedName)) score += 45;
+    if (expectedPosition && exact(rowPosition || rowText, expectedPosition)) score += 40;
+    else if (expectedPosition && contains(rowPosition || rowText, expectedPosition)) score += 30;
+    if (expectedLatest && contains(rowLatest || rowText, expectedLatest)) score += 12;
+    const missingName = expectedName && !contains(rowName || rowText, expectedName);
+    const missingPosition = expectedPosition && !contains(rowPosition || rowText, expectedPosition);
+    if (missingName) score -= 80;
+    if (missingPosition) score -= 45;
+    return {
+      row,
+      index,
+      score,
+      id: rowId,
+      label: rowText,
+      name: rowName,
+      position: rowPosition,
+      latestMessage: rowLatest,
+    };
+  }).filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const target = scored[0];
+  if (!target) {
+    return { clicked: false, reason: "thread_identity_not_found", candidates: scored.length };
+  }
+  const second = scored[1];
+  if (second && second.score === target.score) {
+    return {
+      clicked: false,
+      reason: "thread_identity_ambiguous",
+      candidates: scored.slice(0, 3).map((item) => ({
+        index: item.index,
+        score: item.score,
+        label: item.label,
+      })),
+    };
+  }
+  target.row.scrollIntoView({ block: "center", inline: "nearest" });
+  const clickTarget = target.row.querySelector(".conversation-item") ||
+    target.row.querySelector(".item-content") || target.row.querySelector(".info") || target.row;
+  for (const type of ["mouseover", "mousemove", "mousedown", "mouseup", "click"]) {
+    clickTarget.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+    }));
+  }
+  return {
+    clicked: true,
+    source: "identity_dom_click",
+    index: target.index,
+    score: target.score,
+    label: target.label,
+    name: target.name,
+    position: target.position,
+    latestMessage: target.latestMessage,
   };
 }
 """
@@ -218,7 +327,12 @@ OPENED_CANDIDATE_STATE_JS = r"""
     (compact(actualPosition).includes(compact(expectedPosition)) ||
       compact(expectedPosition).includes(compact(actualPosition)))
   );
-  const opened = Boolean(chatReady && (nameOk || positionOk));
+  const positionConflict = Boolean(
+    expectedPosition && actualPosition &&
+    !(compact(actualPosition).includes(compact(expectedPosition)) ||
+      compact(expectedPosition).includes(compact(actualPosition)))
+  );
+  const opened = Boolean(chatReady && ((nameOk && !positionConflict) || positionOk));
   return {
     opened,
     reason: opened ? "" : "candidate_identity_mismatch",
@@ -679,14 +793,27 @@ CLICK_ATTACHMENT_RESUME_JS = r"""
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
   const candidates = Array.from(document.querySelectorAll(
     ".resume-element .info-content-item.file-item, " +
-    ".resume-element [class*='file-item'], [class*='attachment'] [class*='resume']"
+    ".resume-element [class*='file-item'], " +
+    ".chat-user-operate .file-style.annex, .chat-new-header .file-style.annex, " +
+    ".chat-user-operate [class*='annex'], .chat-new-header [class*='annex'], " +
+    "[class*='attachment'] [class*='resume']"
   )).filter(visible);
-  const target = candidates.find((item) => /附件简历|简历|pdf|doc/i.test(text(item))) ||
-    candidates[0];
+  const matchesAttachment = (item) => /附件简历|简历|pdf|doc/i.test(text(item));
+  const messageCandidates = candidates.filter((item) => {
+    return item.closest(".resume-element, .im-message-item, .message-item");
+  }).filter(matchesAttachment);
+  const headerCandidates = candidates.filter((item) => {
+    return item.closest(".chat-user-operate, .chat-new-header");
+  }).filter(matchesAttachment);
+  const target = messageCandidates[0] || headerCandidates[0] ||
+    candidates.find(matchesAttachment) || candidates[0];
   if (!target) return { clicked: false, reason: "attachment_button_not_found" };
   target.scrollIntoView({ block: "center", inline: "nearest" });
   target.click();
-  return { clicked: true, label: text(target), source: "dom_attachment_card" };
+  const source = target.closest(".chat-user-operate, .chat-new-header")
+    ? "top_right_attachment"
+    : "dom_attachment_card";
+  return { clicked: true, label: text(target), source };
 }
 """
 

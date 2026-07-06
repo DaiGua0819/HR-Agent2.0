@@ -21,6 +21,7 @@ from app.platforms.job51 import selectors
 from app.platforms.job51.actions_navigation import open_chat_page as navigate_chat_page
 from app.platforms.job51.actions_unread import select_unread_filter as refresh_unread_filter
 from app.platforms.job51.dom_scripts import (
+    CLICK_THREAD_BY_IDENTITY_JS,
     OPENED_CANDIDATE_STATE_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
@@ -51,6 +52,7 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """刷新并切换 51job 未读筛选。"""
 
     await install_app_download_blocker(page)
+    _clear_failed_open_keys(page)
     return await refresh_unread_filter(page)
 
 
@@ -127,21 +129,41 @@ async def find_next_thread(
     """打开下一个未读且未回复过的 51job 会话。"""
 
     excluded = {str(item) for item in exclude_ids or set() if str(item)}
+    failed_open_keys = _failed_open_keys(page)
     for state in await read_unread_row_states(page):
         label = str(state.get("label") or "")
         conversation_id = str(state.get("id") or label)
-        if conversation_id in excluded:
+        identity_key = _state_identity_key(state)
+        if (
+            conversation_id in excluded
+            or identity_key in excluded
+            or identity_key in failed_open_keys
+        ):
             continue
         if should_skip_thread_label(label) or _safe_int(state.get("unread_count")) <= 0:
             continue
-        row = await _find_thread_for_state(page, state)
+        row = await _find_thread_for_state(page, state, allow_index=False)
         if row is None:
-            continue
+            row = None
         expected = {
             "id": str(state.get("id") or label),
             "label": label,
-            "name": str(state.get("name") or await row.attr("name") or ""),
-            "position": str(state.get("position") or await row.attr("position") or ""),
+            "name": str(
+                state.get("name")
+                or (await row.attr("name") if row is not None else "")
+                or ""
+            ),
+            "position": str(
+                state.get("position")
+                or (await row.attr("position") if row is not None else "")
+                or ""
+            ),
+            "latest_message": str(
+                state.get("latest_message")
+                or state.get("latestMessage")
+                or state.get("message")
+                or ""
+            ),
         }
         click = await click_thread_by_state(page, state, expected=expected, row=row)
         ready = bool(click.get("ok") or click.get("clicked")) or await wait_chat_ready(
@@ -151,6 +173,7 @@ async def find_next_thread(
         opened = await verify_opened_candidate(page, expected, chat_ready=ready)
         if opened.get("opened"):
             return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
+        failed_open_keys.add(identity_key)
     return None
 
 
@@ -165,7 +188,23 @@ async def click_thread_by_state(
 
     await install_app_download_blocker(page)
     if expected:
-        target_row = row or await _find_thread_for_state(page, state)
+        identity_click = await _click_thread_by_identity(page, state, expected)
+        if identity_click.get("clicked"):
+            opened = await verify_opened_candidate(
+                page,
+                expected,
+                chat_ready=await wait_chat_ready(page, timeout_ms=6500),
+                timeout_ms=5000,
+            )
+            identity_click["ok"] = bool(opened.get("opened"))
+            identity_click["verified"] = bool(opened.get("opened"))
+            identity_click["verification"] = opened
+            if not opened.get("opened"):
+                identity_click["reason"] = opened.get("reason") or "candidate_identity_mismatch"
+            return identity_click
+        if identity_click.get("reason") == "thread_identity_ambiguous":
+            return identity_click
+        target_row = row or await _find_thread_for_state(page, state, allow_index=False)
         if target_row is not None:
             primary = await reliable_click_element(
                 page,
@@ -225,6 +264,33 @@ async def click_thread_by_state(
     if result.get("clicked"):
         return result
     return result or {"clicked": False, "reason": "thread_row_dom_click_failed"}
+
+
+async def _click_thread_by_identity(
+    page: BrowserPage,
+    state: dict[str, object],
+    expected: dict[str, object],
+) -> dict[str, object]:
+    payload = {
+        "id": str(expected.get("id") or state.get("id") or "").lstrip("_"),
+        "label": str(expected.get("label") or state.get("label") or "").strip(),
+        "name": str(expected.get("name") or state.get("name") or "").strip(),
+        "position": str(expected.get("position") or state.get("position") or "").strip(),
+        "latest_message": str(
+            expected.get("latest_message")
+            or expected.get("latestMessage")
+            or state.get("latest_message")
+            or state.get("latestMessage")
+            or state.get("message")
+            or ""
+        ).strip(),
+    }
+    if not any(payload.get(key) for key in ("id", "label", "name", "position")):
+        return {"clicked": False, "reason": "thread_identity_fields_missing"}
+    result = await _safe_eval_dict(page, "job51.click_thread_by_identity", payload)
+    if not result:
+        result = await _safe_eval_dict(page, CLICK_THREAD_BY_IDENTITY_JS, payload)
+    return result or {"clicked": False, "reason": "thread_identity_click_failed"}
 
 
 async def install_app_download_blocker(page: BrowserPage) -> dict[str, object]:
@@ -328,6 +394,11 @@ async def _verify_opened_candidate_once(
     actual_source = str(context.get("source") or "chat_context").strip()
     name_ok = bool(expected_name and actual_name and _text_matches(actual_name, expected_name))
     name_conflict = bool(expected_name and actual_name and not name_ok)
+    position_conflict = bool(
+        expected_position
+        and actual_position
+        and not _position_matches(actual_position, expected_position)
+    )
     position_ok = bool(
         not name_conflict
         and
@@ -336,7 +407,10 @@ async def _verify_opened_candidate_once(
         and _position_matches(actual_position, expected_position)
     )
     label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
-    opened = bool(chat_ready and (label_ok or name_ok or (actual_name and position_ok)))
+    opened = bool(
+        chat_ready
+        and (label_ok or (name_ok and not position_conflict) or (actual_name and position_ok))
+    )
     reason = "" if opened else "candidate_identity_mismatch"
     return {
         "opened": opened,
@@ -509,6 +583,47 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _state_identity_key(state: dict[str, object]) -> str:
+    name = _compact_identity_text(state.get("name"))
+    position = _compact_identity_text(state.get("position") or state.get("jobName"))
+    latest = _compact_identity_text(
+        state.get("latest_message")
+        or state.get("latestMessage")
+        or state.get("message")
+        or ""
+    )
+    row_id = _compact_identity_text(state.get("id"))
+    label = _compact_identity_text(state.get("label"))
+    if name or position or latest:
+        return "|".join(("identity", name, position, latest))
+    if row_id:
+        return f"id|{row_id}"
+    return f"label|{label}"
+
+
+def _compact_identity_text(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _failed_open_keys(page: BrowserPage) -> set[str]:
+    keys = getattr(page, "_job51_failed_open_keys", None)
+    if isinstance(keys, set):
+        return keys
+    keys = set()
+    try:
+        page._job51_failed_open_keys = keys
+    except Exception:
+        return keys
+    return keys
+
+
+def _clear_failed_open_keys(page: BrowserPage) -> None:
+    try:
+        page._job51_failed_open_keys = set()
+    except Exception:
+        return
+
+
 async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
     return {"verified": await wait_chat_ready(page, timeout_ms=6500)}
 
@@ -516,6 +631,8 @@ async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
 async def _find_thread_for_state(
     page: BrowserPage,
     state: dict[str, object],
+    *,
+    allow_index: bool = True,
 ) -> Any | None:
     row_id = str(state.get("id") or "").lstrip("_")
     label = str(state.get("label") or "").strip()
@@ -529,9 +646,10 @@ async def _find_thread_for_state(
         for row in rows:
             if (await row.text()).strip() == label:
                 return row
-    index = _safe_int(state.get("index"))
-    if 0 <= index < len(rows):
-        return rows[index]
+    if allow_index:
+        index = _safe_int(state.get("index"))
+        if 0 <= index < len(rows):
+            return rows[index]
     return None
 
 
@@ -575,6 +693,12 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
                 "label": label,
                 "name": str(item.get("name") or item.get("candidateName") or ""),
                 "position": str(item.get("position") or item.get("jobName") or ""),
+                "latest_message": str(
+                    item.get("latest_message")
+                    or item.get("latestMessage")
+                    or item.get("message")
+                    or ""
+                ),
                 "unread_count": unread_count,
             }
         )
