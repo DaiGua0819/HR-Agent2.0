@@ -77,6 +77,46 @@ def test_resume_service_filters_sorts_and_paginates_in_memory_records() -> None:
     assert repository.count() == 3
 
 
+def test_resume_service_reuses_cached_resume_models_until_records_change() -> None:
+    """Repeated list filters should not rebuild every resume when records are unchanged."""
+
+    class SpyRepository(ResumeRepository):
+        def __init__(self, records: list[ResumeRecord]) -> None:
+            super().__init__(":memory:", read_only=True, memory_records=records)
+            self.iter_calls = 0
+
+        def iter_resumes(self, *, limit: int | None = None):
+            self.iter_calls += 1
+            yield from super().iter_resumes(limit=limit)
+
+    repository = SpyRepository(
+        [
+            _record("1", name="王五", job="销售管培生", score=80, updated_at="2026-01-02"),
+            _record("2", name="赵六", job="电气工程师", score=90, updated_at="2026-01-03"),
+        ]
+    )
+    service = ResumeService(repository)
+
+    first = service.list_resumes(job_type="销售", sort="match_score")
+    second = service.list_resumes(job_type="电气", sort="match_score")
+
+    assert [resume.id for resume in first.items] == ["1"]
+    assert [resume.id for resume in second.items] == ["2"]
+    assert repository.iter_calls == 1
+
+    repository._memory_records["3"] = _record(
+        "3",
+        name="钱七",
+        job="电气工程师",
+        score=95,
+        updated_at="2026-01-04",
+    )
+    changed = service.list_resumes(job_type="电气", sort="match_score")
+
+    assert [resume.id for resume in changed.items] == ["3", "2"]
+    assert repository.iter_calls == 2
+
+
 def test_resume_service_replicates_legacy_library_filters() -> None:
     """旧站简历库的学校层次、届别、复核、结论和分数筛选应在后端生效。"""
 

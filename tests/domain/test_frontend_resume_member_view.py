@@ -84,7 +84,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260704-auth-session-fix" in html
+    assert "/assets/app.js?v=20260706-candidate-card-meta" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +118,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260702-resume-fill-frame" in html
+    assert "20260706-candidate-card-meta" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +242,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260702-resume-fill-frame" in html
+    assert "20260706-candidate-card-meta" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +392,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-resume-fill-frame" in html
+    assert "20260706-candidate-card-meta" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -704,6 +704,30 @@ def test_resume_library_prefetches_next_two_pages() -> None:
     assert "loadResumes({ preferCache: true })" in script
 
 
+def test_resume_filters_debounce_cancel_stale_requests_and_delay_prefetch() -> None:
+    """Rapid filter changes should only render the latest resume list request."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    apply_block = script.split("function applyResumeFilters()", 1)[1].split(
+        "function bindAutoApplyResumeFilters()",
+        1,
+    )[0]
+
+    assert "const RESUME_FILTER_DEBOUNCE_MS = 250" in script
+    assert "const RESUME_PREFETCH_AFTER_FILTER_MS = 500" in script
+    assert "resumeFilterDebounceTimer" in script
+    assert "resumeListAbortController" in script
+    assert "resumeListRequestSequence" in script
+    assert "new AbortController()" in script
+    assert "state.resumeListAbortController.abort()" in script
+    assert "clearTimeout(state.resumeFilterDebounceTimer)" in script
+    assert "setTimeout" in script
+    assert "scheduleResumeFilterRefresh()" in script
+    assert "scheduleResumePrefetchAfterFilter()" in script
+    assert "loadResumes({ fromFilter: true })" in script
+    assert "loadResumes();" not in apply_block
+
+
 def test_resume_library_prefetches_next_ten_preview_images_without_marking_viewed() -> None:
     """Opening a resume should warm nearby preview images without touching review-context."""
 
@@ -801,7 +825,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260702-resume-fill-frame" in html
+    assert "20260706-candidate-card-meta" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -833,6 +857,27 @@ def test_candidate_card_metadata_uses_aligned_columns() -> None:
     assert ".candidate-card__meta-school" in styles
     assert ".candidate-card__meta-label" not in styles
     assert "text-overflow: ellipsis" in styles
+
+
+def test_candidate_card_shows_major_account_and_compact_date() -> None:
+    """Candidate cards should show major, account owner, and short import dates."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function resumeMajor(resume)" in script
+    assert '["major", "profession", "specialty"]' in script
+    assert "function resumeCompactImportDate(resume)" in script
+    assert "return `${match[1].slice(2)}-${match[2]}-${match[3]}`" in script
+    assert "function resumePlatformAccountLabel(resume)" in script
+    assert 'if (platform === "51job") platform = "51"' in script
+    assert "return owner ? `${platform} ' ${owner.slice(0, 1)}` : platform" in script
+    assert 'class="candidate-card__job-main"' in script
+    assert 'class="candidate-card__major"' in script
+    assert 'resumeMajor(resume) || "暂未提取到"' in script
+    assert "resumeCompactImportDate(resume)" in script
+    assert "resumePlatformAccountLabel(resume)" in script
+    assert ".candidate-card__major" in styles
 
 
 def test_candidate_cards_are_larger_and_read_status_is_frosted_badge() -> None:
@@ -1069,7 +1114,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260702-resume-fill-frame" in html
+    assert "/assets/styles.css?v=20260706-candidate-card-meta" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

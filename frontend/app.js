@@ -26,6 +26,11 @@ const state = {
   resumeContextCache: new Map(),
   resumePrefetchingPages: new Set(),
   resumePrefetchingContexts: new Set(),
+  resumePrefetchAbortControllers: new Map(),
+  resumeListAbortController: null,
+  resumeListRequestSequence: 0,
+  resumeFilterDebounceTimer: null,
+  resumePrefetchDelayTimer: null,
   resumePreviewImageCache: new Set(),
   resumePreviewImageQueue: [],
   resumePreviewImageInFlight: new Set(),
@@ -33,6 +38,8 @@ const state = {
   resumePreviewImageActiveCount: 0,
   resumePreviewImageGeneration: 0,
 };
+const RESUME_FILTER_DEBOUNCE_MS = 250;
+const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
 const SUMMARY_PANEL_STORAGE_KEY = "resumeSummaryPanelWidth";
@@ -204,6 +211,9 @@ function resumePayloadValue(resume, keys) {
   }
   return "";
 }
+function resumeMajor(resume) {
+  return resumePayloadValue(resume, ["major", "profession", "specialty"]);
+}
 function resumeRawText(resume) {
   return resumePayloadValue(resume, ["rawText", "text", "summary", "content"]);
 }
@@ -259,6 +269,19 @@ function resumeImportTime(resume) {
   const normalized = String(value).replace(/\//g, "-");
   const match = normalized.match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : String(value).slice(0, 10);
+}
+function resumeCompactImportDate(resume) {
+  const value = resumeImportTime(resume);
+  const normalized = String(value).replace(/\//g, "-");
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1].slice(2)}-${match[2]}-${match[3]}`;
+  return value;
+}
+function resumePlatformAccountLabel(resume) {
+  let platform = platformName(resumePlatform(resume));
+  if (platform === "51job") platform = "51";
+  const owner = String(resumeOwner(resume) || "").trim();
+  return owner ? `${platform} ' ${owner.slice(0, 1)}` : platform;
 }
 function dateKey(date) {
   const year = date.getFullYear();
@@ -508,7 +531,7 @@ function buildTabs() {
       state.page = 1;
       clearResumePrefetchCache();
       if (state.tab === "queue") return loadQueue();
-      loadResumes();
+      loadResumes({ fromFilter: true });
     };
   });
 }
@@ -541,7 +564,7 @@ function buildJobTabs() {
       $("filters").job_type.value = state.jobType;
       state.page = 1;
       clearResumePrefetchCache();
-      loadResumes();
+      loadResumes({ fromFilter: true });
     };
   });
 }
@@ -569,10 +592,18 @@ function resumeListCacheKey(page) {
   return queryFromFilters(page);
 }
 function clearResumePrefetchCache() {
+  if (state.resumeFilterDebounceTimer) clearTimeout(state.resumeFilterDebounceTimer);
+  if (state.resumePrefetchDelayTimer) clearTimeout(state.resumePrefetchDelayTimer);
+  if (state.resumeListAbortController) state.resumeListAbortController.abort();
+  state.resumePrefetchAbortControllers.forEach((controller) => controller.abort());
+  state.resumeFilterDebounceTimer = null;
+  state.resumePrefetchDelayTimer = null;
+  state.resumeListAbortController = null;
   state.resumePageCache.clear();
   state.resumeContextCache.clear();
   state.resumePrefetchingPages.clear();
   state.resumePrefetchingContexts.clear();
+  state.resumePrefetchAbortControllers.clear();
   clearResumePreviewImagePrefetchQueue();
 }
 async function clearResumePrefetchCacheAfterMutation() {
@@ -595,6 +626,11 @@ function resumePreviewImageUrl(resume) {
 }
 function clearResumePreviewImagePrefetchQueue() {
   state.resumePreviewImageGeneration += 1;
+  state.resumePreviewImageLoaders.forEach((image) => {
+    image.onload = null;
+    image.onerror = null;
+    image.src = "";
+  });
   state.resumePreviewImageQueue = [];
   state.resumePreviewImageCache.clear();
   state.resumePreviewImageInFlight.clear();
@@ -670,23 +706,55 @@ function prefetchNextResumePages() {
     const cacheKey = resumeListCacheKey(page);
     if (state.resumePageCache.has(cacheKey) || state.resumePrefetchingPages.has(cacheKey)) continue;
     state.resumePrefetchingPages.add(cacheKey);
-    api(`/api/resumes?${cacheKey}`)
+    const controller = new AbortController();
+    state.resumePrefetchAbortControllers.set(cacheKey, controller);
+    api(`/api/resumes?${cacheKey}`, { signal: controller.signal })
       .then((data) => {
         state.resumePageCache.set(cacheKey, data);
         prefetchFollowingResumePreviewImages(state.selectedId);
       })
       .catch(() => {})
-      .finally(() => state.resumePrefetchingPages.delete(cacheKey));
+      .finally(() => {
+        state.resumePrefetchingPages.delete(cacheKey);
+        state.resumePrefetchAbortControllers.delete(cacheKey);
+      });
   }
 }
-async function loadResumes({ preferCache = false } = {}) {
+function scheduleResumePrefetchAfterFilter() {
+  if (state.resumePrefetchDelayTimer) clearTimeout(state.resumePrefetchDelayTimer);
+  state.resumePrefetchDelayTimer = setTimeout(() => {
+    state.resumePrefetchDelayTimer = null;
+    prefetchNextResumePages();
+  }, RESUME_PREFETCH_AFTER_FILTER_MS);
+}
+async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
   buildTabs();
   const cacheKey = resumeListCacheKey(state.page);
   const cached = preferCache ? state.resumePageCache.get(cacheKey) : null;
-  const data = cached || (await api(`/api/resumes?${cacheKey}`));
+  const requestSequence = (state.resumeListRequestSequence += 1);
+  if (state.resumeListAbortController) {
+    state.resumeListAbortController.abort();
+    state.resumeListAbortController = null;
+  }
+  let data = cached || null;
+  if (!data) {
+    const controller = new AbortController();
+    state.resumeListAbortController = controller;
+    try {
+      data = await api(`/api/resumes?${cacheKey}`, { signal: controller.signal });
+    } catch (error) {
+      if (error?.name === "AbortError") return null;
+      throw error;
+    } finally {
+      if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
+    }
+  }
+  if (requestSequence !== state.resumeListRequestSequence) return null;
   state.resumePageCache.set(cacheKey, data);
   applyResumeListData(data);
-  prefetchNextResumePages();
+  if (fromFilter) scheduleResumePrefetchAfterFilter();
+  else prefetchNextResumePages();
+  return data;
 }
 async function loadQueue() {
   state.tab = "queue";
@@ -735,14 +803,18 @@ function renderMiniList() {
       const readStatus = review.readStatus === "viewed" ? "viewed" : "unread";
       const readLabel = readStatus === "viewed" ? "已读" : "未读";
       const decision = labelDecision(review.decision);
-      const imported = resumeImportTime(resume);
+      const imported = resumeCompactImportDate(resume);
+      const major = resumeMajor(resume) || "暂未提取到";
       return `
         <button class="candidate-card ${resume.id === state.selectedId ? "active candidate-card--focus-pop" : ""}" data-open="${resume.id}" style="z-index: 1; margin: 0px;">
           <span class="candidate-card__heading">
             <strong>${escapeHtml(resumeName(resume))}</strong>
             <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
           </span>
-          <span class="candidate-card__job">${escapeHtml(resumeJob(resume))}</span>
+          <span class="candidate-card__job">
+            <span class="candidate-card__job-main">${escapeHtml(resumeJob(resume))}</span>
+            <span class="candidate-card__major">${escapeHtml(major)}</span>
+          </span>
           <span class="candidate-card__meta">
             <span class="candidate-card__meta-item candidate-card__meta-school">
               <span class="candidate-card__meta-value">${escapeHtml(resumeSchool(resume) || "待提取")}</span>
@@ -751,7 +823,7 @@ function renderMiniList() {
               ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : `<span class="candidate-card__meta-value">${escapeHtml(resumeEducationLine(resume))}</span>`}
             </span>
             <span class="candidate-card__meta-item candidate-card__meta-date">${escapeHtml(imported)}</span>
-            <span class="candidate-card__meta-item candidate-card__meta-platform">${escapeHtml(platformName(resumePlatform(resume)))}</span>
+            <span class="candidate-card__meta-item candidate-card__meta-platform">${escapeHtml(resumePlatformAccountLabel(resume))}</span>
             <span class="candidate-card__meta-item candidate-card__meta-read">
               <span class="candidate-card__read-badge candidate-card__read-badge--${readStatus}">${escapeHtml(readLabel)}</span>
             </span>
@@ -1646,7 +1718,17 @@ function applyResumeFilters() {
   state.jobType = $("filters").job_type.value.trim();
   state.page = 1;
   clearResumePrefetchCache();
-  loadResumes();
+  scheduleResumeFilterRefresh();
+}
+function scheduleResumeFilterRefresh() {
+  if (state.resumeFilterDebounceTimer) clearTimeout(state.resumeFilterDebounceTimer);
+  state.resumeFilterDebounceTimer = setTimeout(() => {
+    state.resumeFilterDebounceTimer = null;
+    loadResumes({ fromFilter: true }).catch((error) => {
+      if (error?.name === "AbortError") return;
+      console.debug("resume filter refresh failed", error);
+    });
+  }, RESUME_FILTER_DEBOUNCE_MS);
 }
 function bindAutoApplyResumeFilters() {
   const filters = $("filters");

@@ -47,6 +47,8 @@ class ResumeService:
     ) -> None:
         self.repository = repository
         self.scoring_service = scoring_service or build_scoring_service(repository)
+        self._resume_cache_signature_value: tuple[object, ...] | None = None
+        self._resume_cache_items: list[Resume] | None = None
 
     def list_resumes(
         self,
@@ -76,7 +78,7 @@ class ResumeService:
 
         page = max(1, page)
         page_size = min(200, max(1, page_size))
-        all_resumes = [Resume.from_record(record) for record in self.repository.iter_resumes()]
+        all_resumes = self._all_resumes_cached()
         facet_resumes = _filter_resumes(
             all_resumes,
             query=query,
@@ -138,6 +140,8 @@ class ResumeService:
         """编辑简历字段；写入内存桩。"""
 
         record = self.repository.update(resume_id, fields)
+        if record:
+            self._clear_resume_cache()
         return Resume.from_record(record) if record else None
 
     def rescore_resume(self, resume_id: str) -> dict[str, Any] | None:
@@ -148,7 +152,42 @@ class ResumeService:
             return None
         result = self.scoring_service.score_resume(resume)
         self.repository.update_score(resume_id, int(result["score"]))
+        self._clear_resume_cache()
         return result
+
+    def _all_resumes_cached(self) -> list[Resume]:
+        signature = self._resume_cache_signature()
+        if (
+            self._resume_cache_items is not None
+            and self._resume_cache_signature_value == signature
+        ):
+            return self._resume_cache_items
+        items = [Resume.from_record(record) for record in self.repository.iter_resumes()]
+        self._resume_cache_signature_value = signature
+        self._resume_cache_items = items
+        return items
+
+    def _resume_cache_signature(self) -> tuple[object, ...]:
+        if getattr(self.repository, "_is_memory", False):
+            records = list(getattr(self.repository, "_memory_records", {}).values())
+            latest_updated_at = max((record.updated_at or "" for record in records), default="")
+            return ("memory", len(records), latest_updated_at)
+        database_path = self.repository.database_path
+        try:
+            stat = database_path.stat()
+            return (
+                "sqlite",
+                str(database_path),
+                stat.st_mtime_ns,
+                stat.st_size,
+                self.repository.count(),
+            )
+        except OSError:
+            return ("sqlite-missing", str(database_path), self.repository.count())
+
+    def _clear_resume_cache(self) -> None:
+        self._resume_cache_signature_value = None
+        self._resume_cache_items = None
 
 
 def build_resume_service(repository: ResumeRepository | None = None) -> ResumeService:

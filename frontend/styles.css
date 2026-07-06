@@ -823,12 +823,32 @@ h3 { font-size: 15px; }
   font-size: 16px;
 }
 .candidate-card__job {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   color: var(--ts-on-surface-variant);
   font-size: 13px;
 }
+.candidate-card__job-main,
+.candidate-card__major {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.candidate-card__job-main {
+  flex: 1 1 auto;
+}
+.candidate-card__major {
+  flex: 0 1 112px;
+  color: var(--ts-outline);
+  text-align: right;
+}
 .candidate-card__meta {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(44px, auto) 86px 58px 56px;
+  grid-template-columns: minmax(0, 1fr) minmax(44px, auto) 70px 64px 56px;
   width: 100%;
   max-width: 100%;
   align-items: center;
