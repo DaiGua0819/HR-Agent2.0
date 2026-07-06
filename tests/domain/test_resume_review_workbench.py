@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from app.control_plane.main import create_app
 from app.db.engine import connect, run_migrations
 from app.domain.resume.models import Resume
@@ -49,8 +50,8 @@ def test_opening_resume_marks_current_user_viewed(tmp_path: Path) -> None:
     assert service.state_for_resume("resume-1", "viewer-1").read_status == "viewed"
 
 
-def test_suitable_decision_creates_assignment(tmp_path: Path) -> None:
-    """点合适会写审核状态并进入管理员待处理队列。"""
+def test_suitable_decision_waits_for_explicit_admin_push(tmp_path: Path) -> None:
+    """点合适只写成员判断，显式推送后才进入管理员待处理队列。"""
 
     resume_repo, service = _service(tmp_path)
     _save_resume(resume_repo)
@@ -61,14 +62,40 @@ def test_suitable_decision_creates_assignment(tmp_path: Path) -> None:
         decision="suitable",
         reason_tags=["岗位匹配"],
         note="建议复核",
-        assign_to="local-admin",
     )
-    queue = service.queue_for_user("local-admin")
 
     assert result["state"]["decision"] == "suitable"
-    assert result["assignment"]["assignedToUserId"] == "local-admin"
+    assert result["state"]["assignedTo"] == ""
+    assert result["assignment"] is None
+    assert service.queue_for_user("local-admin") == []
+
+    pushed = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
+    duplicate = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
+    queue = service.queue_for_user("local-admin")
+
+    assert pushed["assignment"]["assignedToUserId"] == "local-admin"
+    assert duplicate["assignment"]["id"] == pushed["assignment"]["id"]
     assert len(queue) == 1
     assert queue[0]["resume"]["id"] == "resume-1"
+    assert service.state_for_resume("resume-1", "viewer-1").assigned_to == "local-admin"
+
+
+def test_push_to_admin_rejects_non_suitable_decision(tmp_path: Path) -> None:
+    """只有成员已标记合适的简历才能推送给管理员。"""
+
+    resume_repo, service = _service(tmp_path)
+    _save_resume(resume_repo)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="viewer-1",
+        decision="unsuitable",
+        reason_tags=["经验不符"],
+    )
+
+    with pytest.raises(ValueError, match="resume_not_suitable_for_push"):
+        service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
+
+    assert service.queue_for_user("local-admin") == []
 
 
 def test_unsuitable_decision_does_not_create_assignment(tmp_path: Path) -> None:
@@ -88,6 +115,69 @@ def test_unsuitable_decision_does_not_create_assignment(tmp_path: Path) -> None:
     assert result["state"]["decision"] == "unsuitable"
     assert result["assignment"] is None
     assert service.queue_for_user("local-admin") == []
+
+
+def test_member_push_route_creates_admin_queue_after_suitable_decision(
+    tmp_path: Path,
+) -> None:
+    """成员先点合适，再调用推送接口，管理员待处理才出现任务。"""
+
+    app, service = _app_with_review_service(tmp_path)
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/auth/login",
+            json={"username": "zhanghuaibin", "password": "zhanghuaibin"},
+        )
+        decision = client.post(
+            "/api/resumes/resume-1/review-decision",
+            json={"decision": "suitable", "reasonTags": ["岗位匹配"]},
+        )
+        pushed = client.post("/api/resumes/resume-1/push-to-admin")
+
+    assert decision.status_code == 200
+    assert decision.json()["assignment"] is None
+    assert pushed.status_code == 200
+    assert pushed.json()["assignment"]["assignedToUserId"] == "local-admin"
+    queue = service.queue_for_user("local-admin")
+    assert len(queue) == 1
+    assert queue[0]["assignment"]["fromUserId"] == "local-zhanghuaibin"
+
+
+def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> None:
+    """管理员在简历库能看到成员标记过的合适/不合适判断。"""
+
+    app, service = _app_with_review_service(tmp_path)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="local-member",
+        decision="unsuitable",
+        reason_tags=["暂不匹配"],
+        note="经验不符",
+    )
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        listed = client.get("/api/resumes")
+
+    assert listed.status_code == 200
+    item = listed.json()["items"][0]
+    assert item["reviewState"]["decision"] == "undecided"
+    assert item["memberReviewStates"] == [
+        {
+            "id": service.state_for_resume("resume-1", "local-member").id,
+            "userId": "local-member",
+            "resumeId": "resume-1",
+            "readStatus": "viewed",
+            "decision": "unsuitable",
+            "reasonTags": ["暂不匹配"],
+            "note": "经验不符",
+            "assignedTo": "",
+            "viewedAt": service.state_for_resume("resume-1", "local-member").viewed_at,
+            "createdAt": service.state_for_resume("resume-1", "local-member").created_at,
+            "updatedAt": service.state_for_resume("resume-1", "local-member").updated_at,
+        }
+    ]
 
 
 def test_resume_file_route_returns_pdf_from_stored_resume_path(tmp_path: Path) -> None:
@@ -160,6 +250,17 @@ def _service(tmp_path: Path) -> tuple[ResumeRepository, ResumeReviewService]:
     return resume_repo, service
 
 
+def _app_with_review_service(tmp_path: Path) -> tuple[object, ResumeReviewService]:
+    resume_repo, service = _service(tmp_path)
+    _save_resume(resume_repo)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+    app.state.resume_review_service = service
+    app.state.auth_session_store_path = tmp_path / "auth_sessions.sqlite"
+    return app, service
+
+
 def _save_resume(repository: ResumeRepository) -> Resume:
     resume = Resume(
         id="resume-1",
@@ -167,11 +268,11 @@ def _save_resume(repository: ResumeRepository) -> Resume:
         phone="13800138000",
         education="本科",
         major="化工",
-        job_type="销售管培生",
+        job_type="AI产品经理",
         match_score=88,
         linked_owner="宋峰峰",
         linked_platform="boss",
-        payload={"rawText": "张三 本科 化工 销售经历"},
+        payload={"rawText": "张三 本科 化工 AI 产品经历"},
     )
     repository.save(resume)
     return Resume.from_record(repository.get("resume-1"))

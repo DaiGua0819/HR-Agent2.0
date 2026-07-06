@@ -825,8 +825,8 @@ h3 { font-size: 15px; }
 .candidate-card__job {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
   min-width: 0;
   color: var(--ts-on-surface-variant);
   font-size: 13px;
@@ -839,12 +839,14 @@ h3 { font-size: 15px; }
   white-space: nowrap;
 }
 .candidate-card__job-main {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  max-width: 58%;
 }
 .candidate-card__major {
-  flex: 0 1 112px;
+  flex: 0 1 auto;
+  max-width: 42%;
   color: var(--ts-outline);
-  text-align: right;
+  text-align: left;
 }
 .candidate-card__meta {
   display: grid;
@@ -944,6 +946,22 @@ h3 { font-size: 15px; }
   white-space: nowrap;
   transform: scale(1);
   transition: transform 0.1s cubic-bezier(0.25, 0.46, 0.45, 0.94), margin 0.1s cubic-bezier(0.25, 0.46, 0.45, 0.94), z-index 0.1s step-end, background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+#actionDock .member-push-btn {
+  color: #ffffff;
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  border-color: rgba(22, 163, 74, 0.32);
+  box-shadow: 0 16px 26px rgba(22, 163, 74, 0.18);
+}
+#actionDock .member-push-btn:hover {
+  background: linear-gradient(135deg, #15803d, #16a34a);
+}
+#actionDock .member-push-btn:disabled {
+  color: #065f46;
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  border-color: #16a34a;
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.18);
+  opacity: 1;
 }
 #actionDock #interviewBtn {
   color: var(--ts-primary);
@@ -1309,6 +1327,28 @@ h3 { font-size: 15px; }
   background: rgba(37, 99, 235, 0.1);
   font-size: 12px;
   font-weight: 800;
+}
+.member-decision-list {
+  gap: 8px;
+}
+.member-decision-list p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+}
+.member-decision-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #075985;
+  background: rgba(224, 242, 254, 0.9);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .dashboard-head,

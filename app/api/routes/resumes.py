@@ -93,11 +93,17 @@ async def list_resumes(
         sort=sort,
         descending=desc,
     )
+    member_review_states = (
+        review_service.member_decisions_for_resumes([item.id for item in result.items])
+        if review_service and _session_is_admin(session)
+        else {}
+    )
     return {
         "items": [
             _resume_payload(
                 item,
                 review_state=review_states.get(item.id) if review_states else None,
+                member_review_states=member_review_states.get(item.id, []),
             )
             for item in result.items
         ],
@@ -210,7 +216,11 @@ def _assert_resume_visible(request: Request, resume: Resume | None) -> None:
         raise HTTPException(status_code=403, detail="resume_forbidden")
 
 
-def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[str, object]:
+def _resume_payload(
+    resume: Resume,
+    review_state: object | None = None,
+    member_review_states: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     payload = resume.model_dump()
     file_path = preview_file_path(resume)
     school = _resume_school(resume)
@@ -232,6 +242,7 @@ def _resume_payload(resume: Resume, review_state: object | None = None) -> dict[
             "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
             "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
             "reviewState": _review_state_payload(review_state),
+            "memberReviewStates": member_review_states or [],
         }
     )
     return payload
@@ -277,3 +288,8 @@ def _review_state_payload(state: object | None) -> dict[str, object]:
         "assignedTo": getattr(state, "assigned_to", ""),
         "viewedAt": getattr(state, "viewed_at", ""),
     }
+
+
+def _session_is_admin(session: dict[str, object]) -> bool:
+    roles = session.get("roles")
+    return isinstance(roles, list) and bool({"super_admin", "admin"} & set(roles))

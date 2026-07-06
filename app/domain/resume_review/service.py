@@ -63,12 +63,12 @@ class ResumeReviewService:
         note: str = "",
         assign_to: str = "",
     ) -> dict[str, object]:
-        """设置合适/不合适/待补充。合适会创建待处理任务。"""
+        """设置合适/不合适/待补充，只保存当前用户的判断。"""
 
         if decision not in VALID_DECISIONS - {DECISION_UNDECIDED}:
             raise ValueError("invalid_review_decision")
         before = self.repository.get_state(resume_id, user_id)
-        assigned_to = assign_to or (self.default_assignee if decision == DECISION_SUITABLE else "")
+        assigned_to = before.assigned_to if before and decision == DECISION_SUITABLE else ""
         state = self.repository.upsert_state(
             resume_id=resume_id,
             user_id=user_id,
@@ -83,28 +83,59 @@ class ResumeReviewService:
             resume_id=resume_id,
             user_id=user_id,
             event_type="decision_changed",
-            before=_state_payload(before),
-            after=_state_payload(state),
-        )
-        assignment = None
-        if decision == DECISION_SUITABLE:
-            assignment = self.repository.create_assignment(
-                resume_id=resume_id,
-                from_user_id=user_id,
-                assigned_to_user_id=assigned_to,
-                source_decision_id=state.id,
-                note=note,
-            )
-            self.repository.append_event(
-                resume_id=resume_id,
-                user_id=user_id,
-                event_type="assigned",
-                before={},
-                after=_assignment_payload(assignment),
+                before=_state_payload(before),
+                after=_state_payload(state),
             )
         return {
             "state": _state_payload(state),
-            "assignment": _assignment_payload(assignment) if assignment else None,
+            "assignment": None,
+            "eventId": event_id,
+        }
+
+    def push_to_admin(
+        self,
+        *,
+        resume_id: str,
+        user_id: str,
+        note: str = "",
+        assign_to: str = "",
+    ) -> dict[str, object]:
+        """把当前用户已标记合适的简历推送到管理员待处理队列。"""
+
+        before = self.repository.get_state(resume_id, user_id)
+        if before is None or before.decision != DECISION_SUITABLE:
+            raise ValueError("resume_not_suitable_for_push")
+        assigned_to = assign_to or before.assigned_to or self.default_assignee
+        state = self.repository.upsert_state(
+            resume_id=resume_id,
+            user_id=user_id,
+            read_status=READ_VIEWED,
+            decision=DECISION_SUITABLE,
+            reason_tags=before.reason_tags,
+            note=note if note else before.note,
+            assigned_to=assigned_to,
+            viewed_at=(before.viewed_at if before.viewed_at else _now()),
+        )
+        assignment = self.repository.create_assignment(
+            resume_id=resume_id,
+            from_user_id=user_id,
+            assigned_to_user_id=assigned_to,
+            source_decision_id=state.id,
+            note=note if note else before.note,
+        )
+        event_id = self.repository.append_event(
+            resume_id=resume_id,
+            user_id=user_id,
+            event_type="pushed_to_admin",
+            before=_state_payload(before),
+            after={
+                "state": _state_payload(state),
+                "assignment": _assignment_payload(assignment),
+            },
+        )
+        return {
+            "state": _state_payload(state),
+            "assignment": _assignment_payload(assignment),
             "eventId": event_id,
         }
 
@@ -179,6 +210,23 @@ class ResumeReviewService:
         """读取用户所有状态。"""
 
         return self.repository.states_for_user(user_id)
+
+    def member_decisions_for_resumes(
+        self,
+        resume_ids: list[str],
+    ) -> dict[str, list[dict[str, object]]]:
+        """返回成员对一批简历做出的合适/不合适等判断。"""
+
+        grouped = self.repository.states_for_resumes(resume_ids)
+        result: dict[str, list[dict[str, object]]] = {}
+        for resume_id, states in grouped.items():
+            result[resume_id] = [
+                _state_payload(state)
+                for state in states
+                if state.user_id != self.default_assignee
+                and state.decision != DECISION_UNDECIDED
+            ]
+        return result
 
     def queue_for_user(self, user_id: str) -> list[dict[str, object]]:
         """返回待我处理队列。"""

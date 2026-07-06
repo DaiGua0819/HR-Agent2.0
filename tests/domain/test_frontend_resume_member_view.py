@@ -783,6 +783,49 @@ def test_review_actions_advance_to_next_resume() -> None:
     assert "markViewedAndAdvance(state.selectedId)" not in script
 
 
+def test_member_suitable_tab_replaces_review_actions_with_push_action() -> None:
+    """Members should push suitable resumes explicitly instead of re-marking them."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function renderActionDock()" in script
+    assert 'isMemberUser() && state.tab === "suitable"' in script
+    assert 'suitableBtn.textContent = "推送"' in script
+    assert "member-push-btn" in script
+    push_block = styles.split("#actionDock .member-push-btn {", 1)[1].split("}", 1)[0]
+    pushed_block = styles.split("#actionDock .member-push-btn:disabled {", 1)[1].split("}", 1)[0]
+    assert "#16a34a" in push_block
+    assert "var(--ts-primary)" not in push_block
+    assert "color: #065f46" in pushed_block
+    assert "#dcfce7" in pushed_block
+    assert "#16a34a" in pushed_block
+    assert "pushSelectedResumeToAdmin" in script
+    assert "是否推送给管理员" in script
+    assert "/push-to-admin" in script
+    assert 'setDecision(state.selectedId, "suitable")' in script
+    assert 'setDecision(state.selectedId, "unsuitable")' in script
+
+
+def test_admin_resume_summary_can_show_member_review_decisions() -> None:
+    """Admins should see member suitable/unsuitable decisions on resume details."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function memberReviewStates(resume)" in script
+    assert "function memberDecisionBadgeMarkup(resume)" in script
+    assert "function memberDecisionSummaryMarkup(resume)" in script
+    assert "memberReviewStates" in script
+    assert "成员判断" in script
+    assert "成员合适" in script
+    assert "成员不合适" in script
+    assert "member-decision-badge" in script
+    assert "member-decision-list" in script
+    assert ".member-decision-badge" in styles
+    assert ".member-decision-list" in styles
+
+
 def test_resume_summary_shows_degree_and_import_time() -> None:
     """The right summary should show degree with school tier and import time."""
 
@@ -871,13 +914,40 @@ def test_candidate_card_shows_major_account_and_compact_date() -> None:
     assert "return `${match[1].slice(2)}-${match[2]}-${match[3]}`" in script
     assert "function resumePlatformAccountLabel(resume)" in script
     assert 'if (platform === "51job") platform = "51"' in script
-    assert "return owner ? `${platform} ' ${owner.slice(0, 1)}` : platform" in script
+    assert "return account ? `${platform} ' ${account}` : platform" in script
     assert 'class="candidate-card__job-main"' in script
     assert 'class="candidate-card__major"' in script
     assert 'resumeMajor(resume) || "暂未提取到"' in script
     assert "resumeCompactImportDate(resume)" in script
     assert "resumePlatformAccountLabel(resume)" in script
     assert ".candidate-card__major" in styles
+
+
+def test_candidate_card_account_label_only_uses_collector_accounts() -> None:
+    """Reviewer names must not be shown as collection account labels."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "const RESUME_COLLECTOR_ACCOUNT_LABELS = {" in script
+    assert '"宋峰峰": "宋"' in script
+    assert '"宋锋峰": "宋"' in script
+    assert '"和新红": "和"' in script
+    assert "function resumeCollectorAccountLabel(resume)" in script
+    assert "Object.prototype.hasOwnProperty.call(RESUME_COLLECTOR_ACCOUNT_LABELS, owner)" in script
+    assert "owner.slice(0, 1)" not in script
+
+
+def test_candidate_card_major_stays_near_job_title() -> None:
+    """Major text should sit next to the job title instead of the far edge."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    job_block = styles.split(".candidate-card__job {", 1)[1].split("}", 1)[0]
+    major_block = styles.split(".candidate-card__major {", 1)[1].split("}", 1)[0]
+
+    assert "justify-content: flex-start" in job_block
+    assert "gap: 6px" in job_block
+    assert "justify-content: space-between" not in job_block
+    assert "text-align: right" not in major_block
 
 
 def test_candidate_cards_are_larger_and_read_status_is_frosted_badge() -> None:

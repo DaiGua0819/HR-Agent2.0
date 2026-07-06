@@ -98,12 +98,20 @@ def test_member_review_queue_filters_out_forbidden_resumes(monkeypatch, tmp_path
         resume_id="resume-operation",
         user_id="reviewer",
         decision="suitable",
+    )
+    service.push_to_admin(
+        resume_id="resume-operation",
+        user_id="reviewer",
         assign_to="feishu:ou_she",
     )
     service.set_decision(
         resume_id="resume-finance",
         user_id="reviewer",
         decision="suitable",
+    )
+    service.push_to_admin(
+        resume_id="resume-finance",
+        user_id="reviewer",
         assign_to="feishu:ou_she",
     )
 

@@ -46,6 +46,28 @@ class ResumeReviewRepository:
             ).fetchall()
         return {row["resume_id"]: _state_from_row(row) for row in rows}
 
+    def states_for_resumes(self, resume_ids: Iterable[str]) -> dict[str, list[ReviewState]]:
+        """读取一批简历的非空审阅判断，按 resume_id 分组。"""
+
+        ids = sorted({str(resume_id) for resume_id in resume_ids if str(resume_id)})
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM resume_review_states
+                WHERE resume_id IN ({placeholders}) AND decision != 'undecided'
+                ORDER BY updated_at DESC
+                """,
+                tuple(ids),
+            ).fetchall()
+        grouped: dict[str, list[ReviewState]] = {resume_id: [] for resume_id in ids}
+        for row in rows:
+            state = _state_from_row(row)
+            grouped.setdefault(state.resume_id, []).append(state)
+        return grouped
+
     def upsert_state(
         self,
         *,
