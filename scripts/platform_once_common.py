@@ -301,6 +301,12 @@ async def _ensure_job51_thread_opened(
         "label": str(row_state.get("label") or ""),
         "name": str(row_state.get("name") or ""),
         "position": str(row_state.get("position") or ""),
+        "latest_message": str(
+            row_state.get("latest_message")
+            or row_state.get("latestMessage")
+            or row_state.get("message")
+            or ""
+        ),
     }
     ready = bool(click.get("ok")) or await job51_chat.wait_chat_ready(
         adapter.page,
@@ -309,7 +315,11 @@ async def _ensure_job51_thread_opened(
     opened = await job51_chat.verify_opened_candidate(adapter.page, expected, chat_ready=ready)
     if opened.get("opened"):
         return {**click, "ok": True, "opened": opened}
-    fallback = await job51_chat.click_thread_by_state(adapter.page, row_state)
+    fallback = await job51_chat.click_thread_by_state(
+        adapter.page,
+        row_state,
+        expected=expected,
+    )
     if fallback.get("clicked"):
         await asyncio.sleep(1)
         ready = await job51_chat.wait_chat_ready(adapter.page, timeout_ms=6500)

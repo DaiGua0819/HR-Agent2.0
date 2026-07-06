@@ -46,6 +46,8 @@ from scripts.platform_once_common import (
     _seen_keys_for_processed_item,
 )
 
+from scripts import platform_once_common
+
 
 def test_job51_reuses_shared_graph_and_runner() -> None:
     """51job 注入同一张图和同一个 ConversationRunner，跑通筛选问题。"""
@@ -423,6 +425,96 @@ def test_job51_click_thread_by_state_relocates_by_identity_when_index_is_stale()
     assert page.selected_index == 1
 
 
+def test_job51_once_runner_fallback_passes_expected_identity(monkeypatch) -> None:
+    """The terminal once runner must use identity fallback, not stale row indexes."""
+
+    class Page:
+        identity_clicked = False
+        fallback_expected: dict[str, object] | None = None
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.page = Page()
+
+    async def fake_wait_chat_ready(page, timeout_ms: int = 5000) -> bool:
+        _ = page, timeout_ms
+        return True
+
+    async def fake_verify_opened_candidate(
+        page,
+        expected: dict[str, object],
+        *,
+        chat_ready: bool = False,
+        **kwargs,
+    ) -> dict[str, object]:
+        _ = chat_ready, kwargs
+        return {
+            "opened": bool(page.identity_clicked),
+            "reason": "" if page.identity_clicked else "candidate_identity_mismatch",
+            "expected": dict(expected),
+        }
+
+    async def fake_click_thread_by_state(
+        page,
+        state: dict[str, object],
+        *,
+        expected: dict[str, object] | None = None,
+        row=None,
+    ) -> dict[str, object]:
+        _ = state, row
+        page.fallback_expected = dict(expected) if isinstance(expected, dict) else None
+        if (
+            expected
+            and expected.get("name") == "Target Candidate"
+            and expected.get("position") == "AI PM"
+            and expected.get("latest_message") == "resume sent"
+        ):
+            page.identity_clicked = True
+            return {"clicked": True, "source": "identity"}
+        return {"clicked": False, "reason": "expected_identity_missing"}
+
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "wait_chat_ready",
+        fake_wait_chat_ready,
+    )
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "verify_opened_candidate",
+        fake_verify_opened_candidate,
+    )
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "click_thread_by_state",
+        fake_click_thread_by_state,
+    )
+
+    adapter = Adapter()
+    result = asyncio.run(
+        platform_once_common._ensure_job51_thread_opened(
+            adapter,
+            {
+                "index": 0,
+                "id": "",
+                "label": "stale virtual row",
+                "name": "Target Candidate",
+                "position": "AI PM",
+                "latestMessage": "resume sent",
+            },
+            {"ok": False, "action": "job51_safe_open"},
+        )
+    )
+
+    assert result["ok"] is True
+    assert adapter.page.fallback_expected == {
+        "id": "stale virtual row",
+        "label": "stale virtual row",
+        "name": "Target Candidate",
+        "position": "AI PM",
+        "latest_message": "resume sent",
+    }
+
+
 def test_job51_find_next_thread_skips_repeated_identity_mismatch_in_session() -> None:
     """A bad virtual row should not be clicked again on the next drain iteration."""
 
@@ -578,10 +670,10 @@ def test_job51_find_candidate_row_skips_slow_virtual_rows() -> None:
     assert row is target
 
 
-def test_job51_processing_uses_guarded_dom_open_without_native_row_click(
+def test_job51_processing_uses_guarded_identity_open_without_native_row_click(
     monkeypatch,
 ) -> None:
-    """Unread processing should not use native 51job row clicks."""
+    """Unread processing should use guarded identity opening, not native row clicks."""
 
     page = GuardedProcessingClickPage(
         conversations=[
@@ -614,7 +706,8 @@ def test_job51_processing_uses_guarded_dom_open_without_native_row_click(
     assert len(summaries) == 1
     assert summaries[0]["action"] == "ask_basic_conditions"
     assert page.native_row_clicks == 0
-    assert page.guarded_dom_clicks == 1
+    assert page.guarded_identity_clicks == 1
+    assert page.guarded_dom_clicks == 0
     assert page.selected_index == 1
 
 
@@ -1269,6 +1362,7 @@ class GuardedProcessingClickPage(GuardedPreflightClickPage):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self.native_row_clicks = 0
+        self.guarded_identity_clicks = 0
         self.guarded_dom_clicks = 0
 
     async def handle_element_click(self, element):  # type: ignore[no-untyped-def]
@@ -1277,6 +1371,11 @@ class GuardedProcessingClickPage(GuardedPreflightClickPage):
         await super().handle_element_click(element)
 
     async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_thread_by_identity":
+            result = await super().eval_js(script, arg)
+            if isinstance(result, dict) and result.get("clicked"):
+                self.guarded_identity_clicks += 1
+            return result
         if "thread_row_not_found" in script and "#conversation-list .list-item" in script:
             if not self.app_download_blocker_installed:
                 self.app_download_popups += 1
