@@ -34,6 +34,21 @@ from app.platforms.job51.resume_files import (
 )
 from app.platforms.types import ResumeRequestState
 
+ONLINE_RESUME_MESSAGE_ENTRY_SELECTOR = (
+    ".im-message-item .resume-element .info-content-item, "
+    ".message-item .resume-element .info-content-item, "
+    ".im-message-item .resume-element, "
+    ".message-item .resume-element"
+)
+ONLINE_RESUME_TOP_RIGHT_ENTRY_SELECTOR = (
+    "#sensor_Bchat_newzxjl, "
+    ".chat-user-operate .file-style.online, "
+    ".chat-new-header .file-style.online, "
+    ".chat-user-operate [class*='online'], "
+    ".chat-new-header [class*='online']"
+)
+ONLINE_RESUME_LABEL = "\u5728\u7ebf\u7b80\u5386"
+
 __all__ = [
     "InMemoryResumeDownloadMemory",
     "ResumeValidation",
@@ -102,6 +117,14 @@ async def request_or_download_resume(
         if not payload.get("previewOnly"):
             clicked, confirmed = await _request_resume_with_confirm(page)
             return {"requested": clicked, "confirmed": confirmed, "downloaded": False, **result}
+    if payload.get("previewOnly"):
+        clicked, confirmed = await _request_resume_with_confirm(page)
+        return {
+            "requested": clicked,
+            "confirmed": confirmed,
+            "downloaded": False,
+            "reason": "preview_only_rejected",
+        }
     online = await _download_online_resume(
         page,
         candidate_name=candidate_name,
@@ -112,14 +135,6 @@ async def request_or_download_resume(
         return {"requested": False, "resumeReceived": True, **online}
     if online.get("blocked") and online.get("buttonFound"):
         return {"requested": False, "downloaded": False, **online}
-    if payload.get("previewOnly"):
-        clicked, confirmed = await _request_resume_with_confirm(page)
-        return {
-            "requested": clicked,
-            "confirmed": confirmed,
-            "downloaded": False,
-            "reason": "preview_only_rejected",
-        }
     content = await _generic_attachment_bytes(page, payload)
     if isinstance(content, str):
         content = content.encode("utf-8")
@@ -192,8 +207,16 @@ async def _download_online_resume(
     """点击右上角在线简历并下载真实导出文件。"""
 
     opened = await _open_online_resume_preview(page)
-    if not opened.get("clicked"):
+    if not opened.get("clicked") and not opened.get("verified"):
         return {"ok": False, "buttonFound": False, "reason": opened.get("reason", "")}
+    if not opened.get("verified"):
+        return {
+            "ok": False,
+            "blocked": True,
+            "buttonFound": True,
+            "reason": opened.get("reason") or "online_resume_preview_not_verified",
+            "opened": opened,
+        }
     try:
         payload = await _safe_eval_dict(page, "job51.online_resume_payload")
         if not payload:
@@ -301,17 +324,95 @@ async def _open_attachment_resume_preview(page: BrowserPage) -> bool:
 
 
 async def _open_online_resume_preview(page: BrowserPage) -> dict[str, object]:
-    opened = await _safe_eval_dict(page, "job51.click_online_resume")
-    if not opened:
-        opened = await _safe_eval_dict(page, CLICK_ONLINE_RESUME_JS)
-    if not opened.get("clicked"):
-        return opened or {"clicked": False, "reason": "online_resume_button_not_found"}
+    visible = await _online_resume_preview_ready(page)
+    if visible.get("verified"):
+        return {
+            "clicked": False,
+            "verified": True,
+            "source": visible.get("source") or "online_resume_already_open",
+            "reason": "",
+        }
+    return await _open_online_resume_preview_from_entries(page)
+
+
+async def _open_online_resume_preview_from_entries(page: BrowserPage) -> dict[str, object]:
+    message_card = await _trusted_click_online_resume_entry(
+        page,
+        ONLINE_RESUME_MESSAGE_ENTRY_SELECTOR,
+        source="message_card_online_resume_trusted",
+        label="51job online resume message card",
+        strict_label=True,
+    )
+    if message_card.get("verified"):
+        return message_card
+
+    top_right = await _trusted_click_online_resume_entry(
+        page,
+        ONLINE_RESUME_TOP_RIGHT_ENTRY_SELECTOR,
+        source="top_right_online_resume_trusted",
+        label="51job online resume top right",
+        strict_label=False,
+    )
+    if top_right.get("verified"):
+        return top_right
+
+    legacy = await _safe_eval_dict(page, "job51.click_online_resume")
+    if not legacy:
+        legacy = await _safe_eval_dict(page, CLICK_ONLINE_RESUME_JS)
+    if not legacy.get("clicked"):
+        return _best_online_resume_open_failure(message_card, top_right, legacy)
     await asyncio.sleep(1)
-    visible = await _online_resume_download_visible(page)
+    visible = await _online_resume_preview_ready(page)
     return {
-        **opened,
+        **legacy,
         "verified": bool(visible.get("verified")),
         "reason": "" if visible.get("verified") else visible.get("reason", ""),
+        "source": legacy.get("source") or "legacy_dom_online_resume",
+    }
+
+
+async def _trusted_click_online_resume_entry(
+    page: BrowserPage,
+    selector: str,
+    *,
+    source: str,
+    label: str,
+    strict_label: bool,
+) -> dict[str, object]:
+    for element in await page.query_all(selector):
+        text = " ".join((await element.text()).split())
+        element_id = str(await element.attr("id") or "")
+        element_class = str(await element.attr("class") or "")
+        identity = f"{text} {element_id} {element_class}"
+        if strict_label and ONLINE_RESUME_LABEL not in identity:
+            continue
+        result = await reliable_click_element(
+            page,
+            element,
+            label=label,
+            verify=lambda: _online_resume_preview_ready(page),
+        )
+        if result.get("ok"):
+            return {
+                "clicked": True,
+                "verified": True,
+                "source": source,
+                "label": text or element_id or element_class,
+                "action": result,
+            }
+        return {
+            "clicked": True,
+            "verified": False,
+            "source": source,
+            "label": text or element_id or element_class,
+            "reason": result.get("reason") or "online_resume_preview_not_verified",
+            "action": result,
+        }
+    return {
+        "clicked": False,
+        "verified": False,
+        "source": source,
+        "reason": "online_resume_entry_not_found",
     }
 
 
@@ -361,6 +462,43 @@ async def _online_resume_download_visible(page: BrowserPage) -> dict[str, object
         "verified": verified,
         "reason": "" if verified else "online_resume_download_link_missing",
     }
+
+
+async def _online_resume_preview_ready(page: BrowserPage) -> dict[str, object]:
+    if await _selector_present(page, "#sensor_imresume_download"):
+        return {"verified": True, "source": "online_resume_save_button"}
+    if await _selector_present(page, "#IMResumePrint"):
+        return {"verified": True, "source": "online_resume_print_preview"}
+    return await _online_resume_download_visible(page)
+
+
+async def _selector_present(page: BrowserPage, selector: str) -> bool:
+    try:
+        return bool(await page.query_all(selector))
+    except Exception:
+        return False
+
+
+def _best_online_resume_open_failure(
+    *results: dict[str, object],
+) -> dict[str, object]:
+    for result in results:
+        if result.get("clicked"):
+            return {
+                "clicked": True,
+                "verified": False,
+                "source": result.get("source") or "",
+                "reason": result.get("reason") or "online_resume_preview_not_verified",
+            }
+    for result in results:
+        if result:
+            return {
+                "clicked": False,
+                "verified": False,
+                "source": result.get("source") or "",
+                "reason": result.get("reason") or "online_resume_button_not_found",
+            }
+    return {"clicked": False, "verified": False, "reason": "online_resume_button_not_found"}
 
 
 async def _click_request_resume_confirm(page: BrowserPage) -> bool:

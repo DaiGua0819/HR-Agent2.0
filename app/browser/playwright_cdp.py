@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.browser.base import BrowserElement
+from app.settings import PROJECT_ROOT
 
 
 class PlaywrightElement:
@@ -317,6 +318,15 @@ class PlaywrightCDPPage:
         """51job 在线简历保存必须使用可信点击并确认弹窗。"""
 
         clicked: dict[str, Any] = {}
+        behavior = await self._setup_job51_uuid_download_behavior()
+        if not behavior.get("ok"):
+            return {
+                "ok": False,
+                "clicked": clicked,
+                "reason": "download_behavior_setup_failed",
+                "error": behavior.get("error") or "",
+                "downloadPath": behavior.get("downloadPath") or "",
+            }
         try:
             async with self.page.expect_download(timeout=timeout_ms) as download_info:
                 save = self.page.locator("#sensor_imresume_download").first
@@ -352,6 +362,27 @@ class PlaywrightCDPPage:
                 "reason": "download_not_captured",
                 "error": str(error),
             }
+
+    async def _setup_job51_uuid_download_behavior(self) -> dict[str, Any]:
+        download_dir = PROJECT_ROOT / "data" / "downloads" / "_browser_uuid" / "job51"
+        try:
+            download_dir.mkdir(parents=True, exist_ok=True)
+            session = await self.page.context.new_cdp_session(self.page)
+            await session.send(
+                "Browser.setDownloadBehavior",
+                {
+                    "behavior": "allowAndName",
+                    "downloadPath": str(download_dir),
+                    "eventsEnabled": True,
+                },
+            )
+        except Exception as error:
+            return {
+                "ok": False,
+                "error": str(error),
+                "downloadPath": str(download_dir),
+            }
+        return {"ok": True, "downloadPath": str(download_dir)}
 
     async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
         try:

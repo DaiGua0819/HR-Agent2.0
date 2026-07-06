@@ -139,6 +139,10 @@ class FakePage:
             return [FakeElement(self, selector, self.input_text)]
         if "要附件简历" in selector or "im-ask-for-wx" in selector:
             return [FakeElement(self, selector, "要附件简历")]
+        if selector in {"#sensor_imresume_download", "#IMResumePrint"}:
+            if self.current_conversation().get("online_resume_opened"):
+                return [FakeElement(self, selector, "")]
+            return []
         if "message-item.mine" in selector or "im-message" in selector:
             return [
                 FakeElement(self, selector, message.get("text", ""))

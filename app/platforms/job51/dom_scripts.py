@@ -130,6 +130,32 @@ OPENED_CANDIDATE_STATE_JS = r"""
     .join("\n")
     .trim();
   const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const ignoredHeaderNameLine = (line) => {
+    const value = String(line || "").trim();
+    const slim = compact(value);
+    return !value || value === "|" || value === "｜" ||
+      ["人才罗盘", "在线简历", "附件简历"].includes(value) ||
+      /^(沟通职位|求职意向)[:：]?/.test(value) ||
+      /活跃|在线|刚刚/.test(value) ||
+      /^\d{4}\.\d{2}\s*-/.test(value) ||
+      /[|｜]/.test(value) ||
+      slim.length > 24;
+  };
+  const readHeaderName = (parts) => {
+    for (const line of parts) {
+      if (ignoredHeaderNameLine(line)) continue;
+      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
+      if (head) return head[1].trim();
+      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) {
+        return line;
+      }
+    }
+    const activeIndex = parts.findIndex((line) => /活跃|在线|刚刚/.test(line));
+    for (let index = activeIndex - 1; index >= 0; index -= 1) {
+      if (!ignoredHeaderNameLine(parts[index])) return parts[index].trim();
+    }
+    return "";
+  };
   const expectedName = String(expected && expected.name || "").trim();
   const expectedPosition = String(expected && expected.position || "").trim();
   const chatReady = Boolean(document.querySelector("#drop-area.input-textarea_self"));
@@ -176,14 +202,9 @@ OPENED_CANDIDATE_STATE_JS = r"""
   const positionMatch = headerText.match(/沟通职位\s*[:：]\s*([^\n|｜]+)/);
   const actualPosition = clean(positionMatch ? positionMatch[1] : "");
   const actualName = (() => {
+    const parsed = readHeaderName(lines);
+    if (parsed) return parsed;
     if (expectedName && compact(headerText).includes(compact(expectedName))) return expectedName;
-    const rightHeaderActiveIndex = lines.findIndex((line) => /活跃|在线|刚刚/.test(line));
-    if (rightHeaderActiveIndex > 0) return lines[rightHeaderActiveIndex - 1].trim();
-    for (const line of lines) {
-      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
-      if (head) return head[1].trim();
-      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) return line;
-    }
     return "";
   })();
   const nameOk = Boolean(
@@ -235,6 +256,32 @@ READ_CHAT_CONTEXT_JS = r"""
     .trim();
   const lines = (value) => clean(value).split("\n").map((line) => line.trim()).filter(Boolean);
   const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const ignoredHeaderNameLine = (line) => {
+    const value = String(line || "").trim();
+    const slim = compact(value);
+    return !value || value === "|" || value === "｜" ||
+      ["人才罗盘", "在线简历", "附件简历"].includes(value) ||
+      /^(沟通职位|求职意向)[:：]?/.test(value) ||
+      /活跃|在线|刚刚/.test(value) ||
+      /^\d{4}\.\d{2}\s*-/.test(value) ||
+      /[|｜]/.test(value) ||
+      slim.length > 24;
+  };
+  const readHeaderName = (parts) => {
+    for (const line of parts) {
+      if (ignoredHeaderNameLine(line)) continue;
+      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
+      if (head) return head[1].trim();
+      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) {
+        return line;
+      }
+    }
+    const activeIndex = parts.findIndex((line) => /活跃|在线|刚刚/.test(line));
+    for (let index = activeIndex - 1; index >= 0; index -= 1) {
+      if (!ignoredHeaderNameLine(parts[index])) return parts[index].trim();
+    }
+    return "";
+  };
   const parseBatchPosition = (value) => {
     const match = String(value || "").match(/沟通职位[:：]\s*([^\n]+)/);
     return match ? clean(match[1]) : "";
@@ -308,16 +355,7 @@ READ_CHAT_CONTEXT_JS = r"""
   const rightHeaderPositionMatch = rightHeaderText.match(/沟通职位\s*[:：]\s*([^\n|｜]+)/);
   const rightHeaderPosition = clean(rightHeaderPositionMatch ? rightHeaderPositionMatch[1] : "");
   const rightHeaderName = (() => {
-    const rightHeaderActiveIndex = rightHeaderLines.findIndex((line) =>
-      /活跃|在线|刚刚/.test(line)
-    );
-    if (rightHeaderActiveIndex > 0) return rightHeaderLines[rightHeaderActiveIndex - 1].trim();
-    for (const line of rightHeaderLines) {
-      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
-      if (head) return head[1].trim();
-      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) return line;
-    }
-    return "";
+    return readHeaderName(rightHeaderLines);
   })();
   const rows = Array.from(
     document.querySelectorAll("#conversation-list .list-item")

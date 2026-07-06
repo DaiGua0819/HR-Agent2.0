@@ -31,6 +31,7 @@ from app.platforms.job51.actions_navigation import _wait_chat_shell, open_chat_p
 from app.platforms.job51.actions_resume import (
     InMemoryResumeDownloadMemory,
     _open_attachment_resume_preview,
+    _open_online_resume_preview,
     resume_download_suitability_guard,
     save_resume_bytes,
     validate_resume_bytes,
@@ -180,6 +181,28 @@ def test_job51_find_next_thread_verifies_opened_candidate() -> None:
     assert opened["opened"] is True
 
 
+def test_job51_find_next_thread_uses_parsed_row_identity_when_attrs_missing() -> None:
+    """Real 51job rows expose name/job in parsed state, not as DOM attributes."""
+
+    label = (
+        "3\n卢怡丞 国际业务管培生\n17:43\n"
+        "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+    )
+    page = Job51RowsWithoutIdentityAttrsPage(
+        label=label,
+        name="卢怡丞",
+        position="国际业务管培生",
+    )
+
+    ref = asyncio.run(find_next_thread(page, owner="和新红"))
+
+    assert ref is not None
+    assert ref.conversation_id == label
+    assert page.last_expected["name"] == "卢怡丞"
+    assert page.last_expected["position"] == "国际业务管培生"
+    assert page.row_clicked is True
+
+
 def test_job51_verify_opened_candidate_uses_dom_context_fallback_until_stable() -> None:
     """Live CDP pages may only expose the generic DOM context script after row click."""
 
@@ -271,6 +294,30 @@ def test_job51_verify_opened_candidate_reports_right_header_mismatch_source() ->
     assert opened["reason"] == "candidate_identity_mismatch"
     assert opened["actual"]["source"] == "right_header"
     assert opened["actual"]["name"] == "田杰"
+
+
+def test_job51_verify_opened_candidate_reads_first_header_line_before_talent_radar() -> None:
+    """The right header first line is the candidate name; 人才罗盘 is not a name."""
+
+    page = TalentRadarRightHeaderPage()
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "姚亚回 投资交易策略研究员（量化与市场情绪方向）",
+                "name": "姚亚回",
+                "position": "投资交易策略研究员（量化与市场情绪方向）",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["actual"]["name"] == "姚亚回"
+    assert opened["actual"]["source"] == "right_header"
 
 
 def test_job51_read_chat_context_script_prefers_right_header_over_first_left_row() -> None:
@@ -668,6 +715,66 @@ def test_job51_downloads_online_resume_by_save_icon_after_screening_accept() -> 
     assert page.resume_preview_closes == 1
 
 
+def test_job51_online_resume_prefers_trusted_message_card_click() -> None:
+    """When the top-right DOM click does not open preview, use the chat card entry."""
+
+    position = "\u9500\u552e\u7ba1\u57f9\u751f"
+    page = OnlineResumeEntryPage(
+        conversations=[
+            conversation(
+                position,
+                [
+                    {"sender": "me", "text": "\u4f60\u662f\u5426\u63a5\u53d7\u51fa\u5dee\uff1f"},
+                    {"sender": "other", "text": "\u53ef\u4ee5\u63a5\u53d7"},
+                ],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+            )
+        ],
+        top_right_dom_click_opens=False,
+        message_card_available=True,
+    )
+    adapter = Job51Adapter(page, owner="\u548c\u65b0\u7ea2")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    result = state["decision"]["result"]
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert page.message_card_clicks == 1
+    assert page.top_right_clicks == 0
+
+
+def test_job51_online_resume_falls_back_to_trusted_top_right_click() -> None:
+    """If the message card entry is absent, the top-right entry can open preview."""
+
+    position = "\u9500\u552e\u7ba1\u57f9\u751f"
+    page = OnlineResumeEntryPage(
+        conversations=[
+            conversation(
+                position,
+                [
+                    {"sender": "me", "text": "\u4f60\u662f\u5426\u63a5\u53d7\u51fa\u5dee\uff1f"},
+                    {"sender": "other", "text": "\u53ef\u4ee5\u63a5\u53d7"},
+                ],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+            )
+        ],
+        top_right_dom_click_opens=False,
+        message_card_available=False,
+        top_right_trusted_click_opens=True,
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened["clicked"] is True
+    assert opened["verified"] is True
+    assert opened["source"] == "top_right_online_resume_trusted"
+    assert page.top_right_clicks == 1
+
+
 def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:
     """51job 人才望远镜切回传统模式，跳过已看卡片，复用门槛后 Hi 聊。"""
 
@@ -791,6 +898,126 @@ class RightHeaderIdentityPage:
         return {}
 
 
+class TalentRadarRightHeaderPage:
+    """Simulates the live 51job header shape with 人才罗盘 before 刚刚活跃."""
+
+    header_text = "\n".join(
+        [
+            "姚亚回",
+            "男 | 29岁 | 6年 | 本科 | 杭州（通勤距离14.5公里）",
+            "|",
+            "人才罗盘",
+            "刚刚活跃",
+            "在线简历",
+            "沟通职位：",
+            "投资交易策略研究员（量化与市场情绪方向）",
+        ]
+    )
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        expected = arg if isinstance(arg, dict) else {}
+        if script == "job51.opened_candidate_state":
+            return {}
+        if script == job51_dom_scripts.OPENED_CANDIDATE_STATE_JS:
+            actual_name = "姚亚回" if "ignoredHeaderNameLine" in script else "人才罗盘"
+            opened = actual_name == expected.get("name")
+            return {
+                "opened": opened,
+                "reason": "" if opened else "candidate_identity_mismatch",
+                "chatReady": True,
+                "source": "right_header",
+                "expected": expected,
+                "actual": {
+                    "name": actual_name,
+                    "position": "投资交易策略研究员（量化与市场情绪方向）",
+                    "label": self.header_text,
+                    "source": "right_header",
+                    "headerText": self.header_text,
+                },
+            }
+        return {}
+
+
+class Job51RowsWithoutIdentityAttrsPage:
+    """Real 51job list items do not carry name/position attrs on the row element."""
+
+    is_fake = True
+
+    def __init__(self, *, label: str, name: str, position: str) -> None:
+        self.label = label
+        self.name = name
+        self.position = position
+        self.row_clicked = False
+        self.last_expected: dict[str, object] = {}
+        self.reliable_actions: list[dict[str, object]] = []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.read_unread_rows":
+            return {
+                "rows": [
+                    {
+                        "index": 0,
+                        "id": "",
+                        "label": self.label,
+                        "name": self.name,
+                        "position": self.position,
+                        "unreadCount": 3,
+                    }
+                ]
+            }
+        if script == "job51.opened_candidate_state":
+            return {}
+        if script == job51_dom_scripts.OPENED_CANDIDATE_STATE_JS:
+            expected = arg if isinstance(arg, dict) else {}
+            self.last_expected = dict(expected)
+            opened = bool(
+                self.row_clicked
+                and expected.get("name") == self.name
+                and expected.get("position") == self.position
+            )
+            return {
+                "opened": opened,
+                "reason": "" if opened else "candidate_identity_mismatch",
+                "chatReady": True,
+                "source": "right_header",
+                "expected": expected,
+                "actual": {
+                    "name": self.name if self.row_clicked else "",
+                    "position": self.position if self.row_clicked else "",
+                    "label": self.label if self.row_clicked else "",
+                    "source": "right_header",
+                },
+            }
+        if "thread_row_not_found" in script and "#conversation-list .list-item" in script:
+            return {"clicked": False, "reason": "dom_click_not_used"}
+        return {}
+
+    async def query_all(self, selector: str) -> list[Job51RowWithoutIdentityAttrs]:
+        if "#conversation-list .list-item" in selector:
+            return [Job51RowWithoutIdentityAttrs(self)]
+        return []
+
+    async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
+        _ = timeout_ms
+        return selector == "#drop-area.input-textarea_self"
+
+
+class Job51RowWithoutIdentityAttrs:
+    def __init__(self, page: Job51RowsWithoutIdentityAttrsPage) -> None:
+        self.page = page
+
+    async def click(self, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
+        self.page.row_clicked = True
+
+    async def text(self) -> str:
+        return self.page.label
+
+    async def attr(self, name: str) -> str | None:
+        _ = name
+        return None
+
+
 class RightHeaderChatContextPage:
     """Simulates the current DOM script contract for 51job chat context."""
 
@@ -808,7 +1035,8 @@ class RightHeaderChatContextPage:
             if (
                 "rightHeader" not in script
                 or "沟通职位" not in script
-                or "rightHeaderActiveIndex" not in script
+                or "ignoredHeaderNameLine" not in script
+                or "readHeaderName" not in script
             ):
                 return {
                     "id": "沟通职位：外部财务产品顾问\n求职意向\n上海\n鲍女士\n1小时前活跃",
@@ -966,6 +1194,84 @@ class InterceptedAttachmentElement:
 
     async def text(self) -> str:
         return "附件简历"
+
+    async def attr(self, name: str) -> str | None:
+        _ = name
+        return None
+
+
+class OnlineResumeEntryPage(FakePage):
+    def __init__(
+        self,
+        *args: object,
+        top_right_dom_click_opens: bool = True,
+        message_card_available: bool = True,
+        top_right_trusted_click_opens: bool = True,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.top_right_dom_click_opens = top_right_dom_click_opens
+        self.message_card_available = message_card_available
+        self.top_right_trusted_click_opens = top_right_trusted_click_opens
+        self.message_card_clicks = 0
+        self.top_right_clicks = 0
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        if ".im-message-item .resume-element .info-content-item" in selector:
+            return (
+                [OnlineResumeEntryElement(self, "message_card_online_resume")]
+                if self.message_card_available
+                else []
+            )
+        if "#sensor_Bchat_newzxjl" in selector or ".chat-user-operate" in selector:
+            return [OnlineResumeEntryElement(self, "top_right_online_resume")]
+        if selector in {"#sensor_imresume_download", "#IMResumePrint"}:
+            return (
+                [OnlineResumeEntryElement(self, "online_resume_preview")]
+                if self.current_conversation().get("online_resume_opened")
+                else []
+            )
+        return await super().query_all(selector)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_online_resume":
+            found = bool(
+                self.current_conversation().get("online_resume_download_bytes")
+                or self.current_conversation().get("online_resume_bytes")
+                or self.current_conversation().get("online_resume_href")
+            )
+            if found and self.top_right_dom_click_opens:
+                self.current_conversation()["online_resume_opened"] = True
+            return {
+                "clicked": found,
+                "label": "在线简历" if found else "",
+                "source": "fake_top_right_dom_click",
+                "reason": "" if found else "online_resume_button_not_found",
+            }
+        return await super().eval_js(script, arg)
+
+    async def handle_online_resume_click(self, source: str) -> None:
+        if source == "message_card_online_resume":
+            self.message_card_clicks += 1
+            self.current_conversation()["online_resume_opened"] = True
+            return
+        if source == "top_right_online_resume":
+            self.top_right_clicks += 1
+            if self.top_right_trusted_click_opens:
+                self.current_conversation()["online_resume_opened"] = True
+
+
+class OnlineResumeEntryElement:
+    def __init__(self, page: OnlineResumeEntryPage, source: str) -> None:
+        self.page = page
+        self.source = source
+
+    async def click(self, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
+        await self.page.handle_online_resume_click(self.source)
+
+    async def text(self) -> str:
+        return "在线简历"
 
     async def attr(self, name: str) -> str | None:
         _ = name

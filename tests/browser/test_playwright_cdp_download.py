@@ -36,6 +36,24 @@ def test_zhilian_attachment_download_does_not_close_original_page_without_popup(
     assert original.closed is False
 
 
+def test_job51_download_sets_uuid_download_behavior_before_clicking_save() -> None:
+    raw = _Job51DownloadRawPage(cdp_should_fail=True)
+    page = PlaywrightCDPPage(raw)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is False
+    assert result["reason"] == "download_behavior_setup_failed"
+    command, params = raw.context.cdp_session.commands[0]
+    assert command == "Browser.setDownloadBehavior"
+    assert params["behavior"] == "allowAndName"
+    assert params["eventsEnabled"] is True
+    assert str(params["downloadPath"]).replace("\\", "/").endswith(
+        "data/downloads/_browser_uuid/job51"
+    )
+    assert raw.save_clicks == 0
+
+
 class _FetchingCDPPage(PlaywrightCDPPage):
     def __init__(self, page: Any) -> None:
         super().__init__(page)
@@ -64,6 +82,73 @@ class _RawPage:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class _Job51DownloadRawPage:
+    def __init__(self, *, cdp_should_fail: bool = False) -> None:
+        self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
+        self.save_clicks = 0
+        self.url = "https://ehire.51job.com/Revision/chat"
+
+    def locator(self, selector: str) -> _Job51Locator:
+        return _Job51Locator(self, selector)
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        _ = timeout
+
+    def expect_download(self, timeout: int):  # noqa: ANN001
+        _ = timeout
+        raise AssertionError("download should not be awaited when CDP setup fails")
+
+
+class _DownloadContext:
+    def __init__(self, *, cdp_should_fail: bool) -> None:
+        self.cdp_session = _DownloadCDPSession(should_fail=cdp_should_fail)
+
+    async def new_cdp_session(self, page: object) -> _DownloadCDPSession:
+        _ = page
+        return self.cdp_session
+
+
+class _DownloadCDPSession:
+    def __init__(self, *, should_fail: bool) -> None:
+        self.should_fail = should_fail
+        self.commands: list[tuple[str, dict[str, object]]] = []
+
+    async def send(self, command: str, params: dict[str, object]) -> None:
+        self.commands.append((command, dict(params)))
+        if self.should_fail:
+            raise RuntimeError("cdp refused download behavior")
+
+
+class _Job51Locator:
+    def __init__(self, page: _Job51DownloadRawPage, selector: str) -> None:
+        self.page = page
+        self.selector = selector
+
+    @property
+    def first(self) -> _Job51Locator:
+        return self
+
+    @property
+    def last(self) -> _Job51Locator:
+        return self
+
+    def filter(self, *, has_text: str) -> _Job51Locator:
+        _ = has_text
+        return self
+
+    def locator(self, selector: str) -> _Job51Locator:
+        _ = selector
+        return self
+
+    async def count(self) -> int:
+        return 1
+
+    async def click(self, timeout: int) -> None:
+        _ = timeout
+        if self.selector == "#sensor_imresume_download":
+            self.page.save_clicks += 1
 
 
 class _Context:

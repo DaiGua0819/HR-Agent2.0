@@ -140,11 +140,14 @@ async def find_next_thread(
         expected = {
             "id": str(state.get("id") or label),
             "label": label,
-            "name": await row.attr("name") or "",
-            "position": await row.attr("position") or "",
+            "name": str(state.get("name") or await row.attr("name") or ""),
+            "position": str(state.get("position") or await row.attr("position") or ""),
         }
-        click = await click_thread_by_state(page, state)
-        ready = bool(click.get("ok")) or await wait_chat_ready(page, timeout_ms=6500)
+        click = await click_thread_by_state(page, state, expected=expected, row=row)
+        ready = bool(click.get("ok") or click.get("clicked")) or await wait_chat_ready(
+            page,
+            timeout_ms=6500,
+        )
         opened = await verify_opened_candidate(page, expected, chat_ready=ready)
         if opened.get("opened"):
             return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
@@ -154,14 +157,33 @@ async def find_next_thread(
 async def click_thread_by_state(
     page: BrowserPage,
     state: dict[str, object],
+    *,
+    expected: dict[str, object] | None = None,
+    row: Any | None = None,
 ) -> dict[str, object]:
     """Click a 51job conversation row with a JS fallback for virtual-list rows."""
 
     await install_app_download_blocker(page)
+    if expected:
+        target_row = row or await _find_thread_for_state(page, state)
+        if target_row is not None:
+            primary = await reliable_click_element(
+                page,
+                target_row,
+                label="51job候选人会话",
+                verify=lambda: _verify_opened_candidate_once(
+                    page,
+                    expected,
+                    chat_ready=True,
+                ),
+            )
+            if primary.get("ok"):
+                return primary
     payload = {
         "id": str(state.get("id") or "").lstrip("_"),
         "label": str(state.get("label") or "").strip(),
         "index": _safe_int(state.get("index")),
+        "allowIndexFallback": expected is None,
     }
     result = await _safe_eval_dict(
         page,
@@ -183,7 +205,7 @@ async def click_thread_by_state(
               row.getAttribute("data-uid") || "").replace(/^_/, "");
             return expected.id && id === expected.id;
           }) || rows.find((row) => expected.label && compact(text(row)) === compact(expected.label))
-            || rows[Number(expected.index || 0)];
+            || (expected.allowIndexFallback ? rows[Number(expected.index || 0)] : null);
           if (!target) return { clicked: false, reason: "thread_row_not_found" };
           target.scrollIntoView({ block: "center", inline: "nearest" });
           const clickTarget = target.querySelector(".conversation-item") ||
