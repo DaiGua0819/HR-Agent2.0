@@ -13,11 +13,11 @@ from scripts.process_all_messages import (
 
 
 def test_drain_owner_finishes_one_platform_before_starting_next() -> None:
-    client = FakeProcessClient(
+    client = FakeDrainClient(
         {
-            ("owner-a", Platform.BOSS): [{"processed": 1}, {"processed": 1}, {"processed": 0}],
-            ("owner-a", Platform.JOB51): [{"processed": 1}, {"processed": 0}],
-            ("owner-a", Platform.ZHILIAN): [{"processed": 0}],
+            ("owner-a", Platform.BOSS): [{"processed": 2, "drained": True}],
+            ("owner-a", Platform.JOB51): [{"processed": 1, "drained": True}],
+            ("owner-a", Platform.ZHILIAN): [{"processed": 0, "drained": True}],
         }
     )
 
@@ -32,9 +32,6 @@ def test_drain_owner_finishes_one_platform_before_starting_next() -> None:
 
     assert client.calls == [
         ("owner-a", Platform.BOSS),
-        ("owner-a", Platform.BOSS),
-        ("owner-a", Platform.BOSS),
-        ("owner-a", Platform.JOB51),
         ("owner-a", Platform.JOB51),
         ("owner-a", Platform.ZHILIAN),
     ]
@@ -69,9 +66,15 @@ def test_drain_all_targets_runs_workers_in_parallel() -> None:
 
 
 def test_drain_owner_stops_when_platform_hits_max_rounds() -> None:
-    client = FakeProcessClient(
+    client = FakeDrainClient(
         {
-            ("owner-a", Platform.BOSS): [{"processed": 1}, {"processed": 1}, {"processed": 0}],
+            ("owner-a", Platform.BOSS): [
+                {
+                    "processed": 2,
+                    "drained": False,
+                    "stopReason": "max_contacts_reached",
+                }
+            ],
             ("owner-a", Platform.JOB51): [{"processed": 0}],
         }
     )
@@ -85,23 +88,28 @@ def test_drain_owner_stops_when_platform_hits_max_rounds() -> None:
         )
     )
 
-    assert client.calls == [("owner-a", Platform.BOSS), ("owner-a", Platform.BOSS)]
+    assert client.calls == [("owner-a", Platform.BOSS)]
+    assert client.max_contacts == [("owner-a", Platform.BOSS, 2)]
     assert result["stopped"] is True
     assert result["platforms"][0]["maxRoundsReached"] is True
-    assert result["platforms"][0]["stopReason"] == "max_rounds_reached"
+    assert result["platforms"][0]["stopReason"] == "max_contacts_reached"
 
 
-class FakeProcessClient:
+class FakeDrainClient:
     def __init__(self, responses: dict[tuple[str, Platform], list[dict[str, Any]]]) -> None:
         self.responses = {key: list(value) for key, value in responses.items()}
         self.calls: list[tuple[str, Platform]] = []
+        self.max_contacts: list[tuple[str, Platform, int]] = []
 
-    async def process_messages(
+    async def drain_messages(
         self,
         target: WorkerTarget,
         platform: Platform,
+        *,
+        max_contacts: int,
     ) -> dict[str, Any]:
         self.calls.append((target.owner, platform))
+        self.max_contacts.append((target.owner, platform, max_contacts))
         queue = self.responses[(target.owner, platform)]
         return {**queue.pop(0), "platform": platform.value}
 
@@ -113,16 +121,18 @@ class BlockingProcessClient:
         self.owner_a_boss_started = asyncio.Event()
         self.release_owner_a_boss = asyncio.Event()
 
-    async def process_messages(
+    async def drain_messages(
         self,
         target: WorkerTarget,
         platform: Platform,
+        *,
+        max_contacts: int,
     ) -> dict[str, Any]:
+        _ = max_contacts
         self.events.append(("start", target.owner, platform))
         self.counts[(target.owner, platform)] += 1
         if target.owner == "owner-a" and platform == Platform.BOSS:
             self.owner_a_boss_started.set()
             await self.release_owner_a_boss.wait()
-        processed = 1 if self.counts[(target.owner, platform)] == 1 else 0
         self.events.append(("finish", target.owner, platform))
-        return {"processed": processed, "platform": platform.value}
+        return {"processed": 1, "drained": True, "platform": platform.value}

@@ -12,6 +12,7 @@ from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
+from app.platforms.job51 import dom_scripts as job51_dom_scripts
 from app.platforms.job51.actions_chat import (
     _normalize_unread_rows,
     click_thread_by_state,
@@ -201,6 +202,87 @@ def test_job51_verify_opened_candidate_uses_dom_context_fallback_until_stable() 
 
     assert opened["opened"] is True
     assert page.dom_context_reads == 2
+
+
+def test_job51_verify_opened_candidate_prefers_right_header_identity() -> None:
+    """51job should trust the opened right-side candidate header, not the first left row."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": True,
+            "source": "right_header",
+            "actual": {
+                "name": "鲍女士",
+                "position": "外部财务产品顾问",
+                "label": "鲍女士 女 53岁 外部财务产品顾问",
+            },
+        },
+        fallback_context={
+            "name": "石晓浩",
+            "position": "AI应用开发工程师",
+            "label": "石晓浩 AI应用开发工程师\n[新招呼] 您好",
+        },
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {"label": "鲍女士 外部财务产品顾问", "name": "鲍女士", "position": "外部财务产品顾问"},
+            chat_ready=True,
+            timeout_ms=50,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["source"] == "right_header"
+    assert opened["actual"]["name"] == "鲍女士"
+    assert page.right_header_reads == 1
+
+
+def test_job51_verify_opened_candidate_reports_right_header_mismatch_source() -> None:
+    """51job identity mismatch diagnostics should expose that the right header was read."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "actual": {
+                "name": "田杰",
+                "position": "外部财务产品顾问",
+                "label": "田杰 外部财务产品顾问",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {"label": "鲍女士 外部财务产品顾问", "name": "鲍女士", "position": "外部财务产品顾问"},
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["reason"] == "candidate_identity_mismatch"
+    assert opened["actual"]["source"] == "right_header"
+    assert opened["actual"]["name"] == "田杰"
+
+
+def test_job51_read_chat_context_script_prefers_right_header_over_first_left_row() -> None:
+    """READ_CHAT_CONTEXT_JS must expose right-header identity before left-list fallback."""
+
+    page = RightHeaderChatContextPage()
+
+    context = asyncio.run(read_chat_context(page, owner="宋峰峰"))
+
+    assert context.candidate.name == "鲍女士"
+    assert context.candidate.applied_position == "外部财务产品顾问"
+    assert page.dom_reads == 1
 
 
 def test_job51_read_chat_context_parses_batch_panel_candidate_message() -> None:
@@ -675,6 +757,79 @@ class DelayedJob51ContextPage:
         index = min(self.dom_context_reads, len(self.contexts) - 1)
         self.dom_context_reads += 1
         return self.contexts[index]
+
+
+class RightHeaderIdentityPage:
+    """Simulates 51job where the current identity is only reliable in the right header."""
+
+    def __init__(
+        self,
+        *,
+        right_header: dict[str, object],
+        fallback_context: dict[str, object],
+    ) -> None:
+        self.right_header = right_header
+        self.fallback_context = fallback_context
+        self.right_header_reads = 0
+        self.fallback_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        right_header_script = getattr(
+            job51_dom_scripts,
+            "OPENED_CANDIDATE_STATE_JS",
+            object(),
+        )
+        if script == "job51.opened_candidate_state":
+            return {}
+        if script == right_header_script:
+            self.right_header_reads += 1
+            return self.right_header
+        if script in {"job51.read_chat_context", READ_CHAT_CONTEXT_JS}:
+            self.fallback_reads += 1
+            return self.fallback_context
+        return {}
+
+
+class RightHeaderChatContextPage:
+    """Simulates the current DOM script contract for 51job chat context."""
+
+    def __init__(self) -> None:
+        self.extension_reads = 0
+        self.dom_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == "job51.read_chat_context":
+            self.extension_reads += 1
+            return {}
+        if script == READ_CHAT_CONTEXT_JS:
+            self.dom_reads += 1
+            if (
+                "rightHeader" not in script
+                or "沟通职位" not in script
+                or "rightHeaderActiveIndex" not in script
+            ):
+                return {
+                    "id": "沟通职位：外部财务产品顾问\n求职意向\n上海\n鲍女士\n1小时前活跃",
+                    "label": "沟通职位：外部财务产品顾问\n求职意向\n上海\n鲍女士\n1小时前活跃",
+                    "name": "上海",
+                    "position": "外部财务产品顾问",
+                    "messages": [],
+                    "latest_message": "",
+                    "unread_count": 1,
+                }
+            return {
+                "id": "鲍女士 外部财务产品顾问",
+                "label": "鲍女士 外部财务产品顾问",
+                "name": "鲍女士",
+                "position": "外部财务产品顾问",
+                "messages": [],
+                "latest_message": "",
+                "unread_count": 1,
+                "source": "right_header",
+            }
+        return {}
 
 
 class BatchPanelDomContextPage:

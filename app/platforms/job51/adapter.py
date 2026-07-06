@@ -30,8 +30,16 @@ class Job51Adapter:
     async def read_unread_conversations(self) -> list[ConversationRef]:
         return await actions_chat.read_unread_conversations(self.page, owner=self.owner)
 
-    async def find_next_unread_thread(self) -> ConversationRef | None:
-        return await actions_chat.find_next_thread(self.page, owner=self.owner)
+    async def find_next_unread_thread(
+        self,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> ConversationRef | None:
+        return await actions_chat.find_next_thread(
+            self.page,
+            owner=self.owner,
+            exclude_ids=exclude_ids,
+        )
 
     async def read_chat_context(self) -> Conversation:
         return await actions_chat.read_chat_context(self.page, owner=self.owner)

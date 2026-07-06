@@ -21,6 +21,8 @@ from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSi
 from app.platforms.registry import get_platform_adapter
 from app.settings import load_settings
 
+DEFAULT_DRAIN_MAX_CONTACTS = 300
+
 
 @dataclass
 class WorkerRuntime:
@@ -65,33 +67,83 @@ class WorkerRuntime:
                     return {"accepted": False, "paused": True, "platform": platform.value}
                 await self.start()
                 adapter = self._adapter(platform)
-                await adapter.open_chat_page()
-                await adapter.select_unread_filter()
-                await adapter.select_positions(None)
-                ref = await adapter.find_next_unread_thread()
+                await self._prepare_message_adapter(adapter)
+                ref = await self._find_next_unread_thread(adapter, set())
                 if ref is None:
                     return {"accepted": True, "processed": 0, "platform": platform.value}
-                state = await ConversationRunner(
-                    adapter,
-                    decision_sink=self.decision_sink,
-                    conversation_repository=self.conversation_repository,
-                    artifact_store=self.artifact_store,
-                ).run_current()
-                graph_stage = await self._graph_stage(state)
+                state = await self._run_current_conversation(adapter)
+                contact = await self._contact_payload(state, fallback_id=ref.conversation_id)
                 return {
                     "accepted": True,
                     "processed": 1,
                     "owner": self.owner,
                     "platform": platform.value,
-                    "conversationId": state.get("conversation_id"),
-                    "nextAction": state.get("next_action"),
-                    "stage": state.get("stage"),
-                    "graphStage": graph_stage,
-                    "decision": state.get("decision"),
+                    **contact,
                     "dryRun": load_settings().dry_run,
                 }
             finally:
                 self.events.append({"event": "finish", "platform": platform.value})
+                self.agent_busy = False
+
+    async def drain_messages(
+        self,
+        platform: Platform,
+        *,
+        max_contacts: int = DEFAULT_DRAIN_MAX_CONTACTS,
+    ) -> dict[str, object]:
+        """Process all currently discoverable unread contacts for one platform."""
+
+        if max_contacts < 1:
+            raise ValueError("max_contacts must be at least 1")
+
+        async with self._lock:
+            self.agent_busy = True
+            self.events.append({"event": "drain_start", "platform": platform.value})
+            try:
+                if platform in self.paused:
+                    return {
+                        "accepted": False,
+                        "paused": True,
+                        "processed": 0,
+                        "owner": self.owner,
+                        "platform": platform.value,
+                        "contacts": [],
+                        "drained": False,
+                        "stopReason": "paused",
+                    }
+                await self.start()
+                adapter = self._adapter(platform)
+                await self._prepare_message_adapter(adapter)
+                contacts: list[dict[str, object]] = []
+                seen: set[str] = set()
+                while len(contacts) < max_contacts:
+                    ref = await self._find_next_unread_thread(adapter, seen)
+                    if ref is None:
+                        return self._drain_payload(
+                            platform,
+                            contacts,
+                            drained=True,
+                            stop_reason="drained",
+                        )
+                    if ref.conversation_id:
+                        seen.add(ref.conversation_id)
+                    state = await self._run_current_conversation(adapter)
+                    contact = await self._contact_payload(
+                        state,
+                        fallback_id=ref.conversation_id,
+                    )
+                    conversation_id = str(contact.get("conversationId") or "")
+                    if conversation_id:
+                        seen.add(conversation_id)
+                    contacts.append(contact)
+                return self._drain_payload(
+                    platform,
+                    contacts,
+                    drained=False,
+                    stop_reason="max_contacts_reached",
+                )
+            finally:
+                self.events.append({"event": "drain_finish", "platform": platform.value})
                 self.agent_busy = False
 
     async def proactive_contact(
@@ -171,6 +223,60 @@ class WorkerRuntime:
             owner=self.owner,
             dry_run=load_settings().dry_run,
         )
+
+    async def _prepare_message_adapter(self, adapter: Any) -> None:
+        await adapter.open_chat_page()
+        await adapter.select_unread_filter()
+        await adapter.select_positions(None)
+
+    async def _find_next_unread_thread(
+        self,
+        adapter: Any,
+        seen: set[str],
+    ):
+        return await adapter.find_next_unread_thread(exclude_ids=set(seen))
+
+    async def _run_current_conversation(self, adapter: Any) -> dict[str, object]:
+        return await ConversationRunner(
+            adapter,
+            decision_sink=self.decision_sink,
+            conversation_repository=self.conversation_repository,
+            artifact_store=self.artifact_store,
+        ).run_current()
+
+    async def _contact_payload(
+        self,
+        state: dict[str, object],
+        *,
+        fallback_id: str = "",
+    ) -> dict[str, object]:
+        graph_stage = await self._graph_stage(state)
+        return {
+            "conversationId": state.get("conversation_id") or fallback_id,
+            "nextAction": state.get("next_action"),
+            "stage": state.get("stage"),
+            "graphStage": graph_stage,
+            "decision": state.get("decision"),
+        }
+
+    def _drain_payload(
+        self,
+        platform: Platform,
+        contacts: list[dict[str, object]],
+        *,
+        drained: bool,
+        stop_reason: str,
+    ) -> dict[str, object]:
+        return {
+            "accepted": True,
+            "processed": len(contacts),
+            "owner": self.owner,
+            "platform": platform.value,
+            "contacts": contacts,
+            "drained": drained,
+            "stopReason": stop_reason,
+            "dryRun": load_settings().dry_run,
+        }
 
     async def _graph_stage(self, state: dict[str, object]) -> str:
         graph = build_recruit_graph()

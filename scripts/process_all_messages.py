@@ -24,28 +24,35 @@ class WorkerTarget:
 
 
 class ProcessMessagesClient(Protocol):
-    async def process_messages(
+    async def drain_messages(
         self,
         target: WorkerTarget,
         platform: Platform,
+        *,
+        max_contacts: int,
     ) -> dict[str, Any]:
-        """Process one unread contact for a worker/platform pair."""
+        """Drain unread contacts for a worker/platform pair."""
 
 
 @dataclass(frozen=True)
 class HttpProcessMessagesClient:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
-    async def process_messages(
+    async def drain_messages(
         self,
         target: WorkerTarget,
         platform: Platform,
+        *,
+        max_contacts: int,
     ) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=target.base_url,
             timeout=self.timeout_seconds,
         ) as client:
-            response = await client.post(f"/automation/{platform.value}/process-messages")
+            response = await client.post(
+                f"/automation/{platform.value}/drain-messages",
+                json={"maxContacts": max_contacts},
+            )
             response.raise_for_status()
             payload = response.json()
         return payload if isinstance(payload, dict) else {}
@@ -121,37 +128,34 @@ async def drain_platform(
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     log: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Keep processing a platform until the worker reports no processable messages."""
+    """Ask the worker to drain a platform in one terminal round."""
 
     rounds: list[dict[str, Any]] = []
-    total_processed = 0
-    for round_number in range(1, max_rounds + 1):
-        payload = await client.process_messages(target, platform)
-        processed = _safe_int(payload.get("processed"))
-        total_processed += processed
-        item = {
-            "round": round_number,
-            "processed": processed,
-            "conversationId": str(payload.get("conversationId") or ""),
-            "stage": str(payload.get("stage") or ""),
-            "nextAction": str(payload.get("nextAction") or ""),
-        }
-        rounds.append(item)
-        log(_format_round_log(target, platform, item))
-        if processed <= 0:
-            return {
-                "platform": platform.value,
-                "processed": total_processed,
-                "rounds": rounds,
-                "maxRoundsReached": False,
-                "stopReason": "drained",
-            }
+    payload = await client.drain_messages(target, platform, max_contacts=max_rounds)
+    processed = _safe_int(payload.get("processed"))
+    contacts = _safe_contacts(payload.get("contacts"))
+    stop_reason = str(payload.get("stopReason") or "drained")
+    max_contacts_reached = stop_reason == "max_contacts_reached"
+    item = {
+        "round": 1,
+        "processed": processed,
+        "conversationId": str(payload.get("conversationId") or ""),
+        "stage": str(payload.get("stage") or ""),
+        "nextAction": str(payload.get("nextAction") or ""),
+        "drained": bool(payload.get("drained")),
+        "stopReason": stop_reason,
+        "contacts": contacts,
+    }
+    rounds.append(item)
+    log(_format_round_log(target, platform, item))
+    for index, contact in enumerate(contacts, start=1):
+        log(_format_contact_log(target, platform, index, contact))
     return {
         "platform": platform.value,
-        "processed": total_processed,
+        "processed": processed,
         "rounds": rounds,
-        "maxRoundsReached": True,
-        "stopReason": "max_rounds_reached",
+        "maxRoundsReached": max_contacts_reached,
+        "stopReason": stop_reason,
     }
 
 
@@ -194,7 +198,7 @@ def _parse_args() -> argparse.Namespace:
         "--max-rounds",
         type=int,
         default=DEFAULT_MAX_ROUNDS,
-        help="Maximum process-messages calls per owner/platform before stopping.",
+        help="Maximum contacts per owner/platform drain before stopping.",
     )
     parser.add_argument(
         "--timeout",
@@ -218,8 +222,30 @@ def _format_round_log(
     return (
         f"owner={target.owner} platform={platform.value} round={item['round']} "
         f"processed={item['processed']} conversationId={item['conversationId']} "
-        f"stage={item['stage']} nextAction={item['nextAction']}"
+        f"stage={item['stage']} nextAction={item['nextAction']} "
+        f"drained={str(item.get('drained', False)).lower()} "
+        f"stopReason={item.get('stopReason', '')}"
     )
+
+
+def _format_contact_log(
+    target: WorkerTarget,
+    platform: Platform,
+    index: int,
+    contact: dict[str, Any],
+) -> str:
+    return (
+        f"owner={target.owner} platform={platform.value} contact={index} "
+        f"conversationId={contact.get('conversationId', '')} "
+        f"stage={contact.get('stage', '')} "
+        f"nextAction={contact.get('nextAction', '')}"
+    )
+
+
+def _safe_contacts(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _safe_int(value: object) -> int:

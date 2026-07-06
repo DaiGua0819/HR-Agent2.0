@@ -22,7 +22,11 @@ class PlatformAdapter(Protocol):
     async def read_unread_conversations(self) -> list[ConversationRef]:
         """读取当前平台未读会话。"""
 
-    async def find_next_unread_thread(self) -> ConversationRef | None:
+    async def find_next_unread_thread(
+        self,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> ConversationRef | None:
         """找到下一个未读真实候选人会话。"""
 
     async def read_chat_context(self) -> Conversation:

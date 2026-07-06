@@ -113,6 +113,108 @@ READ_UNREAD_ROWS_JS = r"""
 }
 """
 
+OPENED_CANDIDATE_STATE_JS = r"""
+(expected) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const clean = (value) => String(value || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const expectedName = String(expected && expected.name || "").trim();
+  const expectedPosition = String(expected && expected.position || "").trim();
+  const chatReady = Boolean(document.querySelector("#drop-area.input-textarea_self"));
+  const rightHeader = (() => {
+    const viewportGate = (el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left > window.innerWidth * 0.30 && rect.top < window.innerHeight * 0.70;
+    };
+    const candidates = Array.from(document.querySelectorAll(
+      ".im-chat-main, .chat-content, .chat-main, .chat-detail, .im-chat, " +
+      "[class*='chat'], [class*='resume'], [class*='candidate'], main, section, div"
+    )).filter((el) => {
+      if (!visible(el) || !viewportGate(el)) return false;
+      const value = text(el);
+      return value.includes("沟通职位") || value.includes("求职意向") ||
+        (expectedName && compact(value).includes(compact(expectedName)));
+    }).map((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        el,
+        value: clean(text(el)),
+        top: rect.top,
+        left: rect.left,
+        area: rect.width * rect.height,
+      };
+    }).filter((item) => item.value);
+    candidates.sort((a, b) => {
+      const aActive = /活跃|在线|刚刚/.test(a.value);
+      const bActive = /活跃|在线|刚刚/.test(b.value);
+      const aScore = Number(a.value.includes("沟通职位")) * 10 +
+        Number(expectedName && compact(a.value).includes(compact(expectedName))) * 50 +
+        Number(aActive) * 20 -
+        Math.min(a.area / 100000, 20);
+      const bScore = Number(b.value.includes("沟通职位")) * 10 +
+        Number(expectedName && compact(b.value).includes(compact(expectedName))) * 50 +
+        Number(bActive) * 20 -
+        Math.min(b.area / 100000, 20);
+      return bScore - aScore || a.top - b.top || a.left - b.left;
+    });
+    return candidates[0] || null;
+  })();
+  const headerText = rightHeader ? rightHeader.value : "";
+  const lines = headerText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const positionMatch = headerText.match(/沟通职位\s*[:：]\s*([^\n|｜]+)/);
+  const actualPosition = clean(positionMatch ? positionMatch[1] : "");
+  const actualName = (() => {
+    if (expectedName && compact(headerText).includes(compact(expectedName))) return expectedName;
+    const rightHeaderActiveIndex = lines.findIndex((line) => /活跃|在线|刚刚/.test(line));
+    if (rightHeaderActiveIndex > 0) return lines[rightHeaderActiveIndex - 1].trim();
+    for (const line of lines) {
+      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
+      if (head) return head[1].trim();
+      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) return line;
+    }
+    return "";
+  })();
+  const nameOk = Boolean(
+    expectedName && actualName && compact(actualName) === compact(expectedName)
+  );
+  const nameConflict = Boolean(expectedName && actualName && !nameOk);
+  const positionOk = Boolean(
+    !nameConflict &&
+    expectedPosition &&
+    actualPosition &&
+    (compact(actualPosition).includes(compact(expectedPosition)) ||
+      compact(expectedPosition).includes(compact(actualPosition)))
+  );
+  const opened = Boolean(chatReady && (nameOk || positionOk));
+  return {
+    opened,
+    reason: opened ? "" : "candidate_identity_mismatch",
+    chatReady,
+    source: "right_header",
+    expected,
+    actual: {
+      name: actualName,
+      position: actualPosition,
+      label: headerText,
+      source: "right_header",
+      headerText,
+    },
+  };
+}
+"""
+
 READ_CHAT_CONTEXT_JS = r"""
 () => {
   const visible = (el) => {
@@ -166,12 +268,84 @@ READ_CHAT_CONTEXT_JS = r"""
       rawMessage,
     };
   };
-  const selected = document.querySelector("#conversation-list .list-item.selected") ||
-    document.querySelector("#conversation-list .list-item");
+  const rightHeader = (() => {
+    const viewportGate = (el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left > window.innerWidth * 0.30 && rect.top < window.innerHeight * 0.70;
+    };
+    const candidates = Array.from(document.querySelectorAll(
+      ".im-chat-main, .chat-content, .chat-main, .chat-detail, .im-chat, " +
+      "[class*='chat'], [class*='resume'], [class*='candidate'], main, section, div"
+    )).filter((el) => {
+      if (!visible(el) || !viewportGate(el)) return false;
+      const value = text(el);
+      return value.includes("沟通职位") || value.includes("求职意向");
+    }).map((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        el,
+        value: clean(text(el)),
+        top: rect.top,
+        left: rect.left,
+        area: rect.width * rect.height,
+      };
+    }).filter((item) => item.value);
+    candidates.sort((a, b) => {
+      const aActive = /活跃|在线|刚刚/.test(a.value);
+      const bActive = /活跃|在线|刚刚/.test(b.value);
+      const aScore = Number(a.value.includes("沟通职位")) * 10 +
+        Number(aActive) * 20 -
+        Math.min(a.area / 100000, 20);
+      const bScore = Number(b.value.includes("沟通职位")) * 10 +
+        Number(bActive) * 20 -
+        Math.min(b.area / 100000, 20);
+      return bScore - aScore || a.top - b.top || a.left - b.left;
+    });
+    return candidates[0] || null;
+  })();
+  const rightHeaderText = rightHeader ? rightHeader.value : "";
+  const rightHeaderLines = lines(rightHeaderText);
+  const rightHeaderPositionMatch = rightHeaderText.match(/沟通职位\s*[:：]\s*([^\n|｜]+)/);
+  const rightHeaderPosition = clean(rightHeaderPositionMatch ? rightHeaderPositionMatch[1] : "");
+  const rightHeaderName = (() => {
+    const rightHeaderActiveIndex = rightHeaderLines.findIndex((line) =>
+      /活跃|在线|刚刚/.test(line)
+    );
+    if (rightHeaderActiveIndex > 0) return rightHeaderLines[rightHeaderActiveIndex - 1].trim();
+    for (const line of rightHeaderLines) {
+      const head = line.match(/^([^\s|｜]{1,16})\s+(?:男|女|\d+\s*岁|[|｜])/);
+      if (head) return head[1].trim();
+      if (/^[\u4e00-\u9fffA-Za-z·•]{1,12}(先生|女士|小姐|同学)?$/.test(line)) return line;
+    }
+    return "";
+  })();
+  const rows = Array.from(
+    document.querySelectorAll("#conversation-list .list-item")
+  ).filter(visible);
+  const selectedByClass = rows.find((row) => {
+    const cls = String(row.className || "").toLowerCase();
+    return /\b(selected|active|current|checked|highlight|is-active)\b/.test(cls) ||
+      cls.includes("selected") || cls.includes("active") || cls.includes("highlight");
+  });
+  const selectedByBackground = rows.find((row) => {
+    const color = getComputedStyle(row).backgroundColor;
+    const match = color && color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+    if (!match) return false;
+    const alpha = match[4] === undefined ? 1 : Number(match[4]);
+    if (alpha <= 0) return false;
+    const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])];
+    return Math.abs(255 - r) + Math.abs(255 - g) + Math.abs(255 - b) > 18;
+  });
+  const selected = selectedByClass || selectedByBackground || null;
   const selectedText = text(selected);
-  const name = text(selected && selected.querySelector(".username, .username-text")) ||
+  const selectedName = text(selected && selected.querySelector(".username, .username-text")) ||
     selectedText.split("\n").find((line) => line && !/^\d+$/.test(line)) || "";
-  const position = text(selected && selected.querySelector(".jobname, .job-name"));
+  const selectedPosition = text(selected && selected.querySelector(".jobname, .job-name"));
+  const name = rightHeaderName || selectedName;
+  const position = rightHeaderPosition || selectedPosition;
+  const source = rightHeaderName || rightHeaderPosition
+    ? "right_header"
+    : (selected ? "left_selected_row" : "");
   const lastMessage = text(selected && selected.querySelector(".last-message")) ||
     selectedText.split("\n").slice(-2, -1)[0] || "";
   const unreadBadge = selected && selected.querySelector(".el-badge__content, [class*='badge']");
@@ -200,9 +374,10 @@ READ_CHAT_CONTEXT_JS = r"""
   );
   return {
     id: attr(selected, "id") || (batch && batch.id) || selectedText,
-    label: selectedText || (batch && batch.label) || "",
+    label: rightHeaderText || selectedText || (batch && batch.label) || "",
     name: name || (batch && batch.name) || "",
     position: position || (batch && batch.position) || "",
+    source,
     messages: effectiveMessages,
     latest_message: clean(lastMessage) || (batch && batch.message) || "",
     unread_count: Number.parseInt(text(unreadBadge) || "0", 10) || 0,

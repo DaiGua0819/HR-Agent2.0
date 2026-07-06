@@ -105,14 +105,23 @@ async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[Co
     return refs
 
 
-async def find_next_unread_thread(page: BrowserPage, *, owner: str) -> ConversationRef | None:
+async def find_next_unread_thread(
+    page: BrowserPage,
+    *,
+    owner: str,
+    exclude_ids: set[str] | None = None,
+) -> ConversationRef | None:
     """从 BOSS 未读列表打开下一个真实候选人。"""
 
     unread = await read_unread_row_states(page)
     if not unread:
         return None
+    excluded = {str(item) for item in exclude_ids or set() if str(item)}
     for state in unread:
         label = str(state.get("label") or "")
+        conversation_id = str(state.get("id") or label)
+        if conversation_id in excluded:
+            continue
         row = await find_row_for_state(page, state)
         if row is None:
             continue
@@ -122,7 +131,7 @@ async def find_next_unread_thread(page: BrowserPage, *, owner: str) -> Conversat
         if not result.get("ok"):
             result = await click_row_state(page, state, label="BOSS候选人会话")
         if result.get("ok"):
-            return ConversationRef(Platform.BOSS, owner, str(state.get("id") or label))
+            return ConversationRef(Platform.BOSS, owner, conversation_id)
     return None
 
 

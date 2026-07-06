@@ -21,6 +21,7 @@ from app.platforms.job51 import selectors
 from app.platforms.job51.actions_navigation import open_chat_page as navigate_chat_page
 from app.platforms.job51.actions_unread import select_unread_filter as refresh_unread_filter
 from app.platforms.job51.dom_scripts import (
+    OPENED_CANDIDATE_STATE_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
     VERIFY_SENT_JS,
@@ -117,11 +118,20 @@ async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
     return fallback
 
 
-async def find_next_thread(page: BrowserPage, *, owner: str) -> ConversationRef | None:
+async def find_next_thread(
+    page: BrowserPage,
+    *,
+    owner: str,
+    exclude_ids: set[str] | None = None,
+) -> ConversationRef | None:
     """打开下一个未读且未回复过的 51job 会话。"""
 
+    excluded = {str(item) for item in exclude_ids or set() if str(item)}
     for state in await read_unread_row_states(page):
         label = str(state.get("label") or "")
+        conversation_id = str(state.get("id") or label)
+        if conversation_id in excluded:
+            continue
         if should_skip_thread_label(label) or _safe_int(state.get("unread_count")) <= 0:
             continue
         row = await _find_thread_for_state(page, state)
@@ -259,7 +269,7 @@ async def verify_opened_candidate(
     expected: dict[str, object],
     *,
     chat_ready: bool = False,
-    timeout_ms: int = 1500,
+    timeout_ms: int = 5000,
     interval_ms: int = 150,
 ) -> dict[str, object]:
     """校验虚拟列表点击后，右侧聊天区确实切到了目标候选人。"""
@@ -280,7 +290,10 @@ async def _verify_opened_candidate_once(
 ) -> dict[str, object]:
     raw = await _safe_eval_dict(page, "job51.opened_candidate_state", expected)
     if raw.get("opened"):
-        return raw
+        return _ensure_actual_source(raw)
+    right_header = await _safe_eval_dict(page, OPENED_CANDIDATE_STATE_JS, expected)
+    if right_header.get("opened") or right_header.get("source") == "right_header":
+        return _ensure_actual_source(right_header)
     context = await _safe_eval_dict(page, "job51.read_chat_context")
     if not context:
         context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
@@ -290,8 +303,12 @@ async def _verify_opened_candidate_once(
     actual_name = str(context.get("name") or context.get("candidate_name") or "").strip()
     actual_position = str(context.get("position") or context.get("appliedPosition") or "").strip()
     actual_label = str(context.get("label") or "").strip()
+    actual_source = str(context.get("source") or "chat_context").strip()
     name_ok = bool(expected_name and actual_name and _text_matches(actual_name, expected_name))
+    name_conflict = bool(expected_name and actual_name and not name_ok)
     position_ok = bool(
+        not name_conflict
+        and
         expected_position
         and actual_position
         and _position_matches(actual_position, expected_position)
@@ -308,6 +325,7 @@ async def _verify_opened_candidate_once(
             "name": actual_name,
             "position": actual_position,
             "label": actual_label,
+            "source": actual_source,
         },
     }
 
@@ -452,6 +470,14 @@ def _text_matches(actual: str, expected: str) -> bool:
     left = "".join(actual.split())
     right = "".join(expected.split())
     return bool(left and right and (left in right or right in left))
+
+
+def _ensure_actual_source(payload: dict[str, object]) -> dict[str, object]:
+    source = str(payload.get("source") or "").strip()
+    actual = payload.get("actual")
+    if source and isinstance(actual, dict) and not actual.get("source"):
+        actual["source"] = source
+    return payload
 
 
 def _safe_int(value: Any) -> int:

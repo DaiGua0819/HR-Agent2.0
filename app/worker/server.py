@@ -28,6 +28,17 @@ def create_worker_app(runtime: WorkerRuntime) -> FastAPI:
     async def process_messages(platform: Platform) -> dict[str, object]:
         return await runtime.process_messages(platform)
 
+    @router.post("/automation/{platform}/drain-messages")
+    async def drain_messages(
+        platform: Platform,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        payload = payload or {}
+        return await runtime.drain_messages(
+            platform,
+            max_contacts=int(payload.get("maxContacts") or 300),
+        )
+
     @router.post("/automation/{platform}/proactive-contact")
     async def proactive_contact(
         platform: Platform, payload: dict[str, Any] | None = None
