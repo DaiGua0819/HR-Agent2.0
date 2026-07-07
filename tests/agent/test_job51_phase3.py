@@ -12,6 +12,7 @@ from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
+from app.platforms.job51 import actions_resume_close
 from app.platforms.job51 import dom_scripts as job51_dom_scripts
 from app.platforms.job51.actions_chat import (
     _normalize_unread_rows,
@@ -33,6 +34,7 @@ from app.platforms.job51.actions_resume import (
     _open_attachment_resume_preview,
     _open_online_resume_preview,
     resume_download_suitability_guard,
+    resume_identity_guard,
     save_resume_bytes,
     validate_resume_bytes,
 )
@@ -205,6 +207,30 @@ def test_job51_find_next_thread_uses_parsed_row_identity_when_attrs_missing() ->
     assert page.row_clicked is True
 
 
+def test_job51_normalize_unread_rows_infers_name_from_plain_label() -> None:
+    """51job unread rows may only expose candidate identity in the visible label."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "index": 0,
+                "id": "",
+                "label": (
+                    "1\n王欣睿\n15:05\n"
+                    "您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "name": "",
+                "position": "",
+                "latestMessage": "",
+                "unreadCount": 1,
+            }
+        ]
+    )
+
+    assert rows[0]["name"] == "王欣睿"
+    assert rows[0]["latest_message"] == "您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+
+
 def test_job51_verify_opened_candidate_uses_dom_context_fallback_until_stable() -> None:
     """Live CDP pages may only expose the generic DOM context script after row click."""
 
@@ -263,6 +289,47 @@ def test_job51_verify_opened_candidate_prefers_right_header_identity() -> None:
     assert opened["source"] == "right_header"
     assert opened["actual"]["name"] == "鲍女士"
     assert page.right_header_reads == 1
+
+
+def test_job51_verify_opened_candidate_accepts_right_header_name_from_label() -> None:
+    """When row attrs are missing, the expected name can come from the left label."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "王欣睿",
+                "position": "",
+                "label": "王欣睿\n沟通职位：",
+                "headerText": "王欣睿\n沟通职位：",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": (
+                    "1\n王欣睿\n15:05\n"
+                    "您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "name": "",
+                "position": "",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["actual"]["name"] == "王欣睿"
 
 
 def test_job51_verify_opened_candidate_reports_right_header_mismatch_source() -> None:
@@ -551,7 +618,7 @@ def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
             "label": "3\nAlice AI Intern\n9:32\nhello",
             "name": "Alice",
             "position": "AI Intern",
-            "latest_message": "",
+            "latest_message": "hello",
             "unread_count": 3,
         }
     ]
@@ -711,6 +778,40 @@ def test_job51_processing_uses_guarded_identity_open_without_native_row_click(
     assert page.selected_index == 1
 
 
+def test_job51_processing_stops_when_resume_overlay_remains(monkeypatch) -> None:
+    """A stale resume overlay must stop 51job before opening the next candidate."""
+
+    page = GuardedProcessingClickPage(
+        conversations=[
+            {
+                **conversation(
+                    "AI搴旂敤寮€鍙戝疄涔犵敓",
+                    [{"sender": "other", "text": "hello"}],
+                    label="Candidate A AI搴旂敤寮€鍙戝疄涔犵敓",
+                ),
+                "id": "target-conv",
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="owner", dry_run=True)
+
+    async def stale_cleanup(page, *, phase: str):  # type: ignore[no-untyped-def]
+        _ = page, phase
+        return {"closed": 0, "remaining": ["online_resume_preview"], "actions": []}
+
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(platform_once_common, "_cleanup_job51", stale_cleanup)
+
+    summaries = asyncio.run(_process(adapter, Platform.JOB51, 1))
+
+    assert summaries[0]["action"] == "failed"
+    assert summaries[0]["stage"] == "stale_resume_overlay_not_closed"
+    assert page.guarded_identity_clicks == 0
+
+
 def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
     """The page cleanup closes stale preview/export overlays before the next row click."""
 
@@ -729,6 +830,16 @@ def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
     assert result["closed"] >= 1
     assert page.current_conversation().get("online_resume_opened") is False
     assert page.current_conversation().get("export_dialog_open") is False
+
+
+def test_job51_cleanup_resume_overlays_reports_remaining_overlay() -> None:
+    """If a resume overlay cannot be closed, processing must see it in diagnostics."""
+
+    page = StubbornResumeOverlayPage()
+
+    result = asyncio.run(cleanup_resume_overlays(page))
+
+    assert "online_resume_preview" in result["remaining"]
 
 
 def test_job51_resume_validation_and_memory_guard() -> None:
@@ -757,6 +868,39 @@ def test_job51_resume_validation_and_memory_guard() -> None:
     )
     assert first["downloaded"] is True
     assert second["duplicate"] is True
+
+
+def test_job51_resume_identity_guard_blocks_wrong_candidate_pdf() -> None:
+    """51job must not record a stale preview PDF under the current candidate."""
+
+    wrong_pdf = minimal_pdf_with_text("Wrong Candidate Applied Position: AI Intern")
+
+    result = resume_identity_guard(
+        wrong_pdf,
+        candidate_name="Current Candidate",
+        applied_position="AI Product Manager",
+    )
+
+    assert result["blocked"] is True
+    assert result["reason"] == "resume_identity_mismatch"
+
+
+def test_job51_resume_identity_guard_accepts_matching_candidate_pdf() -> None:
+    """Matching candidate text should allow the downloaded PDF to be saved."""
+
+    content = minimal_pdf_with_text("Current Candidate Applied Position: Social Media Operator")
+
+    result = save_resume_bytes(
+        content,
+        candidate_name="Current Candidate",
+        applied_position="Social Media Operator",
+        filename="51job_Wrong_Candidate_AI_Intern.pdf",
+        memory=InMemoryResumeDownloadMemory(),
+    )
+
+    assert result["ok"] is True
+    assert "Wrong_Candidate" not in str(result["filePath"])
+    assert "Current Candidate" in str(result["filePath"])
 
 
 def test_job51_request_resume_rejects_preview_only() -> None:
@@ -1386,6 +1530,24 @@ class GuardedProcessingClickPage(GuardedPreflightClickPage):
         return await super().eval_js(script, arg)
 
 
+class StubbornResumeOverlayPage:
+    """Simulates a resume preview that remains visible after cleanup attempts."""
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        _ = selector
+        return []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == actions_resume_close.OVERLAY_STATE_JS:
+            return {"remaining": ["online_resume_preview"]}
+        return {"closed": False, "reason": "close_not_found"}
+
+    async def press(self, selector: str, key: str, timeout_ms: int = 1000) -> bool:
+        _ = selector, key, timeout_ms
+        return True
+
+
 class InterceptedAttachmentPage:
     """Simulates a 51job attachment card covered by the quick-reply bar."""
 
@@ -1608,6 +1770,15 @@ def run_case(convo: dict[str, object]):
     state = asyncio.run(runner.run_current())
     assert sink.events
     return state, page
+
+
+def minimal_pdf_with_text(text: str) -> bytes:
+    import fitz  # type: ignore[import-not-found]
+
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), text)
+    return document.tobytes()
 
 
 def conversation(

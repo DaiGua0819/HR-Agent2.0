@@ -61,6 +61,13 @@ def save_resume_bytes(
     guard = resume_download_suitability_guard(candidate_name, applied_position)
     if guard.get("blocked"):
         return {"ok": False, "blocked": True, "reason": guard["reason"]}
+    identity = resume_identity_guard(
+        bytes(content),
+        candidate_name=candidate_name,
+        applied_position=applied_position,
+    )
+    if identity.get("blocked"):
+        return {"ok": False, "blocked": True, **identity}
     digest = resume_content_hash(content)
     existing = memory.find_hash(digest)
     if existing:
@@ -147,6 +154,37 @@ def resume_download_suitability_guard(
     return {"blocked": False}
 
 
+def resume_identity_guard(
+    content: bytes,
+    *,
+    candidate_name: str,
+    applied_position: str,
+) -> dict[str, object]:
+    """Verify downloaded PDF text belongs to the current 51job conversation."""
+
+    text = _extract_resume_text_preview(content)
+    if not text.strip():
+        return {"blocked": False, "reason": "text_unavailable"}
+    compact_text = _compact_text(text)
+    compact_name = _compact_text(candidate_name)
+    compact_position = _compact_text(applied_position)
+    name_ok = bool(compact_name and compact_name in compact_text)
+    position_ok = bool(compact_position and compact_position in compact_text)
+    if name_ok or position_ok:
+        return {
+            "blocked": False,
+            "nameMatched": name_ok,
+            "positionMatched": position_ok,
+        }
+    return {
+        "blocked": True,
+        "reason": "resume_identity_mismatch",
+        "candidateName": candidate_name,
+        "appliedPosition": applied_position,
+        "textPreview": text[:300],
+    }
+
+
 def _write_resume_file(
     content: bytes,
     *,
@@ -159,8 +197,7 @@ def _write_resume_file(
     directory = PROJECT_ROOT / "data" / "downloads" / "job51"
     directory.mkdir(parents=True, exist_ok=True)
     stem = _safe_filename(
-        filename
-        or f"51job_{candidate_name}_{applied_position}_{digest[:8]}.{file_type}"
+        f"51job_{candidate_name}_{applied_position}_{digest[:8]}.{file_type}"
     )
     suffix = f".{file_type}"
     if not stem.lower().endswith(suffix):
@@ -192,3 +229,19 @@ def _safe_filename(value: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     return cleaned[:120] or "resume"
+
+
+def _extract_resume_text_preview(content: bytes) -> str:
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except Exception:
+        return ""
+    try:
+        with fitz.open(stream=content, filetype="pdf") as document:
+            return "\n".join(page.get_text() for page in document[:2])
+    except Exception:
+        return ""
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()

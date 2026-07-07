@@ -142,6 +142,30 @@ CLOSE_GENERIC_BLOCKERS_JS = r"""
 """
 
 
+OVERLAY_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const remaining = [];
+  if (visible(document.querySelector("#IMResumePrint"))) {
+    remaining.push("online_resume_preview");
+  }
+  if (visible(document.querySelector(".annex-resume"))) {
+    remaining.push("annex_resume_preview");
+  }
+  if (visible(document.querySelector(".el-dialog, .el-message-box, [role='dialog']"))) {
+    remaining.push("dialog");
+  }
+  return { remaining };
+}
+"""
+
+
 async def close_resume_preview(page: BrowserPage) -> dict[str, object]:
     """关闭附件/在线简历预览层，动作后至少等待 1 秒。"""
 
@@ -159,31 +183,42 @@ async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
 
     actions: list[dict[str, object]] = []
     closed = 0
-    preview = await close_resume_preview(page)
-    actions.append({"name": "resume_preview", **preview})
-    if preview.get("closed"):
-        closed += 1
-    export = await _close_export_dialog(page)
-    actions.append({"name": "export_dialog", **export})
-    if export.get("closed"):
-        closed += 1
-    generic = await _close_generic_blocker(page)
-    actions.append({"name": "generic_blocker", **generic})
-    if generic.get("closed"):
-        closed += 1
-    try:
-        pressed = await page.press("body", "Escape", timeout_ms=1000)
-    except Exception as error:
-        escape: dict[str, object] = {
-            "closed": False,
-            "reason": "escape_error",
-            "error": str(error),
-        }
-    else:
-        await asyncio.sleep(1)
-        escape = {"closed": bool(pressed), "source": "escape"}
-    actions.append({"name": "escape", **escape})
-    return {"closed": closed, "actions": actions}
+    remaining: list[str] = []
+    for attempt in range(1, 4):
+        preview = await close_resume_preview(page)
+        actions.append({"name": "resume_preview", "attempt": attempt, **preview})
+        if preview.get("closed"):
+            closed += 1
+        export = await _close_export_dialog(page)
+        actions.append({"name": "export_dialog", "attempt": attempt, **export})
+        if export.get("closed"):
+            closed += 1
+        generic = await _close_generic_blocker(page)
+        actions.append({"name": "generic_blocker", "attempt": attempt, **generic})
+        if generic.get("closed"):
+            closed += 1
+        try:
+            pressed = await page.press("body", "Escape", timeout_ms=1000)
+        except Exception as error:
+            escape: dict[str, object] = {
+                "closed": False,
+                "reason": "escape_error",
+                "error": str(error),
+            }
+        else:
+            await asyncio.sleep(1)
+            escape = {"closed": bool(pressed), "source": "escape"}
+        actions.append({"name": "escape", "attempt": attempt, **escape})
+        state = await _overlay_state(page)
+        remaining = [
+            str(item)
+            for item in state.get("remaining", [])
+            if str(item or "").strip()
+        ]
+        actions.append({"name": "overlay_state", "attempt": attempt, **state})
+        if not remaining:
+            break
+    return {"closed": closed, "actions": actions, "remaining": remaining}
 
 
 async def _close_attachment_preview(page: BrowserPage) -> dict[str, object]:
@@ -219,3 +254,11 @@ async def _close_generic_blocker(page: BrowserPage) -> dict[str, object]:
         return {"closed": False, "reason": "generic_close_error", "error": str(error)}
     await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
+
+
+async def _overlay_state(page: BrowserPage) -> dict[str, object]:
+    try:
+        result = await page.eval_js(OVERLAY_STATE_JS)
+    except Exception as error:
+        return {"remaining": [], "error": str(error)}
+    return result if isinstance(result, dict) else {"remaining": []}

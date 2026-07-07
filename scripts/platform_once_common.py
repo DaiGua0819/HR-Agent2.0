@@ -192,7 +192,23 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             if seen.intersection(row_keys) or _skip_label(platform, label):
                 continue
             if platform == Platform.JOB51:
-                await _cleanup_job51(adapter.page, phase="before_candidate")
+                cleanup_actions_start = len(getattr(adapter.page, "reliable_actions", []))
+                cleanup = await _cleanup_job51(adapter.page, phase="before_candidate")
+                if cleanup.get("remaining"):
+                    summaries.append(
+                        _failure_summary(
+                            row_state,
+                            action="failed",
+                            stage="stale_resume_overlay_not_closed",
+                            reason="stale_resume_overlay_not_closed",
+                            reliable_actions=getattr(adapter.page, "reliable_actions", [])[
+                                cleanup_actions_start:
+                            ],
+                            extra={"cleanup": cleanup},
+                        )
+                    )
+                    seen.update(row_keys)
+                    return summaries
             row = await _find_candidate_row(adapter, platform, row_state)
             if row is None:
                 continue

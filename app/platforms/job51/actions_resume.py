@@ -29,6 +29,7 @@ from app.platforms.job51.resume_files import (
     ResumeValidation,
     resume_content_hash,
     resume_download_suitability_guard,
+    resume_identity_guard,
     save_resume_bytes,
     validate_resume_bytes,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "request_or_download_resume",
     "resume_content_hash",
     "resume_download_suitability_guard",
+    "resume_identity_guard",
     "save_resume_bytes",
     "validate_resume_bytes",
 ]

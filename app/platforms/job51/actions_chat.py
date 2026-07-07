@@ -39,6 +39,8 @@ from app.platforms.types import (
 SKIP_TERMS = ("平台推荐", "为你推荐的人才", "系统提示", "广告")
 REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 APP_DOWNLOAD_URL_PART = "app.51job.com/51job"
+_TIME_LINE_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
+_UNREAD_COUNT_PATTERN = re.compile(r"^\d+$")
 
 
 async def open_chat_page(page: BrowserPage) -> None:
@@ -380,50 +382,40 @@ async def _verify_opened_candidate_once(
     if raw.get("opened"):
         return _ensure_actual_source(raw)
     right_header = await _safe_eval_dict(page, OPENED_CANDIDATE_STATE_JS, expected)
-    if right_header.get("opened") or right_header.get("source") == "right_header":
+    if right_header.get("opened"):
         return _ensure_actual_source(right_header)
+    if right_header.get("source") == "right_header":
+        actual = right_header.get("actual") if isinstance(right_header.get("actual"), dict) else {}
+        result = _opened_candidate_result(
+            expected,
+            actual_name=str(actual.get("name") or "").strip(),
+            actual_position=str(actual.get("position") or "").strip(),
+            actual_label=str(actual.get("label") or actual.get("headerText") or "").strip(),
+            actual_source=str(actual.get("source") or "right_header").strip(),
+            chat_ready=bool(chat_ready or right_header.get("chatReady")),
+        )
+        if (
+            result.get("opened")
+            or result["actual"]["name"]
+            or result["actual"]["position"]
+            or result["actual"]["label"]
+        ):
+            return result
     context = await _safe_eval_dict(page, "job51.read_chat_context")
     if not context:
         context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
-    expected_name = str(expected.get("name") or "").strip()
-    expected_position = str(expected.get("position") or "").strip()
-    expected_label = str(expected.get("label") or "").strip()
     actual_name = str(context.get("name") or context.get("candidate_name") or "").strip()
     actual_position = str(context.get("position") or context.get("appliedPosition") or "").strip()
     actual_label = str(context.get("label") or "").strip()
     actual_source = str(context.get("source") or "chat_context").strip()
-    name_ok = bool(expected_name and actual_name and _text_matches(actual_name, expected_name))
-    name_conflict = bool(expected_name and actual_name and not name_ok)
-    position_conflict = bool(
-        expected_position
-        and actual_position
-        and not _position_matches(actual_position, expected_position)
+    return _opened_candidate_result(
+        expected,
+        actual_name=actual_name,
+        actual_position=actual_position,
+        actual_label=actual_label,
+        actual_source=actual_source,
+        chat_ready=chat_ready,
     )
-    position_ok = bool(
-        not name_conflict
-        and
-        expected_position
-        and actual_position
-        and _position_matches(actual_position, expected_position)
-    )
-    label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
-    opened = bool(
-        chat_ready
-        and (label_ok or (name_ok and not position_conflict) or (actual_name and position_ok))
-    )
-    reason = "" if opened else "candidate_identity_mismatch"
-    return {
-        "opened": opened,
-        "reason": reason,
-        "chatReady": chat_ready,
-        "expected": expected,
-        "actual": {
-            "name": actual_name,
-            "position": actual_position,
-            "label": actual_label,
-            "source": actual_source,
-        },
-    }
 
 
 async def visible_thread_summary(page: BrowserPage) -> dict[str, object]:
@@ -568,6 +560,56 @@ def _text_matches(actual: str, expected: str) -> bool:
     return bool(left and right and (left in right or right in left))
 
 
+def _opened_candidate_result(
+    expected: dict[str, object],
+    *,
+    actual_name: str,
+    actual_position: str,
+    actual_label: str,
+    actual_source: str,
+    chat_ready: bool,
+) -> dict[str, object]:
+    expected_name = str(expected.get("name") or "").strip()
+    expected_position = str(expected.get("position") or "").strip()
+    expected_label = str(expected.get("label") or "").strip()
+    expected_name_from_label = _infer_name_from_label(expected_label)
+    effective_expected_name = expected_name or expected_name_from_label
+    name_ok = bool(
+        effective_expected_name
+        and actual_name
+        and _text_matches(actual_name, effective_expected_name)
+    )
+    name_conflict = bool(effective_expected_name and actual_name and not name_ok)
+    position_conflict = bool(
+        expected_position
+        and actual_position
+        and not _position_matches(actual_position, expected_position)
+    )
+    position_ok = bool(
+        not name_conflict
+        and expected_position
+        and actual_position
+        and _position_matches(actual_position, expected_position)
+    )
+    label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
+    opened = bool(
+        chat_ready
+        and (label_ok or (name_ok and not position_conflict) or (actual_name and position_ok))
+    )
+    return {
+        "opened": opened,
+        "reason": "" if opened else "candidate_identity_mismatch",
+        "chatReady": chat_ready,
+        "expected": expected,
+        "actual": {
+            "name": actual_name,
+            "position": actual_position,
+            "label": actual_label,
+            "source": actual_source,
+        },
+    }
+
+
 def _ensure_actual_source(payload: dict[str, object]) -> dict[str, object]:
     source = str(payload.get("source") or "").strip()
     actual = payload.get("actual")
@@ -603,6 +645,38 @@ def _state_identity_key(state: dict[str, object]) -> str:
 
 def _compact_identity_text(value: object) -> str:
     return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _infer_name_from_label(label: str) -> str:
+    for line in _identity_label_lines(label):
+        if (
+            _UNREAD_COUNT_PATTERN.match(line)
+            or _TIME_LINE_PATTERN.match(line)
+            or line in {"宸叉姇", "蹇嵎鍥炲", "涓嶅尮閰?", "已投", "快捷回复", "不匹配"}
+            or line.startswith("[")
+        ):
+            continue
+        if len(line) <= 16 and not any(term in line for term in ("您好", "职位", "岗位", "公司")):
+            return line
+    return ""
+
+
+def _infer_latest_message_from_label(label: str) -> str:
+    candidates = []
+    for line in _identity_label_lines(label):
+        if (
+            _UNREAD_COUNT_PATTERN.match(line)
+            or _TIME_LINE_PATTERN.match(line)
+            or line in {"宸叉姇", "蹇嵎鍥炲", "涓嶅尮閰?", "已投", "快捷回复", "不匹配"}
+            or line.startswith("[")
+        ):
+            continue
+        candidates.append(line)
+    return candidates[-1] if len(candidates) >= 2 else ""
+
+
+def _identity_label_lines(label: str) -> list[str]:
+    return [line.strip() for line in str(label or "").splitlines() if line.strip()]
 
 
 def _failed_open_keys(page: BrowserPage) -> set[str]:
@@ -686,19 +760,25 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
         if compact_label in seen_labels:
             continue
         seen_labels.add(compact_label)
+        name = str(item.get("name") or item.get("candidateName") or "")
+        latest_message = str(
+            item.get("latest_message")
+            or item.get("latestMessage")
+            or item.get("message")
+            or ""
+        )
+        if not name:
+            name = _infer_name_from_label(label)
+        if not latest_message:
+            latest_message = _infer_latest_message_from_label(label)
         rows.append(
             {
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
                 "label": label,
-                "name": str(item.get("name") or item.get("candidateName") or ""),
+                "name": name,
                 "position": str(item.get("position") or item.get("jobName") or ""),
-                "latest_message": str(
-                    item.get("latest_message")
-                    or item.get("latestMessage")
-                    or item.get("message")
-                    or ""
-                ),
+                "latest_message": latest_message,
                 "unread_count": unread_count,
             }
         )
