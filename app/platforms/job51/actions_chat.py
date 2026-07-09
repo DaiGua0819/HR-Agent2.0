@@ -41,6 +41,20 @@ REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 APP_DOWNLOAD_URL_PART = "app.51job.com/51job"
 _TIME_LINE_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
 _UNREAD_COUNT_PATTERN = re.compile(r"^\d+$")
+_ANONYMOUS_NAME_SUFFIXES = ("女士", "先生", "同学", "小姐")
+_RESUME_EVIDENCE_TERMS = ("简历", "在线简历", "附件简历")
+_NON_CANDIDATE_HEADER_NAMES = {
+    "留学",
+    "双一流",
+    "985",
+    "211",
+    "统招",
+    "非统招",
+    "海外院校",
+    "全职",
+    "兼职",
+    "实习",
+}
 
 
 async def open_chat_page(page: BrowserPage) -> None:
@@ -192,6 +206,7 @@ async def click_thread_by_state(
     if expected:
         identity_click = await _click_thread_by_identity(page, state, expected)
         if identity_click.get("clicked"):
+            _attach_identity_click_evidence(expected, identity_click)
             opened = await verify_opened_candidate(
                 page,
                 expected,
@@ -220,6 +235,8 @@ async def click_thread_by_state(
             )
             if primary.get("ok"):
                 return primary
+        if identity_click:
+            return identity_click
     payload = {
         "id": str(state.get("id") or "").lstrip("_"),
         "label": str(state.get("label") or "").strip(),
@@ -293,6 +310,23 @@ async def _click_thread_by_identity(
     if not result:
         result = await _safe_eval_dict(page, CLICK_THREAD_BY_IDENTITY_JS, payload)
     return result or {"clicked": False, "reason": "thread_identity_click_failed"}
+
+
+def _attach_identity_click_evidence(
+    expected: dict[str, object],
+    identity_click: dict[str, object],
+) -> None:
+    if not identity_click.get("clicked"):
+        return
+    expected["_identity_click"] = {
+        "clicked": True,
+        "source": str(identity_click.get("source") or ""),
+        "score": _safe_int(identity_click.get("score")),
+        "label": str(identity_click.get("label") or ""),
+        "name": str(identity_click.get("name") or ""),
+        "position": str(identity_click.get("position") or ""),
+        "latestMessage": str(identity_click.get("latestMessage") or ""),
+    }
 
 
 async def install_app_download_blocker(page: BrowserPage) -> dict[str, object]:
@@ -379,26 +413,25 @@ async def _verify_opened_candidate_once(
     chat_ready: bool,
 ) -> dict[str, object]:
     raw = await _safe_eval_dict(page, "job51.opened_candidate_state", expected)
-    if raw.get("opened"):
-        return _ensure_actual_source(raw)
+    raw_result = _opened_candidate_result_from_payload(raw, expected, chat_ready=chat_ready)
+    if raw_result.get("opened"):
+        return raw_result
     right_header = await _safe_eval_dict(page, OPENED_CANDIDATE_STATE_JS, expected)
-    if right_header.get("opened"):
-        return _ensure_actual_source(right_header)
+    right_header_result = _opened_candidate_result_from_payload(
+        right_header,
+        expected,
+        chat_ready=chat_ready,
+    )
+    if right_header_result.get("opened"):
+        return right_header_result
     if right_header.get("source") == "right_header":
-        actual = right_header.get("actual") if isinstance(right_header.get("actual"), dict) else {}
-        result = _opened_candidate_result(
-            expected,
-            actual_name=str(actual.get("name") or "").strip(),
-            actual_position=str(actual.get("position") or "").strip(),
-            actual_label=str(actual.get("label") or actual.get("headerText") or "").strip(),
-            actual_source=str(actual.get("source") or "right_header").strip(),
-            chat_ready=bool(chat_ready or right_header.get("chatReady")),
-        )
+        result = right_header_result
+        actual = result.get("actual") if isinstance(result.get("actual"), dict) else {}
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), list) else []
         if (
             result.get("opened")
-            or result["actual"]["name"]
-            or result["actual"]["position"]
-            or result["actual"]["label"]
+            or actual.get("name")
+            or "position_conflict" in evidence
         ):
             return result
     context = await _safe_eval_dict(page, "job51.read_chat_context")
@@ -551,13 +584,66 @@ def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
 def _position_matches(actual: str, expected: str) -> bool:
     left = "".join(actual.split())
     right = "".join(expected.split())
-    return bool(left and right and (left in right or right in left))
+    return bool(
+        left
+        and right
+        and (
+            left in right
+            or right in left
+            or _ellipsis_position_match(left, right)
+            or _ellipsis_position_match(right, left)
+        )
+    )
+
+
+def _ellipsis_position_match(pattern: str, value: str) -> bool:
+    if "..." not in pattern and "…" not in pattern:
+        return False
+    parts = [item for item in pattern.replace("…", "...").split("...") if item]
+    if not parts:
+        return False
+    if len(parts) == 1:
+        part = parts[0]
+        return len(part) >= 4 and part in value
+    cursor = 0
+    for part in parts:
+        index = value.find(part, cursor)
+        if index < 0:
+            return False
+        cursor = index + len(part)
+    return True
 
 
 def _text_matches(actual: str, expected: str) -> bool:
     left = "".join(actual.split())
     right = "".join(expected.split())
     return bool(left and right and (left in right or right in left))
+
+
+def _opened_candidate_result_from_payload(
+    payload: dict[str, object],
+    expected: dict[str, object],
+    *,
+    chat_ready: bool,
+) -> dict[str, object]:
+    if not payload:
+        return {}
+    actual = payload.get("actual")
+    if isinstance(actual, dict):
+        return _opened_candidate_result(
+            expected,
+            actual_name=str(actual.get("name") or "").strip(),
+            actual_position=str(actual.get("position") or "").strip(),
+            actual_label=str(actual.get("label") or actual.get("headerText") or "").strip(),
+            actual_source=str(actual.get("source") or payload.get("source") or "").strip(),
+            chat_ready=bool(chat_ready or payload.get("chatReady")),
+        )
+    if payload.get("opened"):
+        result = _ensure_actual_source(payload)
+        result.setdefault("matchType", "exact_name_match")
+        result.setdefault("evidence", ["legacy_opened_without_actual"])
+        return result
+    return {}
 
 
 def _opened_candidate_result(
@@ -569,38 +655,28 @@ def _opened_candidate_result(
     actual_source: str,
     chat_ready: bool,
 ) -> dict[str, object]:
-    expected_name = str(expected.get("name") or "").strip()
-    expected_position = str(expected.get("position") or "").strip()
-    expected_label = str(expected.get("label") or "").strip()
-    expected_name_from_label = _infer_name_from_label(expected_label)
-    effective_expected_name = expected_name or expected_name_from_label
-    name_ok = bool(
-        effective_expected_name
-        and actual_name
-        and _text_matches(actual_name, effective_expected_name)
+    actual_name = _recover_resume_card_name(
+        expected,
+        actual_name=actual_name,
+        actual_label=actual_label,
     )
-    name_conflict = bool(effective_expected_name and actual_name and not name_ok)
-    position_conflict = bool(
-        expected_position
-        and actual_position
-        and not _position_matches(actual_position, expected_position)
+    if _is_non_candidate_header_name(actual_name, actual_label):
+        actual_name = ""
+    match = _match_job51_opened_identity(
+        expected,
+        actual_name=actual_name,
+        actual_position=actual_position,
+        actual_label=actual_label,
     )
-    position_ok = bool(
-        not name_conflict
-        and expected_position
-        and actual_position
-        and _position_matches(actual_position, expected_position)
-    )
-    label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
-    opened = bool(
-        chat_ready
-        and (label_ok or (name_ok and not position_conflict) or (actual_name and position_ok))
-    )
+    opened = bool(chat_ready and match["opened"])
     return {
         "opened": opened,
         "reason": "" if opened else "candidate_identity_mismatch",
         "chatReady": chat_ready,
+        "source": actual_source,
         "expected": expected,
+        "matchType": match["matchType"],
+        "evidence": match["evidence"],
         "actual": {
             "name": actual_name,
             "position": actual_position,
@@ -608,6 +684,221 @@ def _opened_candidate_result(
             "source": actual_source,
         },
     }
+
+
+def _match_job51_opened_identity(
+    expected: dict[str, object],
+    *,
+    actual_name: str,
+    actual_position: str,
+    actual_label: str,
+) -> dict[str, object]:
+    expected_name = str(expected.get("name") or "").strip()
+    expected_position = str(expected.get("position") or "").strip()
+    expected_label = str(expected.get("label") or "").strip()
+    expected_latest = _expected_latest_message(expected, expected_label)
+    effective_expected_name = expected_name or _infer_name_from_label(expected_label)
+    evidence: list[str] = []
+    position_ok = bool(
+        expected_position
+        and actual_position
+        and _position_matches(actual_position, expected_position)
+    )
+    position_conflict = bool(
+        expected_position
+        and actual_position
+        and not _position_matches(actual_position, expected_position)
+    )
+    if position_conflict:
+        return {
+            "opened": False,
+            "matchType": "identity_mismatch",
+            "evidence": ["position_conflict"],
+        }
+    if position_ok:
+        evidence.append("position_match")
+    label_ok = bool(expected_label and actual_label and _text_matches(actual_label, expected_label))
+    name_ok = bool(
+        effective_expected_name
+        and actual_name
+        and _compact_identity_text(actual_name) == _compact_identity_text(effective_expected_name)
+    )
+    resume_card_name_ok = _resume_card_name_matches(actual_label, effective_expected_name)
+    if label_ok or name_ok:
+        if label_ok:
+            evidence.append("label_match")
+        if name_ok:
+            evidence.append("exact_name_match")
+        if resume_card_name_ok:
+            evidence.append("resume_card_name_match")
+        return {"opened": True, "matchType": "exact_name_match", "evidence": evidence}
+    if (
+        _anonymous_name_matches(effective_expected_name, actual_name)
+        and position_ok
+        and _has_latest_message_evidence(actual_label, expected_latest)
+    ):
+        evidence.extend(
+            ["anonymous_surname_match", _latest_evidence_type(actual_label, expected_latest)]
+        )
+        return {"opened": True, "matchType": "anonymous_name_resolved", "evidence": evidence}
+    if (
+        _anonymous_name_matches(effective_expected_name, actual_name)
+        and position_ok
+        and _has_confirmed_identity_click(
+            expected,
+            expected_label=expected_label,
+            expected_name=effective_expected_name,
+            expected_position=expected_position,
+        )
+    ):
+        evidence.extend(["anonymous_surname_match", "confirmed_identity_click"])
+        return {"opened": True, "matchType": "anonymous_name_resolved", "evidence": evidence}
+    if _anonymous_name_matches(actual_name, effective_expected_name) and position_ok:
+        evidence.extend(["anonymous_surname_match", "right_header_anonymous"])
+        return {"opened": True, "matchType": "anonymous_name_resolved", "evidence": evidence}
+    if position_ok:
+        if _anonymous_name_matches(effective_expected_name, actual_name):
+            evidence.append("anonymous_surname_match")
+        elif effective_expected_name and actual_name:
+            evidence.append("name_conflict")
+            return {"opened": False, "matchType": "identity_mismatch", "evidence": evidence}
+        return {"opened": False, "matchType": "position_only_match", "evidence": evidence}
+    return {"opened": False, "matchType": "identity_mismatch", "evidence": evidence}
+
+
+def _recover_resume_card_name(
+    expected: dict[str, object],
+    *,
+    actual_name: str,
+    actual_label: str,
+) -> str:
+    expected_name = str(expected.get("name") or "").strip()
+    expected_position = str(expected.get("position") or "").strip()
+    if not _resume_card_name_matches(actual_label, expected_name):
+        return actual_name
+    if (
+        not actual_name.strip()
+        or (expected_position and _position_matches(actual_name, expected_position))
+    ):
+        return expected_name
+    return actual_name
+
+
+def _resume_card_name_matches(actual_label: str, expected_name: str) -> bool:
+    expected_compact = _compact_identity_text(expected_name)
+    if not expected_compact:
+        return False
+    for line in _identity_label_lines(actual_label):
+        match = re.match(r"^(.{1,16})的简历$", line)
+        if match and _compact_identity_text(match.group(1)) == expected_compact:
+            return True
+    return False
+
+
+def _is_non_candidate_header_name(actual_name: str, actual_label: str) -> bool:
+    name = str(actual_name or "").strip()
+    if name not in _NON_CANDIDATE_HEADER_NAMES:
+        return False
+    label = str(actual_label or "")
+    return any(
+        term in label
+        for term in ("沟通职位", "求职意向", "暂未填写工作经历", "暂未填写教育经历")
+    )
+
+
+def _anonymous_name_matches(expected_name: str, actual_name: str) -> bool:
+    expected_compact = _compact_identity_text(expected_name)
+    actual_compact = _compact_identity_text(actual_name)
+    if not expected_compact or not actual_compact or expected_compact == actual_compact:
+        return False
+    suffix = next(
+        (
+            _compact_identity_text(item)
+            for item in _ANONYMOUS_NAME_SUFFIXES
+            if expected_compact.endswith(_compact_identity_text(item))
+        ),
+        "",
+    )
+    if not suffix:
+        return False
+    surname = expected_compact[: -len(suffix)]
+    return bool(
+        surname
+        and len(surname) <= 2
+        and actual_compact.startswith(surname)
+        and len(actual_compact) > len(surname)
+    )
+
+
+def _has_confirmed_identity_click(
+    expected: dict[str, object],
+    *,
+    expected_label: str,
+    expected_name: str,
+    expected_position: str,
+) -> bool:
+    click = expected.get("_identity_click")
+    if not isinstance(click, dict) or not click.get("clicked"):
+        return False
+    if str(click.get("source") or "") != "identity_dom_click":
+        return False
+    if _safe_int(click.get("score")) < 100:
+        return False
+    click_position = str(click.get("position") or "").strip()
+    if (
+        expected_position
+        and click_position
+        and not _position_matches(click_position, expected_position)
+    ):
+        return False
+    click_label = str(click.get("label") or "").strip()
+    if expected_label and click_label and _text_matches(click_label, expected_label):
+        return True
+    click_name = str(click.get("name") or "").strip()
+    if (
+        expected_name
+        and click_name
+        and _compact_identity_text(click_name) == _compact_identity_text(expected_name)
+    ):
+        return True
+    click_latest = str(click.get("latestMessage") or click.get("latest_message") or "").strip()
+    expected_latest = _expected_latest_message(expected, expected_label)
+    return bool(click_latest and expected_latest and _text_matches(click_latest, expected_latest))
+
+
+def _expected_latest_message(expected: dict[str, object], expected_label: str) -> str:
+    return str(
+        expected.get("latest_message")
+        or expected.get("latestMessage")
+        or expected.get("message")
+        or _infer_latest_message_from_label(expected_label)
+        or ""
+    ).strip()
+
+
+def _has_latest_message_evidence(actual_label: str, expected_latest: str) -> bool:
+    label = _message_evidence_text(actual_label)
+    latest = _message_evidence_text(expected_latest)
+    if label and latest and (latest in label or label in latest):
+        return True
+    return _latest_evidence_type(actual_label, expected_latest) == "resume_evidence"
+
+
+def _latest_evidence_type(actual_label: str, expected_latest: str) -> str:
+    label = _message_evidence_text(actual_label)
+    latest = _message_evidence_text(expected_latest)
+    if label and latest and (latest in label or label in latest):
+        return "latest_message_match"
+    if "简历" in latest and any(
+        _compact_identity_text(item) in label for item in _RESUME_EVIDENCE_TERMS
+    ):
+        return "resume_evidence"
+    return "latest_message_missing"
+
+
+def _message_evidence_text(value: str) -> str:
+    text = re.sub(r"^\s*\[[^\]]+\]\s*", "", str(value or ""))
+    return _compact_identity_text(text)
 
 
 def _ensure_actual_source(payload: dict[str, object]) -> dict[str, object]:

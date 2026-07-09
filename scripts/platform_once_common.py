@@ -32,7 +32,7 @@ from app.platforms.zhilian import selectors as zhilian_selectors
 from app.platforms.zhilian.adapter import ZhilianAdapter
 from app.settings import load_settings
 
-PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 90
+PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 180
 JOB51_CLEANUP_TIMEOUT_SECONDS = 12
 
 
@@ -238,6 +238,9 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                         reliable_actions=getattr(adapter.page, "reliable_actions", [])[
                             before_actions:
                         ],
+                        extra=_job51_open_failure_extra(click)
+                        if platform == Platform.JOB51
+                        else None,
                     )
                 )
                 seen.update(row_keys)
@@ -328,9 +331,16 @@ async def _ensure_job51_thread_opened(
         adapter.page,
         timeout_ms=2500,
     )
-    opened = await job51_chat.verify_opened_candidate(adapter.page, expected, chat_ready=ready)
+    initial_opened = await job51_chat.verify_opened_candidate(
+        adapter.page,
+        expected,
+        chat_ready=ready,
+        timeout_ms=0,
+        interval_ms=0,
+    )
+    opened = initial_opened
     if opened.get("opened"):
-        return {**click, "ok": True, "opened": opened}
+        return {**click, "ok": True, "expected": expected, "opened": opened}
     fallback = await job51_chat.click_thread_by_state(
         adapter.page,
         row_state,
@@ -339,22 +349,72 @@ async def _ensure_job51_thread_opened(
     if fallback.get("clicked"):
         await asyncio.sleep(1)
         ready = await job51_chat.wait_chat_ready(adapter.page, timeout_ms=6500)
-        opened = await job51_chat.verify_opened_candidate(adapter.page, expected, chat_ready=ready)
+        opened = await job51_chat.verify_opened_candidate(
+            adapter.page,
+            expected,
+            chat_ready=ready,
+            timeout_ms=8000,
+            interval_ms=200,
+        )
         if opened.get("opened"):
             return {
                 **click,
                 "ok": True,
+                "expected": expected,
+                "initialOpened": initial_opened,
                 "fallback": fallback,
                 "opened": opened,
                 "reason": "",
             }
+    retry_fallback: dict[str, Any] = {}
+    if fallback.get("clicked") and _should_retry_job51_open(opened):
+        retry_fallback = await job51_chat.click_thread_by_state(
+            adapter.page,
+            row_state,
+            expected=expected,
+        )
+        if retry_fallback.get("clicked"):
+            await asyncio.sleep(1)
+            ready = await job51_chat.wait_chat_ready(adapter.page, timeout_ms=6500)
+            opened = await job51_chat.verify_opened_candidate(
+                adapter.page,
+                expected,
+                chat_ready=ready,
+                timeout_ms=8000,
+                interval_ms=200,
+            )
+            if opened.get("opened"):
+                return {
+                    **click,
+                    "ok": True,
+                    "expected": expected,
+                    "initialOpened": initial_opened,
+                    "fallback": fallback,
+                    "retryFallback": retry_fallback,
+                    "opened": opened,
+                    "reason": "",
+                }
     return {
         **click,
         "ok": False,
         "reason": str(opened.get("reason") or fallback.get("reason") or "open_not_verified"),
+        "expected": expected,
+        "initialOpened": initial_opened,
         "opened": opened,
         "fallback": fallback,
+        "retryFallback": retry_fallback,
     }
+
+
+def _should_retry_job51_open(opened: dict[str, object]) -> bool:
+    if opened.get("opened"):
+        return False
+    return str(opened.get("reason") or "") == "candidate_identity_mismatch"
+
+
+def _job51_open_failure_extra(click: dict[str, Any]) -> dict[str, Any]:
+    keys = ("expected", "initialOpened", "opened", "fallback", "retryFallback")
+    return {key: click[key] for key in keys if key in click}
 
 
 async def _process_zhilian(

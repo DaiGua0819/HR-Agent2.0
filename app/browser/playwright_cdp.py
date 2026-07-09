@@ -336,10 +336,14 @@ class PlaywrightCDPPage:
                 dialog = self.page.locator(".el-dialog").filter(has_text="保存到本地").last
                 pdf = dialog.locator("button").filter(has_text="Pdf").first
                 if await pdf.count():
-                    await pdf.click(timeout=3000)
-                    clicked["pdfSelected"] = True
+                    try:
+                        await pdf.click(timeout=8000)
+                        clicked["pdfSelected"] = True
+                    except Exception as error:
+                        clicked["pdfSelected"] = False
+                        clicked["pdfSelectError"] = str(error)
                 confirm = dialog.locator("button.el-button--primary").filter(has_text="确定").last
-                await confirm.click(timeout=5000)
+                await confirm.click(timeout=10000)
                 clicked["confirmed"] = True
             download = await download_info.value
             path = await download.path()

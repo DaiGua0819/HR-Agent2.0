@@ -365,6 +365,510 @@ def test_job51_verify_opened_candidate_reports_right_header_mismatch_source() ->
     assert opened["actual"]["name"] == "田杰"
 
 
+def test_job51_verify_opened_candidate_rejects_position_only_match_without_name() -> None:
+    """Same-position rows are unsafe unless the right header confirms the candidate name."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "",
+                "position": "AI PM",
+                "label": "沟通职位：AI PM",
+                "headerText": "沟通职位：AI PM",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {"label": "Target Candidate\nAI PM", "name": "Target Candidate", "position": "AI PM"},
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["reason"] == "candidate_identity_mismatch"
+
+
+def test_job51_verify_opened_candidate_uses_context_when_header_has_only_position() -> None:
+    """51job detail panes may expose position only; context can confirm the selected name."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "",
+                "position": "AI 产品经理",
+                "label": "暂未填写工作经历\n沟通职位：\nAI 产品经理",
+                "headerText": "暂未填写工作经历\n沟通职位：\nAI 产品经理",
+                "source": "right_header",
+            },
+        },
+        fallback_context={
+            "name": "冯先生",
+            "position": "AI 产品经理",
+            "label": "冯先生\n男 | 24岁 | 硕士\n沟通职位：\nAI 产品经理",
+            "source": "right_header",
+        },
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": (
+                    "冯先生 AI 产品经理\n"
+                    "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "name": "冯先生",
+                "position": "AI 产品经理",
+                "latest_message": (
+                    "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["actual"]["name"] == "冯先生"
+    assert opened["matchType"] == "exact_name_match"
+    assert page.fallback_reads == 1
+
+
+def test_job51_verify_opened_candidate_ignores_resume_detail_badges_as_name() -> None:
+    """51job resume details may expose education badges, not the candidate name."""
+
+    for badge in ("留学", "双一流"):
+        page = RightHeaderIdentityPage(
+            right_header={
+                "opened": False,
+                "reason": "candidate_identity_mismatch",
+                "source": "right_header",
+                "chatReady": True,
+                "actual": {
+                    "name": badge,
+                    "position": "B端社交媒体运营",
+                    "label": (
+                        "暂未填写工作经历\n"
+                        "2021.04 - 2026.03\n"
+                        "京都精华大学\n"
+                        "|本科\n"
+                        "|雕塑\n"
+                        f"{badge}\n"
+                        "沟通职位：\n"
+                        "B端社交媒体运营\n"
+                        "求职意向：\n"
+                        "日语老师"
+                    ),
+                    "headerText": (
+                        "暂未填写工作经历\n"
+                        "2021.04 - 2026.03\n"
+                        "京都精华大学\n"
+                        "|本科\n"
+                        "|雕塑\n"
+                        f"{badge}\n"
+                        "沟通职位：\n"
+                        "B端社交媒体运营\n"
+                        "求职意向：\n"
+                        "日语老师"
+                    ),
+                    "source": "right_header",
+                },
+            },
+            fallback_context={
+                "name": "刘先生",
+                "position": "B端社交媒体运营",
+                "label": (
+                    "刘先生\n"
+                    "沟通职位：B端社交媒体运营\n"
+                    "[新招呼] 你好，简历已投递，期待回复~"
+                ),
+                "source": "left_selected_row",
+            },
+        )
+
+        opened = asyncio.run(
+            verify_opened_candidate(
+                page,
+                {
+                    "label": (
+                        "3\n刘先生 B端社交媒体运营\n07/02\n"
+                        "[新招呼] 你好，简历已投递，期待回复~"
+                    ),
+                    "name": "刘先生",
+                    "position": "B端社交媒体运营",
+                    "latest_message": "[新招呼] 你好，简历已投递，期待回复~",
+                },
+                chat_ready=True,
+                timeout_ms=0,
+                interval_ms=0,
+            )
+        )
+
+        assert opened["opened"] is True
+        assert opened["actual"]["name"] == "刘先生"
+        assert opened["actual"]["source"] == "left_selected_row"
+        assert page.fallback_reads == 1
+
+
+def test_job51_verify_opened_candidate_accepts_anonymous_name_with_message_evidence() -> None:
+    """51job anonymous left-list names can resolve to right-header real names safely."""
+
+    latest = "对方向你发送了简历"
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "王娜娜",
+                "position": "国际业务管培生",
+                "label": "王娜娜\n沟通职位：国际业务管培生\n在线简历\n附件简历\n对方向你发送了简历",
+                "headerText": (
+                    "王娜娜\n沟通职位：国际业务管培生\n在线简历\n附件简历\n对方向你发送了简历"
+                ),
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": f"3\n王女士 国际业务管培生\n17:57\n[新招呼] {latest}",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": f"[新招呼] {latest}",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["matchType"] == "anonymous_name_resolved"
+    assert "latest_message_match" in opened["evidence"] or "resume_evidence" in opened["evidence"]
+
+
+def test_job51_verify_opened_candidate_accepts_right_header_anonymous_name() -> None:
+    """51job right headers may hide a real left-list name as same-surname anonymous title."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "田先生",
+                "position": "AI 产品经理",
+                "label": "田先生\n沟通职位：\nAI 产品经理\n求职意向：\nAI产品经理",
+                "headerText": "田先生\n沟通职位：\nAI 产品经理\n求职意向：\nAI产品经理",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": (
+                    "1\n田治国 AI 产品经理\n11:37\n[新招呼] "
+                    "您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "name": "田治国",
+                "position": "AI 产品经理",
+                "latest_message": (
+                    "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["matchType"] == "anonymous_name_resolved"
+    assert "right_header_anonymous" in opened["evidence"]
+
+
+def test_job51_verify_opened_candidate_rejects_anonymous_name_without_message_evidence() -> None:
+    """Same surname and same position are not enough for anonymous 51job rows."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "王娜娜",
+                "position": "国际业务管培生",
+                "label": "王娜娜\n沟通职位：国际业务管培生\n英语翻译\n6-7千/月",
+                "headerText": "王娜娜\n沟通职位：国际业务管培生\n英语翻译\n6-7千/月",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "3\n王女士 国际业务管培生\n17:57\n[新招呼] 对方向你发送了简历",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": "[新招呼] 对方向你发送了简历",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["matchType"] == "position_only_match"
+
+
+def test_job51_verify_opened_candidate_accepts_anonymous_name_after_confirmed_click() -> None:
+    """A high-confidence target-row click is evidence for anonymous left-list names."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "李泽文",
+                "position": "B端社交媒体运营",
+                "label": (
+                    "李泽文\n男 | 27岁 | 暂无工作经验 | 硕士 | 国外\n"
+                    "沟通职位：\nB端社交媒体运营\n求职意向：\n新媒体运营"
+                ),
+                "headerText": (
+                    "李泽文\n男 | 27岁 | 暂无工作经验 | 硕士 | 国外\n"
+                    "沟通职位：\nB端社交媒体运营\n求职意向：\n新媒体运营"
+                ),
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": (
+                    "3\n李先生 B端社交媒体运营\n07/01\n"
+                    "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "name": "李先生",
+                "position": "B端社交媒体运营",
+                "latest_message": (
+                    "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                ),
+                "_identity_click": {
+                    "clicked": True,
+                    "source": "identity_dom_click",
+                    "score": 185,
+                    "label": (
+                        "3\n李先生 B端社交媒体运营\n07/01\n"
+                        "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                    ),
+                    "name": "李先生",
+                    "position": "B端社交媒体运营",
+                    "latestMessage": (
+                        "[新招呼] 您好，我对贵公司的这个职位很感兴趣，希望可以进一步沟通。"
+                    ),
+                },
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["matchType"] == "anonymous_name_resolved"
+    assert "confirmed_identity_click" in opened["evidence"]
+
+
+def test_job51_verify_opened_candidate_rejects_anonymous_name_with_only_surname() -> None:
+    """Anonymous left-list names need a full same-surname right-header name."""
+
+    latest = "对方向你发送了简历"
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "王",
+                "position": "国际业务管培生",
+                "label": f"王\n沟通职位：国际业务管培生\n{latest}",
+                "headerText": f"王\n沟通职位：国际业务管培生\n{latest}",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": f"王女士\n国际业务管培生\n[新招呼] {latest}",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": f"[新招呼] {latest}",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["matchType"] == "identity_mismatch"
+
+
+def test_job51_verify_opened_candidate_rejects_same_name_with_different_position() -> None:
+    """A same display name is unsafe when the right-header position is different."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "王女士",
+                "position": "B端社交媒体运营",
+                "label": "王女士\n沟通职位：B端社交媒体运营",
+                "headerText": "王女士\n沟通职位：B端社交媒体运营",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "3\n王女士 国际业务管培生\n17:57\n[新招呼] 对方向你发送了简历",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": "[新招呼] 对方向你发送了简历",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["matchType"] == "identity_mismatch"
+
+
+def test_job51_verify_opened_candidate_rejects_city_as_name() -> None:
+    """A city parsed as the right-header name must not pass identity verification."""
+
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "上海",
+                "position": "国际业务管培生",
+                "label": "沟通职位：国际业务管培生\n求职意向：6000-7000/月\n上海\n王娜娜",
+                "headerText": "沟通职位：国际业务管培生\n求职意向：6000-7000/月\n上海\n王娜娜",
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "3\n王女士 国际业务管培生\n17:57\n[新招呼] 对方向你发送了简历",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": "[新招呼] 对方向你发送了简历",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is False
+    assert opened["matchType"] == "identity_mismatch"
+
+
+def test_job51_opened_candidate_state_ignores_resume_card_status_as_name() -> None:
+    """The DOM identity script must not treat chat-card status text as a name."""
+
+    script = job51_dom_scripts.OPENED_CANDIDATE_STATE_JS
+
+    assert "对方已投递" in script
+    assert "暂未填写工作经历" in script
+    assert "拒绝" in script
+    assert "同意" in script
+    assert "查看更多" in script
+    assert "对方撤回了一条消息" in script
+    assert "已读" in script
+    assert "可提升求职者" in script
+    assert "已邀请对方投递" in script
+    assert "的简历" in script
+    assert "parts[index + 1]" in script
+    assert "readHeaderName(clean(text(el)).split" in script
+
+
+def test_job51_read_chat_context_prefers_selected_row_over_resume_detail_name() -> None:
+    """Chat context should not let resume detail school/work lines override selected row names."""
+
+    script = job51_dom_scripts.READ_CHAT_CONTEXT_JS
+
+    assert "暂未填写工作经历" in script
+    assert "查看更多" in script
+    assert "对方撤回了一条消息" in script
+    assert "已读" in script
+    assert "可提升求职者" in script
+    assert "已邀请对方投递" in script
+    assert "const name = selectedName || rightHeaderName" in script
+
+
 def test_job51_verify_opened_candidate_reads_first_header_line_before_talent_radar() -> None:
     """The right header first line is the candidate name; 人才罗盘 is not a name."""
 
@@ -387,6 +891,86 @@ def test_job51_verify_opened_candidate_reads_first_header_line_before_talent_rad
     assert opened["opened"] is True
     assert opened["actual"]["name"] == "姚亚回"
     assert opened["actual"]["source"] == "right_header"
+
+
+def test_job51_verify_opened_candidate_accepts_ellipsis_position() -> None:
+    """51job 左侧岗位截断时，右侧全称岗位不应被判定为岗位冲突。"""
+
+    page = TalentRadarRightHeaderPage()
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "姚亚回 投资交易策略...与市场情绪方向）",
+                "name": "姚亚回",
+                "position": "投资交易策略...与市场情绪方向）",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["matchType"] == "exact_name_match"
+    assert "position_match" in opened["evidence"]
+
+
+def test_job51_verify_opened_candidate_recovers_name_from_resume_card_label() -> None:
+    """51job may expose a chat resume card where the first name-like line is the job title."""
+
+    label = "\n".join(
+        [
+            "06-24 11:12",
+            "您好，我是现大一的学生，希望能得到贵公司的实习机会",
+            "07-05 16:57",
+            "国际业务管培生",
+            "6,000-10,000/月",
+            "不限城市 | 无需工作经验 | 本科 | 英语·读写熟练",
+            "浙江长安仁恒科技股份有限公司上海",
+            "对方已投递",
+            "劳嘉铃的简历",
+            "您好，这是我的简历，请查收~",
+            "在线简历",
+        ]
+    )
+    page = RightHeaderIdentityPage(
+        right_header={
+            "opened": False,
+            "reason": "candidate_identity_mismatch",
+            "source": "right_header",
+            "chatReady": True,
+            "actual": {
+                "name": "国际业务管培生",
+                "position": "",
+                "label": label,
+                "headerText": label,
+                "source": "right_header",
+            },
+        },
+        fallback_context={},
+    )
+
+    opened = asyncio.run(
+        verify_opened_candidate(
+            page,
+            {
+                "label": "3\n劳嘉铃 国际业务管培生\n07/05\n[新招呼] 对方向你发送了简历",
+                "name": "劳嘉铃",
+                "position": "国际业务管培生",
+                "latest_message": "[新招呼] 对方向你发送了简历",
+            },
+            chat_ready=True,
+            timeout_ms=0,
+            interval_ms=0,
+        )
+    )
+
+    assert opened["opened"] is True
+    assert opened["actual"]["name"] == "劳嘉铃"
+    assert opened["matchType"] == "exact_name_match"
+    assert "resume_card_name_match" in opened["evidence"]
 
 
 def test_job51_read_chat_context_script_prefers_right_header_over_first_left_row() -> None:
@@ -492,6 +1076,49 @@ def test_job51_click_thread_by_state_relocates_by_identity_when_index_is_stale()
     assert page.selected_index == 1
 
 
+def test_job51_click_thread_by_state_rejects_same_name_different_position() -> None:
+    """Identity fallback must not click a same-name row from another job."""
+
+    page = FakePage(
+        conversations=[
+            {
+                "id": "wrong-job-row",
+                "name": "王女士",
+                "position": "B端社交媒体运营",
+                "label": "王女士 B端社交媒体运营\n您好，我对贵公司的这个职位很感兴趣",
+                "latest_message": "您好，我对贵公司的这个职位很感兴趣",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "您好，我对贵公司的这个职位很感兴趣"}],
+            }
+        ]
+    )
+
+    result = asyncio.run(
+        click_thread_by_state(
+            page,
+            {
+                "index": 0,
+                "id": "",
+                "label": "王女士\n国际业务管培生\n对方向你发送了简历",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": "对方向你发送了简历",
+            },
+            expected={
+                "id": "",
+                "label": "王女士\n国际业务管培生\n对方向你发送了简历",
+                "name": "王女士",
+                "position": "国际业务管培生",
+                "latest_message": "对方向你发送了简历",
+            },
+        )
+    )
+
+    assert result["clicked"] is False
+    assert result["reason"] in {"thread_identity_not_found", "thread_identity_low_confidence"}
+    assert page.selected_index in {None, 0}
+
+
 def test_job51_once_runner_fallback_passes_expected_identity(monkeypatch) -> None:
     """The terminal once runner must use identity fallback, not stale row indexes."""
 
@@ -582,6 +1209,194 @@ def test_job51_once_runner_fallback_passes_expected_identity(monkeypatch) -> Non
     }
 
 
+def test_job51_process_failure_summary_keeps_open_diagnostics(monkeypatch) -> None:
+    """Open failures must include expected/right-header/fallback diagnostics in logs."""
+
+    class Adapter:
+        page = type("Page", (), {"reliable_actions": []})()
+
+    class Row:
+        async def text(self) -> str:
+            return "Target Candidate\nAI PM\nhello"
+
+    row_state = {
+        "index": 0,
+        "id": "target-row",
+        "label": "Target Candidate\nAI PM\nhello",
+        "name": "Target Candidate",
+        "position": "AI PM",
+        "latest_message": "hello",
+    }
+    expected = {
+        "id": "target-row",
+        "label": "Target Candidate\nAI PM\nhello",
+        "name": "Target Candidate",
+        "position": "AI PM",
+        "latest_message": "hello",
+    }
+    opened = {
+        "opened": False,
+        "reason": "candidate_identity_mismatch",
+        "expected": expected,
+        "actual": {
+            "name": "Old Candidate",
+            "position": "AI PM",
+            "label": "Old Candidate AI PM",
+            "source": "right_header",
+        },
+    }
+    fallback = {
+        "clicked": True,
+        "source": "identity_dom_click",
+        "index": 4,
+        "score": 102,
+        "label": "Target Candidate\nAI PM\nhello",
+    }
+
+    async def fake_cleanup(page, *, phase: str):  # type: ignore[no-untyped-def]
+        _ = page, phase
+        return {"remaining": []}
+
+    async def fake_candidate_rows(adapter, platform):  # type: ignore[no-untyped-def]
+        _ = adapter, platform
+        return [row_state]
+
+    async def fake_find_row(adapter, platform, state):  # type: ignore[no-untyped-def]
+        _ = adapter, platform, state
+        return Row()
+
+    async def fake_open_thread(adapter, state):  # type: ignore[no-untyped-def]
+        _ = adapter, state
+        return {
+            "ok": False,
+            "reason": "candidate_identity_mismatch",
+            "expected": expected,
+            "opened": opened,
+            "fallback": fallback,
+        }
+
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(platform_once_common, "_cleanup_job51", fake_cleanup)
+    monkeypatch.setattr(platform_once_common, "_candidate_row_states", fake_candidate_rows)
+    monkeypatch.setattr(platform_once_common, "_find_candidate_row", fake_find_row)
+    monkeypatch.setattr(platform_once_common, "_open_job51_thread", fake_open_thread)
+
+    summaries = asyncio.run(_process(Adapter(), Platform.JOB51, 1))
+    decision = summaries[0]["decision"]
+
+    assert summaries[0]["stage"] == "open_thread_failed"
+    assert decision["reason"] == "candidate_identity_mismatch"
+    assert decision["expected"] == expected
+    assert decision["opened"] == opened
+    assert decision["fallback"] == fallback
+
+
+def test_job51_candidate_timeout_allows_slow_online_resume_downloads() -> None:
+    """51job online resume download flows can exceed the old 90 second outer budget."""
+
+    assert platform_once_common.PLATFORM_CANDIDATE_TIMEOUT_SECONDS >= 180
+
+
+def test_job51_open_retries_same_target_when_right_header_stays_old(monkeypatch) -> None:
+    """If the first click leaves the old header open, retry the same target once."""
+
+    class Page:
+        click_attempts = 0
+        verify_attempts = 0
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.page = Page()
+
+    async def fake_wait_chat_ready(page, timeout_ms: int = 5000) -> bool:
+        _ = page, timeout_ms
+        return True
+
+    async def fake_verify_opened_candidate(
+        page,
+        expected: dict[str, object],
+        *,
+        chat_ready: bool = False,
+        timeout_ms: int = 5000,
+        interval_ms: int = 150,
+    ) -> dict[str, object]:
+        page.verify_attempts += 1
+        actual_name = "Target Candidate" if page.click_attempts >= 2 else "Old Candidate"
+        opened = actual_name == expected["name"]
+        return {
+            "opened": opened,
+            "reason": "" if opened else "candidate_identity_mismatch",
+            "chatReady": chat_ready,
+            "expected": dict(expected),
+            "actual": {
+                "name": actual_name,
+                "position": "AI PM",
+                "label": f"{actual_name} AI PM",
+                "source": "right_header",
+            },
+            "timeoutMs": timeout_ms,
+            "intervalMs": interval_ms,
+        }
+
+    async def fake_click_thread_by_state(
+        page,
+        state: dict[str, object],
+        *,
+        expected: dict[str, object] | None = None,
+        row=None,
+    ) -> dict[str, object]:
+        _ = state, expected, row
+        page.click_attempts += 1
+        return {
+            "clicked": True,
+            "source": "identity_dom_click",
+            "index": 4,
+            "score": 102,
+            "label": "Target Candidate\nAI PM\nhello",
+        }
+
+    async def fake_sleep(seconds: float) -> None:
+        _ = seconds
+
+    monkeypatch.setattr(platform_once_common.job51_chat, "wait_chat_ready", fake_wait_chat_ready)
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "verify_opened_candidate",
+        fake_verify_opened_candidate,
+    )
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "click_thread_by_state",
+        fake_click_thread_by_state,
+    )
+    monkeypatch.setattr(platform_once_common.asyncio, "sleep", fake_sleep)
+
+    adapter = Adapter()
+    result = asyncio.run(
+        platform_once_common._ensure_job51_thread_opened(
+            adapter,
+            {
+                "index": 4,
+                "id": "target-row",
+                "label": "Target Candidate\nAI PM\nhello",
+                "name": "Target Candidate",
+                "position": "AI PM",
+                "latestMessage": "hello",
+            },
+            {"ok": False, "action": "job51_safe_open"},
+        )
+    )
+
+    assert result["ok"] is True
+    assert adapter.page.click_attempts == 2
+    assert result["opened"]["actual"]["name"] == "Target Candidate"
+    assert result["opened"]["timeoutMs"] == 8000
+    assert result["opened"]["intervalMs"] == 200
+
+
 def test_job51_find_next_thread_skips_repeated_identity_mismatch_in_session() -> None:
     """A bad virtual row should not be clicked again on the next drain iteration."""
 
@@ -654,6 +1469,22 @@ def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
         ["你好，方便发一份简历过来吗"],
         ["你好，可以看看简历吗"],
     )
+    assert page.resume_requests == 1
+
+
+def test_job51_ellipsis_position_matches_investment_direct_resume() -> None:
+    """51job 列表会截断长岗位名，省略号岗位仍应命中投资岗直求简历规则。"""
+
+    state, page = run_case(
+        conversation(
+            "投资交易策略...与市场情绪方向）",
+            [{"sender": "other", "text": "您好，我发了简历"}],
+        )
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages == ["你好，方便发一份简历过来吗"]
     assert page.resume_requests == 1
 
 
@@ -1844,6 +2675,13 @@ def sample_rules() -> dict[str, object]:
                 "directResume": True,
                 "resumeJobType": "外部财务产品顾问",
                 "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+            },
+            "投资交易策略研究员（量化与市场情绪方向）": {
+                "category": "investment_direct_resume",
+                "directResume": True,
+                "resumeJobType": "投资交易策略研究员",
+                "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+                "aliases": ["投资交易策略研究员", "量化与市场情绪方向"],
             },
             "AI产品经理": {
                 "category": "ai_product_manager_direct_resume",

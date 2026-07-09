@@ -617,15 +617,18 @@ class FakePage:
             latest = str(item.get("latest_message") or "")
             item_id = str(item.get("id") or index).lstrip("_")
             haystack = _compact("\n".join([label, name, position, latest]))
+            position_matched = bool(expected_position and expected_position in haystack)
+            if expected_position and not position_matched:
+                continue
             score = 0
             if expected_id and item_id == expected_id:
                 score += 100
             if expected_name and expected_name in haystack:
+                score += 55
+            if position_matched:
                 score += 45
-            if expected_position and expected_position in haystack:
-                score += 30
             if expected_latest and expected_latest in haystack:
-                score += 12
+                score += 35
             if expected_label and expected_label == _compact(label):
                 score += 45
             if score > 0:
@@ -633,7 +636,11 @@ class FakePage:
         matches.sort(key=lambda item: (-item[2], item[0]))
         if not matches:
             return {"clicked": False, "reason": "thread_identity_not_found"}
+        if matches[0][2] < 55:
+            return {"clicked": False, "reason": "thread_identity_low_confidence"}
         if len(matches) > 1 and matches[0][2] == matches[1][2]:
+            return {"clicked": False, "reason": "thread_identity_ambiguous"}
+        if len(matches) > 1 and matches[0][2] - matches[1][2] < 20:
             return {"clicked": False, "reason": "thread_identity_ambiguous"}
         index, item, score = matches[0]
         self.selected_index = index

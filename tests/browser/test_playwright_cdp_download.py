@@ -73,6 +73,25 @@ def test_job51_download_reads_uuid_file_when_artifact_path_is_missing(tmp_path: 
     assert raw.save_clicks == 1
 
 
+def test_job51_download_continues_when_pdf_button_is_not_stable(tmp_path: Path) -> None:
+    download_file = tmp_path / "resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(download_file), suggested_filename="resume.pdf"),
+        pdf_click_should_timeout=True,
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["bytes"] == b"%PDF-1.7\nbody\n%%EOF"
+    assert raw.save_clicks == 1
+    assert raw.pdf_clicks == 1
+    assert raw.confirm_clicks == 1
+
+
 class _FetchingCDPPage(PlaywrightCDPPage):
     def __init__(self, page: Any) -> None:
         super().__init__(page)
@@ -118,9 +137,13 @@ class _Job51DownloadRawPage:
         *,
         cdp_should_fail: bool = False,
         download: _Download | None = None,
+        pdf_click_should_timeout: bool = False,
     ) -> None:
         self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
         self.save_clicks = 0
+        self.pdf_clicks = 0
+        self.confirm_clicks = 0
+        self.pdf_click_should_timeout = pdf_click_should_timeout
         self.url = "https://ehire.51job.com/Revision/chat"
         self.download = download
 
@@ -185,9 +208,16 @@ class _DownloadCDPSession:
 
 
 class _Job51Locator:
-    def __init__(self, page: _Job51DownloadRawPage, selector: str) -> None:
+    def __init__(
+        self,
+        page: _Job51DownloadRawPage,
+        selector: str,
+        *,
+        has_text: str = "",
+    ) -> None:
         self.page = page
         self.selector = selector
+        self.has_text = has_text
 
     @property
     def first(self) -> _Job51Locator:
@@ -198,12 +228,10 @@ class _Job51Locator:
         return self
 
     def filter(self, *, has_text: str) -> _Job51Locator:
-        _ = has_text
-        return self
+        return _Job51Locator(self.page, self.selector, has_text=has_text)
 
     def locator(self, selector: str) -> _Job51Locator:
-        _ = selector
-        return self
+        return _Job51Locator(self.page, selector, has_text=self.has_text)
 
     async def count(self) -> int:
         return 1
@@ -212,6 +240,12 @@ class _Job51Locator:
         _ = timeout
         if self.selector == "#sensor_imresume_download":
             self.page.save_clicks += 1
+        elif self.has_text == "Pdf":
+            self.page.pdf_clicks += 1
+            if self.page.pdf_click_should_timeout:
+                raise TimeoutError("Pdf button is already active but not stable")
+        elif self.has_text == "确定":
+            self.page.confirm_clicks += 1
 
 
 class _Context:

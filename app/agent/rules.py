@@ -368,6 +368,25 @@ def _compact(value: str) -> str:
     return "".join(str(value or "").split()).lower()
 
 
+def _ellipsis_wildcard_match(pattern: str, value: str) -> bool:
+    if "..." not in pattern and "…" not in pattern:
+        return False
+    normalized = pattern.replace("…", "...")
+    parts = [item for item in normalized.split("...") if item]
+    if not parts:
+        return False
+    if len(parts) == 1:
+        part = parts[0]
+        return len(part) >= 4 and part in value
+    cursor = 0
+    for part in parts:
+        index = value.find(part, cursor)
+        if index < 0:
+            return False
+        cursor = index + len(part)
+    return True
+
+
 def _best_position_reply_match(
     position: str,
     rules: dict[str, Any],
@@ -437,6 +456,10 @@ def _best_named_match(
         elif candidate in compact:
             score = 2
         elif compact in candidate:
+            score = 1
+        elif _ellipsis_wildcard_match(compact, candidate) or _ellipsis_wildcard_match(
+            candidate, compact
+        ):
             score = 1
         else:
             continue
