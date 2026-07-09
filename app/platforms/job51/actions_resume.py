@@ -131,6 +131,21 @@ async def request_or_download_resume(
             clicked, confirmed = await _request_resume_with_confirm(page)
             return {"requested": clicked, "confirmed": confirmed, "downloaded": False, **result}
     if payload.get("previewOnly"):
+        online = await _download_online_resume(
+            page,
+            candidate_name=candidate_name,
+            applied_position=position,
+            memory=memory,
+        )
+        if online.get("ok"):
+            return {"requested": False, "resumeReceived": True, **online}
+        if (
+            online.get("blocked")
+            and online.get("buttonFound")
+            and online.get("reason") != "online_resume_preview_not_verified"
+            and not online.get("opened")
+        ):
+            return {"requested": False, "downloaded": False, **online}
         clicked, confirmed = await _request_resume_with_confirm(page)
         return {
             "requested": clicked,

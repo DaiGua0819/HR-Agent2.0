@@ -1472,6 +1472,32 @@ def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_ai_product_manager_question_still_downloads_online_resume() -> None:
+    """AI product manager direct-resume jobs must not stop on a silent question."""
+
+    state, page = run_case(
+        conversation(
+            "AI Product Manager",
+            [{"sender": "other", "text": "请问AI 产品经理还在招人吗？"}],
+            online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+            online_resume_filename="candidate.pdf",
+            preview_only=True,
+        )
+    )
+
+    result = state["decision"]["result"]
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] in {
+        "direct_resume",
+        "resume_consent_requested",
+        "resume_attachment_downloaded",
+    }
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert result["sourceKind"] == "online_resume"
+    assert page.resume_requests == 0
+
+
 def test_job51_ellipsis_position_matches_investment_direct_resume() -> None:
     """51job 列表会截断长岗位名，省略号岗位仍应命中投资岗直求简历规则。"""
 
@@ -1753,6 +1779,32 @@ def test_job51_request_resume_rejects_preview_only() -> None:
     assert result["downloaded"] is False
     assert result["reason"] == "preview_only_rejected"
     assert page.resume_requests == 1
+
+
+def test_job51_preview_only_online_resume_uses_save_download_before_request() -> None:
+    """Preview-only online resumes should be exported with the save/download layer."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "已发在线简历"}],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+                preview_only=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["requested"] is False
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert result["sourceKind"] == "online_resume"
+    assert page.resume_requests == 0
+    assert page.message_card_clicks == 1
 
 
 def test_job51_attachment_without_download_link_blocks_without_request() -> None:

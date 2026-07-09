@@ -19,7 +19,6 @@ from app.agent.rules import (
     initial_common_phrase,
     is_ai_basic_rule,
     is_direct_resume_rule,
-    is_operation_direct_resume_rule,
     is_silent_question,
     load_chat_rules,
     looks_like_question,
@@ -103,7 +102,7 @@ class ConversationRunner:
         if self._needs_initial_ai_basic_phrase(conversation, rule):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
 
-        if is_direct_resume_rule(rule) and is_operation_direct_resume_rule(rule):
+        if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)
 
         if is_silent_question(
@@ -117,9 +116,6 @@ class ConversationRunner:
                 "silent_question",
                 evidence=last.text,
             )
-
-        if is_direct_resume_rule(rule):
-            return await self._handle_direct_resume(state, conversation, rule)
 
         if rule_screening(rule) and should_prioritize_screening(last.text, rule):
             return await self._handle_screening(state, conversation, rule, last.text)
