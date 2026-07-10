@@ -1178,6 +1178,15 @@ h3 { font-size: 15px; }
   cursor: pointer;
   transition: box-shadow 0.2s ease-in-out, transform 0.15s ease-in-out;
 }
+.resume-page-stack {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: 100%;
+}
+.resume-page-image {
+  display: block;
+}
 .resume-download-link {
   display: block;
   position: relative;

@@ -179,6 +179,29 @@ def test_ai_intern_member_only_reads_ai_intern_resumes(monkeypatch) -> None:
     assert forbidden.status_code == 403
 
 
+def test_caihua_member_only_reads_ai_product_manager_resumes(monkeypatch) -> None:
+    """Caihua can only read AI product manager resumes."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    app = _app_for_member("ou_caihua", "菜花")
+
+    with TestClient(app) as client:
+        _feishu_login(client)
+        me = client.get("/api/auth/me")
+        listed = client.get("/api/resumes")
+        forbidden_operation = client.get("/api/resumes/resume-operation")
+        forbidden_finance = client.get("/api/resumes/resume-finance")
+
+    load_settings.cache_clear()
+    assert me.status_code == 200
+    assert me.json()["resumeScope"]["jobTypes"] == ["AI产品经理"]
+    assert [item["id"] for item in listed.json()["items"]] == ["resume-ai-product-manager"]
+    assert listed.json()["jobFacets"] == [{"jobType": "AI产品经理", "count": 1}]
+    assert forbidden_operation.status_code == 403
+    assert forbidden_finance.status_code == 403
+
+
 def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: Path) -> None:
     """点击简历预览下载时使用 姓名_岗位.pdf 文件名，不额外限制岗位范围。"""
 

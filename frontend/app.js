@@ -29,6 +29,13 @@ const state = {
   resumePrefetchAbortControllers: new Map(),
   resumeListAbortController: null,
   resumeListRequestSequence: 0,
+  resumeContextAbortController: null,
+  resumeContextRequestSequence: 0,
+  resumePreviewPagesAbortController: null,
+  resumePreviewPagesRequestSequence: 0,
+  resumePreviewPagesRequestKey: "",
+  resumePreviewPagesCache: new Map(),
+  lastJobTabPrefetchKey: "",
   resumeFilterDebounceTimer: null,
   resumePrefetchDelayTimer: null,
   resumePreviewImageCache: new Set(),
@@ -119,6 +126,8 @@ function handleAuthExpired(error) {
   state.interviewSessions = [];
   state.selectedInterviewId = "";
   clearResumePrefetchCache();
+  state.resumeContextCache.clear();
+  state.resumePreviewPagesCache.clear();
   const emptyState = $("emptyState");
   if (emptyState) {
     $("emptyState").textContent = "登录已失效，请重新使用飞书授权登录";
@@ -242,8 +251,20 @@ function resumePayloadValue(resume, keys) {
   }
   return "";
 }
+function resumeTopLevelValue(resume, keys) {
+  for (const key of keys) {
+    const value = resume?.[key];
+    if (value === undefined || value === null || typeof value === "object") continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
 function resumeMajor(resume) {
   return resumePayloadValue(resume, ["major", "profession", "specialty"]);
+}
+function resumeListMajor(resume) {
+  return resumeTopLevelValue(resume, ["major", "profession", "specialty"]);
 }
 function resumeRawText(resume) {
   return resumePayloadValue(resume, ["rawText", "text", "summary", "content"]);
@@ -277,8 +298,14 @@ function extractSchoolLevelFromResumeText(resume) {
 function resumeSchool(resume) {
   return resumePayloadValue(resume, ["school", "college", "university"]) || extractSchoolFromResumeText(resume);
 }
+function resumeListSchool(resume) {
+  return resumeTopLevelValue(resume, ["school", "college", "university"]);
+}
 function resumeSchoolLevel(resume) {
   return resumePayloadValue(resume, ["schoolLevel", "school_level", "schoolTier", "school_tier"]) || extractSchoolLevelFromResumeText(resume);
+}
+function resumeListSchoolLevel(resume) {
+  return resumeTopLevelValue(resume, ["schoolLevel", "school_level", "schoolTier", "school_tier"]);
 }
 function resumeSchoolTierBadge(resume) {
   const level = resumeSchoolLevel(resume);
@@ -289,8 +316,21 @@ function resumeSchoolTierBadge(resume) {
   if (level.includes("二本")) return "二本";
   return "";
 }
+function resumeListSchoolTierBadge(resume) {
+  const level = resumeListSchoolLevel(resume);
+  if (level.includes("985")) return "985";
+  if (level.includes("211")) return "211";
+  if (level.includes("双一流")) return "双一流";
+  if (level.includes("一本")) return "一本";
+  if (level.includes("二本")) return "二本";
+  return "";
+}
 function resumeEducationLine(resume) {
   const degree = resumePayloadValue(resume, ["education", "degree"]);
+  return degree || "待提取";
+}
+function resumeListEducationLine(resume) {
+  const degree = resumeTopLevelValue(resume, ["education", "degree"]);
   return degree || "待提取";
 }
 function resumeImportTime(resume) {
@@ -303,6 +343,13 @@ function resumeImportTime(resume) {
 }
 function resumeCompactImportDate(resume) {
   const value = resumeImportTime(resume);
+  const normalized = String(value).replace(/\//g, "-");
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1].slice(2)}-${match[2]}-${match[3]}`;
+  return value;
+}
+function resumeListCompactImportDate(resume) {
+  const value = resumeTopLevelValue(resume, ["updated_at", "updatedAt", "createdAt", "created_at", "downloadedAt"]) || "待提取";
   const normalized = String(value).replace(/\//g, "-");
   const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (match) return `${match[1].slice(2)}-${match[2]}-${match[3]}`;
@@ -630,14 +677,14 @@ function buildJobTabs() {
       state.jobType = button.dataset.jobTab || "";
       $("filters").job_type.value = state.jobType;
       state.page = 1;
-      clearResumePrefetchCache();
-      loadResumes({ fromFilter: true });
+      loadResumes({ fromFilter: true, preferCache: true });
     };
   });
 }
-function queryFromFilters(page = state.page) {
+function queryFromFilters(page = state.page, overrides = {}) {
   const data = new FormData($("filters"));
   const params = new URLSearchParams({ page: String(page), page_size: "10" });
+  const hasJobTypeOverride = Object.prototype.hasOwnProperty.call(overrides, "jobType");
   const importDateValues = [];
   for (const [key, value] of data.entries()) {
     const cleaned = String(value || "").trim();
@@ -649,7 +696,9 @@ function queryFromFilters(page = state.page) {
     params[multiFilterKeys.has(key) ? "append" : "set"](key, cleaned);
   }
   applyImportDateRangeParams(params, importDateValues);
-  if (state.jobType) params.set("job_type", state.jobType);
+  const jobType = hasJobTypeOverride ? overrides.jobType : state.jobType;
+  if (jobType) params.set("job_type", jobType);
+  else if (hasJobTypeOverride) params.delete("job_type");
   if (state.tab === "unread") params.set("read_status", "unread");
   if (state.tab === "viewed") params.set("read_status", "viewed");
   if (["undecided", "suitable", "unsuitable", "needs_more_info"].includes(state.tab)) { params.delete("decision"); params.append("decision", state.tab); }
@@ -657,6 +706,9 @@ function queryFromFilters(page = state.page) {
 }
 function resumeListCacheKey(page) {
   return queryFromFilters(page);
+}
+function resumeListCacheKeyForJob(job, page) {
+  return queryFromFilters(page, { jobType: job });
 }
 function clearResumePrefetchCache() {
   if (state.resumeFilterDebounceTimer) clearTimeout(state.resumeFilterDebounceTimer);
@@ -667,7 +719,6 @@ function clearResumePrefetchCache() {
   state.resumePrefetchDelayTimer = null;
   state.resumeListAbortController = null;
   state.resumePageCache.clear();
-  state.resumeContextCache.clear();
   state.resumePrefetchingPages.clear();
   state.resumePrefetchingContexts.clear();
   state.resumePrefetchAbortControllers.clear();
@@ -675,8 +726,10 @@ function clearResumePrefetchCache() {
 }
 async function clearResumePrefetchCacheAfterMutation() {
   clearResumePrefetchCache();
+  state.resumeContextCache.clear();
+  state.resumePreviewPagesCache.clear();
 }
-function applyResumeListData(data) {
+function applyResumeListData(data, { stale = false } = {}) {
   state.resumes = data.items || [];
   state.total = data.total || 0;
   state.page = data.page || 1;
@@ -688,9 +741,23 @@ function applyResumeListData(data) {
   renderMiniList();
   renderPagination();
   renderActionDock();
+  const emptyState = $("emptyState");
+  if (emptyState) {
+    if (stale) emptyState.dataset.stale = "true";
+    else delete emptyState.dataset.stale;
+  }
 }
 function resumePreviewImageUrl(resume) {
   return resume?.filePreviewImageUrl || resume?.file_preview_image_url || resume?.file?.previewImageUrl || "";
+}
+function resumePreviewPagesUrl(resume) {
+  if (!resume) return "";
+  return (
+    resume.filePreviewPagesUrl ||
+    resume.file_preview_pages_url ||
+    resume.file?.previewPagesUrl ||
+    (resumePreviewImageUrl(resume) && resume.id ? `/api/resumes/${resume.id}/preview-pages` : "")
+  );
 }
 function clearResumePreviewImagePrefetchQueue() {
   state.resumePreviewImageGeneration += 1;
@@ -704,6 +771,11 @@ function clearResumePreviewImagePrefetchQueue() {
   state.resumePreviewImageInFlight.clear();
   state.resumePreviewImageLoaders.clear();
   state.resumePreviewImageActiveCount = 0;
+  if (state.resumePreviewPagesAbortController) {
+    state.resumePreviewPagesAbortController.abort();
+    state.resumePreviewPagesAbortController = null;
+  }
+  state.resumePreviewPagesRequestKey = "";
 }
 function followingResumePreviewCandidates(selectedId) {
   if (!selectedId) return [];
@@ -788,40 +860,94 @@ function prefetchNextResumePages() {
       });
   }
 }
+function prefetchAdjacentJobFirstPages() {
+  if (state.view !== "resumes" || state.tab === "queue") return;
+  const jobs = [""].concat(visibleJobTypes());
+  const currentJob = state.jobType || "";
+  const currentIndex = jobs.indexOf(currentJob);
+  if (currentIndex < 0) return;
+  const prefetchKey = `${currentJob}:${queryFromFilters(1)}`;
+  if (state.lastJobTabPrefetchKey === prefetchKey) return;
+  state.lastJobTabPrefetchKey = prefetchKey;
+  for (const index of [currentIndex - 1, currentIndex + 1]) {
+    const job = jobs[index];
+    if (job === undefined) continue;
+    const cacheKey = resumeListCacheKeyForJob(job, 1);
+    if (state.resumePageCache.has(cacheKey) || state.resumePrefetchingPages.has(cacheKey)) continue;
+    state.resumePrefetchingPages.add(cacheKey);
+    const controller = new AbortController();
+    state.resumePrefetchAbortControllers.set(cacheKey, controller);
+    api(`/api/resumes?${cacheKey}`, { signal: controller.signal })
+      .then((data) => {
+        state.resumePageCache.set(cacheKey, data);
+      })
+      .catch(() => {})
+      .finally(() => {
+        state.resumePrefetchingPages.delete(cacheKey);
+        state.resumePrefetchAbortControllers.delete(cacheKey);
+      });
+  }
+}
 function scheduleResumePrefetchAfterFilter() {
   if (state.resumePrefetchDelayTimer) clearTimeout(state.resumePrefetchDelayTimer);
   state.resumePrefetchDelayTimer = setTimeout(() => {
     state.resumePrefetchDelayTimer = null;
     prefetchNextResumePages();
+    prefetchAdjacentJobFirstPages();
   }, RESUME_PREFETCH_AFTER_FILTER_MS);
+}
+async function refreshCachedResumeList(cacheKey, requestSequence, fromFilter) {
+  const controller = new AbortController();
+  state.resumeListAbortController = controller;
+  try {
+    const data = await api(`/api/resumes?${cacheKey}`, { signal: controller.signal });
+    if (requestSequence !== state.resumeListRequestSequence) return null;
+    if (cacheKey !== resumeListCacheKey(state.page)) return null;
+    state.resumePageCache.set(cacheKey, data);
+    applyResumeListData(data);
+    if (fromFilter) {
+      scheduleResumePrefetchAfterFilter();
+    } else {
+      prefetchNextResumePages();
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") return null;
+    throw error;
+  } finally {
+    if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
+  }
 }
 async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
   buildTabs();
   const cacheKey = resumeListCacheKey(state.page);
-  const cached = preferCache ? state.resumePageCache.get(cacheKey) : null;
+  const cached = preferCache || fromFilter ? state.resumePageCache.get(cacheKey) : null;
   const requestSequence = (state.resumeListRequestSequence += 1);
   if (state.resumeListAbortController) {
     state.resumeListAbortController.abort();
     state.resumeListAbortController = null;
   }
+  if (fromFilter && cached) {
+    applyResumeListData(cached, { stale: true });
+    scheduleResumePrefetchAfterFilter();
+    refreshCachedResumeList(cacheKey, requestSequence, fromFilter).catch((error) => {
+      if (error?.name === "AbortError") return;
+      console.debug("resume stale refresh failed", error);
+    });
+    return cached;
+  }
   let data = cached || null;
   if (!data) {
-    const controller = new AbortController();
-    state.resumeListAbortController = controller;
-    try {
-      data = await api(`/api/resumes?${cacheKey}`, { signal: controller.signal });
-    } catch (error) {
-      if (error?.name === "AbortError") return null;
-      throw error;
-    } finally {
-      if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
-    }
+    return await refreshCachedResumeList(cacheKey, requestSequence, fromFilter);
   }
   if (requestSequence !== state.resumeListRequestSequence) return null;
   state.resumePageCache.set(cacheKey, data);
   applyResumeListData(data);
-  if (fromFilter) scheduleResumePrefetchAfterFilter();
-  else prefetchNextResumePages();
+  if (fromFilter) {
+    scheduleResumePrefetchAfterFilter();
+  } else {
+    prefetchNextResumePages();
+  }
   return data;
 }
 async function loadQueue() {
@@ -846,7 +972,7 @@ function renderRows() {
     .map((resume) => {
       const review = resume.reviewState || {};
       return `
-        <tr class="${resume.id === state.selectedId ? "active" : ""}">
+        <tr data-resume-row="${escapeHtml(resume.id)}" class="${resume.id === state.selectedId ? "active" : ""}">
           <td><strong>${escapeHtml(resumeName(resume))}</strong><br><span class="muted">${escapeHtml(resume.phone || "")}</span></td>
           <td>${escapeHtml(resumeJob(resume))}</td>
           <td>${escapeHtml(platformName(resumePlatform(resume)))}</td>
@@ -866,13 +992,13 @@ function renderRows() {
 function renderMiniList() {
   $("miniList").innerHTML = state.resumes
     .map((resume) => {
-      const tier = resumeSchoolTierBadge(resume);
+      const tier = resumeListSchoolTierBadge(resume);
       const review = resume.reviewState || {};
       const readStatus = review.readStatus === "viewed" ? "viewed" : "unread";
       const readLabel = readStatus === "viewed" ? "已读" : "未读";
       const decision = labelDecision(review.decision);
-      const imported = resumeCompactImportDate(resume);
-      const major = resumeMajor(resume) || "暂未提取到";
+      const imported = resumeListCompactImportDate(resume);
+      const major = resumeListMajor(resume) || "暂未提取到";
       const memberDecisionBadge = memberDecisionBadgeMarkup(resume);
       return `
         <button class="candidate-card ${resume.id === state.selectedId ? "active candidate-card--focus-pop" : ""}" data-open="${resume.id}" style="z-index: 1; margin: 0px;">
@@ -887,10 +1013,10 @@ function renderMiniList() {
           </span>
           <span class="candidate-card__meta">
             <span class="candidate-card__meta-item candidate-card__meta-school">
-              <span class="candidate-card__meta-value">${escapeHtml(resumeSchool(resume) || "待提取")}</span>
+              <span class="candidate-card__meta-value">${escapeHtml(resumeListSchool(resume) || "待提取")}</span>
             </span>
             <span class="candidate-card__meta-item candidate-card__meta-tier">
-              ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : `<span class="candidate-card__meta-value">${escapeHtml(resumeEducationLine(resume))}</span>`}
+              ${tier ? `<span class="school-tier-badge">${escapeHtml(tier)}</span>` : `<span class="candidate-card__meta-value">${escapeHtml(resumeListEducationLine(resume))}</span>`}
             </span>
             <span class="candidate-card__meta-item candidate-card__meta-date">${escapeHtml(imported)}</span>
             <span class="candidate-card__meta-item candidate-card__meta-platform">${escapeHtml(resumePlatformAccountLabel(resume))}</span>
@@ -1008,26 +1134,86 @@ function bindRowActions() {
     };
   });
 }
+function updateResumeSelectionDom(previousId, nextId) {
+  const ids = new Set([previousId, nextId].filter(Boolean));
+  document.querySelectorAll("[data-open]").forEach((node) => {
+    if (!ids.has(node.dataset.open)) return;
+    const active = node.dataset.open === nextId;
+    node.classList.toggle("active", active);
+    node.classList.toggle("candidate-card--focus-pop", active && node.classList.contains("candidate-card"));
+  });
+  document.querySelectorAll("[data-resume-row]").forEach((row) => {
+    if (!ids.has(row.dataset.resumeRow)) return;
+    row.classList.toggle("active", row.dataset.resumeRow === nextId);
+  });
+  requestAnimationFrame(scrollSelectedCandidateIntoView);
+}
+function renderOptimisticResumeContext(resume) {
+  if (!resume) return;
+  const previewImageUrl = resumePreviewImageUrl(resume);
+  const context = {
+    resume,
+    reviewState: resume.reviewState || {},
+    score: { value: resume.match_score ?? resume.matchScore ?? "", grade: resume.scoreGrade || "" },
+    file: {
+      available: Boolean(previewImageUrl),
+      previewImageUrl,
+      previewPagesUrl: resumePreviewPagesUrl(resume),
+      downloadUrl: resume.fileDownloadUrl || resume.file_download_url || "",
+    },
+  };
+  state.context = context;
+  $("previewTitle").textContent = `${resumeName(resume)} 路 ${resumeJob(resume)}`;
+  renderResumePreview(context);
+  $("summaryCards").innerHTML = `
+    <div class="summary-card ts-summary-card"><h3>候选人</h3>
+      <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
+      <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}</p>
+      <p>正在读取审阅详情...</p></div>
+  `;
+  renderActionDock();
+}
 async function openResume(id) {
   if (!id) return;
+  const previousId = state.selectedId;
   state.selectedId = id;
-  renderRows();
-  renderMiniList();
+  updateResumeSelectionDom(previousId, id);
   prefetchFollowingResumePreviewImages(id);
+  if (state.resumePreviewPagesAbortController) {
+    state.resumePreviewPagesAbortController.abort();
+    state.resumePreviewPagesAbortController = null;
+  }
+  state.resumePreviewPagesRequestSequence += 1;
+  state.resumePreviewPagesRequestKey = "";
+  const resume = state.resumes.find((item) => item.id === id);
   if (state.resumeContextCache.has(id)) {
     state.context = state.resumeContextCache.get(id);
     renderContext();
     return;
   }
-  $("previewTitle").textContent = "正在读取简历...";
-  $("resumePreview").className = "resume-preview";
-  $("resumePreview").textContent = "正在加载候选人详情和审阅摘要，请稍候。";
-  $("summaryCards").innerHTML = `<p class="muted">正在读取审阅摘要...</p>`;
-  state.context = await api(`/api/resumes/${id}/review-context`);
+  renderOptimisticResumeContext(resume);
+  if (state.resumeContextAbortController) {
+    state.resumeContextAbortController.abort();
+    state.resumeContextAbortController = null;
+  }
+  const requestSequence = (state.resumeContextRequestSequence += 1);
+  const controller = new AbortController();
+  state.resumeContextAbortController = controller;
+  let context = null;
+  try {
+    context = await api(`/api/resumes/${id}/review-context`, { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    throw error;
+  } finally {
+    if (state.resumeContextAbortController === controller) state.resumeContextAbortController = null;
+  }
+  if (requestSequence !== state.resumeContextRequestSequence) return;
+  if (state.selectedId !== id) return;
+  state.context = context;
   state.resumeContextCache.set(id, state.context);
-  renderRows();
-  renderMiniList();
   renderContext();
+  return;
 }
 function resumeText(resume) {
   const payload = resume.payload || {};
@@ -1041,20 +1227,112 @@ function resumeText(resume) {
     payload.rawText || payload.text || payload.summary || "当前没有解析文本。后续接入 PDF 预览后，这里会显示固定高度的简历页视图。",
   ].join("\n");
 }
+function contextPreviewPagesUrl(context) {
+  const resume = context?.resume || {};
+  const file = context?.file || {};
+  return file.previewPagesUrl || file.preview_pages_url || resumePreviewPagesUrl(resume);
+}
+function normalizedPreviewPages(context) {
+  const resume = context?.resume || {};
+  const file = context?.file || {};
+  const pages = Array.isArray(file.previewPages) ? file.previewPages : [];
+  const normalized = pages
+    .map((page, index) => ({
+      page: Number(page.page || index + 1),
+      imageUrl: String(page.imageUrl || page.image_url || "").trim(),
+    }))
+    .filter((page) => page.imageUrl);
+  if (normalized.length) return normalized;
+  const firstPageUrl = file.previewImageUrl || resumePreviewImageUrl(resume);
+  return firstPageUrl ? [{ page: 1, imageUrl: firstPageUrl }] : [];
+}
+function renderPreviewPageStack(resume, pages) {
+  return `
+    <div class="resume-page-stack" data-page-count="${pages.length}">
+      ${pages
+        .map(
+          (page) => `
+            <img
+              class="resume-page-image"
+              data-preview-page="${escapeHtml(String(page.page))}"
+              alt="${escapeHtml(resumeName(resume))} 简历第 ${escapeHtml(String(page.page))} 页"
+              src="${escapeHtml(page.imageUrl)}"
+            />
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+async function loadResumePreviewPages(context) {
+  const resume = context?.resume || {};
+  const resumeId = resume.id || "";
+  const pagesUrl = contextPreviewPagesUrl(context);
+  if (!resumeId || !pagesUrl) return;
+  if (state.resumePreviewPagesCache.has(pagesUrl)) {
+    const pages = state.resumePreviewPagesCache.get(pagesUrl);
+    if (state.selectedId !== resumeId || !state.context?.file) return;
+    state.context.file.previewPages = pages;
+    renderResumePreview(state.context);
+    return;
+  }
+  const requestKey = `${resumeId}:${pagesUrl}`;
+  if (state.resumePreviewPagesRequestKey === requestKey) return;
+  if (state.resumePreviewPagesAbortController) {
+    state.resumePreviewPagesAbortController.abort();
+    state.resumePreviewPagesAbortController = null;
+  }
+  state.resumePreviewPagesRequestKey = requestKey;
+  const requestSequence = (state.resumePreviewPagesRequestSequence += 1);
+  const controller = new AbortController();
+  state.resumePreviewPagesAbortController = controller;
+  try {
+    const data = await api(pagesUrl, { signal: controller.signal });
+    if (requestSequence !== state.resumePreviewPagesRequestSequence) return;
+    if (state.selectedId !== resumeId || !state.context?.file) return;
+    const pages = Array.isArray(data.pages)
+      ? data.pages
+          .map((page, index) => ({
+            page: Number(page.page || index + 1),
+            imageUrl: String(page.imageUrl || page.image_url || "").trim(),
+          }))
+          .filter((page) => page.imageUrl)
+      : [];
+    if (!pages.length) return;
+    state.resumePreviewPagesCache.set(pagesUrl, pages);
+    state.context.file.previewPages = pages;
+    state.context.file.previewPageCount = data.pageCount || pages.length;
+    renderResumePreview(state.context);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    console.debug("resume preview pages failed", error);
+  } finally {
+    if (state.resumePreviewPagesAbortController === controller) {
+      state.resumePreviewPagesAbortController = null;
+      state.resumePreviewPagesRequestKey = "";
+    }
+  }
+}
 function renderResumePreview(context) {
   const resume = context.resume;
   const file = context.file || {};
   const preview = $("resumePreview");
   if (!preview) return;
-  if (file.available && file.previewImageUrl) {
+  const pages = normalizedPreviewPages(context);
+  if (file.available && pages.length) {
     preview.className = "resume-preview image-preview";
     preview.innerHTML = `
       <div class="resume-image-stage">
         <a href="${escapeHtml(file.downloadUrl || '/api/resumes/' + resume.id + '/download')}" download class="resume-download-link" title="点击下载简历PDF">
-          <img alt="${escapeHtml(resumeName(resume))} 简历内容" src="${escapeHtml(file.previewImageUrl)}" />
+          ${renderPreviewPageStack(resume, pages)}
         </a>
       </div>
     `;
+    if (!Array.isArray(file.previewPages) || !file.previewPages.length) {
+      loadResumePreviewPages(context).catch((error) => {
+        if (error?.name !== "AbortError") console.debug("resume preview pages failed", error);
+      });
+    }
     return;
   }
   preview.className = "resume-preview text-preview";
@@ -2017,6 +2295,8 @@ function bindPageActions() {
 }
 async function afterLogin(user) {
   clearResumePrefetchCache();
+  state.resumeContextCache.clear();
+  state.resumePreviewPagesCache.clear();
   state.user = user; state.jobType = ""; state.jobFacets = []; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode();
   const landingView = canView("resumes") ? "resumes" : uiAccess().defaultView;
   setView(landingView);
@@ -2026,6 +2306,8 @@ async function logout() {
   await api("/api/auth/logout", { method: "POST" });
   state.user = null; state.selectedId = ""; state.context = null; state.jobType = ""; state.jobFacets = [];
   clearResumePrefetchCache();
+  state.resumeContextCache.clear();
+  state.resumePreviewPagesCache.clear();
   setResumeMemberMode();
   hrAuth.showLogin();
 }

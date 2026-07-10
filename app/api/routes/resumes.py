@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -15,13 +16,20 @@ from pydantic import BaseModel, Field
 from app.api.routes.auth import current_user_id, require_session_payload
 from app.auth.resume_scope import allowed_job_types, resume_visible_to_payload
 from app.core.text import clean_text
-from app.domain.resume.files import preview_file_path, preview_media_type, render_preview_image
+from app.domain.resume.files import (
+    preview_file_path,
+    preview_media_type,
+    preview_page_count,
+    render_preview_image,
+)
 from app.domain.resume.job_types import display_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
 from app.domain.resume_review.service import ResumeReviewService
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
+_PDF_PREVIEW_IMAGE_CACHE_MAX = 256
+_PDF_PREVIEW_IMAGE_CACHE: dict[tuple[str, str, int, int, int], tuple[bytes, str]] = {}
 
 
 class ResumeUpdateRequest(BaseModel):
@@ -100,7 +108,7 @@ async def list_resumes(
     )
     return {
         "items": [
-            _resume_payload(
+            _resume_list_payload(
                 item,
                 review_state=review_states.get(item.id) if review_states else None,
                 member_review_states=member_review_states.get(item.id, []),
@@ -142,7 +150,11 @@ async def get_resume_file(resume_id: str, request: Request) -> FileResponse:
 
 
 @router.get("/{resume_id}/preview-image")
-async def get_resume_preview_image(resume_id: str, request: Request) -> Response:
+async def get_resume_preview_image(
+    resume_id: str,
+    request: Request,
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> Response:
     """按简历 id 返回无工具栏的简历图片预览。"""
 
     resume = _service(request).get_resume(resume_id)
@@ -151,10 +163,35 @@ async def get_resume_preview_image(resume_id: str, request: Request) -> Response
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
     try:
-        body, media_type = render_preview_image(path)
+        body, media_type = _render_preview_image_cached(resume_id, path, page=page)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(content=body, media_type=media_type)
+
+
+@router.get("/{resume_id}/preview-pages")
+async def get_resume_preview_pages(resume_id: str, request: Request) -> dict[str, object]:
+    """Return per-page preview image URLs for the stored resume file."""
+
+    resume = _service(request).get_resume(resume_id)
+    _assert_resume_visible(request, resume)
+    path = preview_file_path(resume)
+    if path is None:
+        raise HTTPException(status_code=404, detail="resume_file_not_found")
+    try:
+        page_count = preview_page_count(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "pageCount": page_count,
+        "pages": [
+            {
+                "page": page_number,
+                "imageUrl": f"/api/resumes/{resume.id}/preview-image?page={page_number}",
+            }
+            for page_number in range(1, page_count + 1)
+        ],
+    }
 
 @router.get("/{resume_id}/download")
 async def download_resume(resume_id: str, request: Request) -> FileResponse:
@@ -216,36 +253,74 @@ def _assert_resume_visible(request: Request, resume: Resume | None) -> None:
         raise HTTPException(status_code=403, detail="resume_forbidden")
 
 
+def _render_preview_image_cached(resume_id: str, path: Path, *, page: int = 1) -> tuple[bytes, str]:
+    if page < 1:
+        raise ValueError("resume_preview_page_out_of_range")
+    if path.suffix.lower() != ".pdf":
+        if page != 1:
+            raise ValueError("resume_preview_page_out_of_range")
+        return render_preview_image(path)
+    stat = path.stat()
+    key = (resume_id, str(path.resolve()), stat.st_mtime_ns, stat.st_size, page)
+    cached = _PDF_PREVIEW_IMAGE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    body, media_type = (
+        render_preview_image(path) if page == 1 else render_preview_image(path, page=page)
+    )
+    if len(_PDF_PREVIEW_IMAGE_CACHE) >= _PDF_PREVIEW_IMAGE_CACHE_MAX:
+        _PDF_PREVIEW_IMAGE_CACHE.pop(next(iter(_PDF_PREVIEW_IMAGE_CACHE)))
+    _PDF_PREVIEW_IMAGE_CACHE[key] = (body, media_type)
+    return body, media_type
+
+
 def _resume_payload(
     resume: Resume,
     review_state: object | None = None,
     member_review_states: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     payload = resume.model_dump()
+    payload.update(_resume_display_payload(resume, review_state, member_review_states))
+    return payload
+
+
+def _resume_list_payload(
+    resume: Resume,
+    review_state: object | None = None,
+    member_review_states: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    payload = resume.model_dump(exclude={"payload"})
+    payload.update(_resume_display_payload(resume, review_state, member_review_states))
+    return payload
+
+
+def _resume_display_payload(
+    resume: Resume,
+    review_state: object | None = None,
+    member_review_states: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     file_path = preview_file_path(resume)
     school = _resume_school(resume)
     school_level = _resume_school_level(resume)
-    payload.update(
-        {
-            "parsedName": resume.parsed_name,
-            "school": school,
-            "schoolLevel": school_level,
-            "educationDisplay": _education_display(resume, school, school_level),
-            "displayJobType": display_resume_job_type(resume.job_type or resume.applied_position),
-            "linkedSessionId": resume.linked_session_id,
-            "linkedPlatform": resume.linked_platform,
-            "linkedOwner": resume.linked_owner,
-            "linkedPlatformConversationId": resume.linked_platform_conversation_id,
-            "sourceArtifactId": resume.source_artifact_id,
-            "hasFilePreview": file_path is not None,
-            "filePreviewUrl": f"/api/resumes/{resume.id}/file" if file_path else "",
-            "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
-            "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
-            "reviewState": _review_state_payload(review_state),
-            "memberReviewStates": member_review_states or [],
-        }
-    )
-    return payload
+    return {
+        "parsedName": resume.parsed_name,
+        "school": school,
+        "schoolLevel": school_level,
+        "educationDisplay": _education_display(resume, school, school_level),
+        "displayJobType": display_resume_job_type(resume.job_type or resume.applied_position),
+        "linkedSessionId": resume.linked_session_id,
+        "linkedPlatform": resume.linked_platform,
+        "linkedOwner": resume.linked_owner,
+        "linkedPlatformConversationId": resume.linked_platform_conversation_id,
+        "sourceArtifactId": resume.source_artifact_id,
+        "hasFilePreview": file_path is not None,
+        "filePreviewUrl": f"/api/resumes/{resume.id}/file" if file_path else "",
+        "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
+        "filePreviewPagesUrl": f"/api/resumes/{resume.id}/preview-pages" if file_path else "",
+        "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
+        "reviewState": _review_state_payload(review_state),
+        "memberReviewStates": member_review_states or [],
+    }
 
 
 def _payload_value(resume: Resume, *keys: str) -> str:

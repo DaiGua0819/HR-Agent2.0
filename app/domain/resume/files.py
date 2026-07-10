@@ -52,27 +52,57 @@ def has_preview_file(resume: Resume) -> bool:
     return preview_file_path(resume) is not None
 
 
-def render_preview_image(path: Path) -> tuple[bytes, str]:
+def preview_page_count(path: Path) -> int:
+    """Return the number of preview pages for a stored resume file."""
+
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _pdf_page_count(path)
+    media_type = preview_media_type(path)
+    if media_type.startswith("image/"):
+        return 1
+    raise ValueError("unsupported_resume_preview_file")
+
+
+def render_preview_image(path: Path, *, page: int = 1) -> tuple[bytes, str]:
     """Render the stored preview file as browser-friendly image bytes."""
 
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return _render_pdf_first_page(path), "image/png"
+        return _render_pdf_page(path, page=page), "image/png"
+    if page != 1:
+        raise ValueError("resume_preview_page_out_of_range")
     media_type = preview_media_type(path)
     if media_type.startswith("image/"):
         return path.read_bytes(), media_type
     raise ValueError("unsupported_resume_preview_file")
 
 
-def _render_pdf_first_page(path: Path) -> bytes:
+def _pdf_page_count(path: Path) -> int:
     import fitz
 
     document = fitz.open(path)
     try:
         if document.page_count < 1:
             raise ValueError("empty_resume_pdf")
-        page = document.load_page(0)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        return int(document.page_count)
+    finally:
+        document.close()
+
+
+def _render_pdf_page(path: Path, *, page: int) -> bytes:
+    import fitz
+
+    if page < 1:
+        raise ValueError("resume_preview_page_out_of_range")
+    document = fitz.open(path)
+    try:
+        if document.page_count < 1:
+            raise ValueError("empty_resume_pdf")
+        if page > document.page_count:
+            raise ValueError("resume_preview_page_out_of_range")
+        pdf_page = document.load_page(page - 1)
+        pixmap = pdf_page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         return pixmap.tobytes("png")
     finally:
         document.close()

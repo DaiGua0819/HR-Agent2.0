@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.automation import router as automation_router
@@ -46,6 +47,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
             await app.state.interview_center_service.stop_schedulers()
 
     app = FastAPI(title="HR Agent Control Plane", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     repository = ResumeRepository.from_settings()
     scoring_service = ScoringService(repository)
     review_repository = ResumeReviewRepository(settings.resolved_database_path)

@@ -180,6 +180,108 @@ def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> N
     ]
 
 
+def test_resume_list_omits_heavy_payload_but_detail_keeps_raw_text(
+    tmp_path: Path,
+) -> None:
+    """List responses should stay small while detail endpoints keep full resume text."""
+
+    database = tmp_path / "review.sqlite"
+    resume_repo = ResumeRepository(database)
+    raw_text = "AI product manager evidence " * 50_000
+    resume_repo.save(
+        Resume(
+            id="resume-heavy",
+            name="Heavy Candidate",
+            phone="13800138001",
+            education="本科",
+            major="AI Product",
+            job_type="AI产品经理",
+            match_score=99,
+            linked_owner="宋峰峰",
+            linked_platform="zhilian",
+            payload={
+                "rawText": raw_text,
+                "text": raw_text,
+                "projects": [{"name": "large", "evidence": raw_text}],
+                "scoreBreakdown": {"evidence": [raw_text]},
+                "school": "Test University",
+                "schoolLevel": "985",
+                "createdAt": "2026-07-09T12:00:00+08:00",
+            },
+        )
+    )
+    review_repo = ResumeReviewRepository(database)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+    app.state.resume_review_service = ResumeReviewService(
+        review_repo,
+        resume_repository=resume_repo,
+    )
+    app.state.auth_session_store_path = tmp_path / "auth_sessions.sqlite"
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        listed = client.get(
+            "/api/resumes",
+            params={"job_type": "AI产品经理", "sort": "score", "page_size": 10},
+        )
+        detail = client.get("/api/resumes/resume-heavy")
+        context = client.get("/api/resumes/resume-heavy/review-context")
+
+    assert listed.status_code == 200
+    assert len(listed.content) < 200_000
+    item = listed.json()["items"][0]
+    assert item["id"] == "resume-heavy"
+    assert item["major"] == "AI Product"
+    assert item["school"] == "Test University"
+    assert item["schoolLevel"] == "985"
+    assert "payload" not in item
+    assert "rawText" not in listed.text
+    assert "scoreBreakdown" not in listed.text
+    assert "projects" not in listed.text
+
+    assert detail.status_code == 200
+    assert detail.json()["payload"]["rawText"] == raw_text
+    assert context.status_code == 200
+    assert context.json()["resume"]["payload"]["rawText"] == raw_text
+
+
+def test_gzip_middleware_compresses_large_api_responses(tmp_path: Path) -> None:
+    """Large JSON responses should be gzip-compressed when browsers request it."""
+
+    database = tmp_path / "review.sqlite"
+    resume_repo = ResumeRepository(database)
+    raw_text = "full detail text " * 10_000
+    resume_repo.save(
+        Resume(
+            id="resume-gzip",
+            name="GZip Candidate",
+            phone="13800138002",
+            job_type="AI产品经理",
+            payload={"rawText": raw_text},
+        )
+    )
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+    app.state.resume_review_service = ResumeReviewService(
+        ResumeReviewRepository(database),
+        resume_repository=resume_repo,
+    )
+    app.state.auth_session_store_path = tmp_path / "auth_sessions.sqlite"
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        response = client.get(
+            "/api/resumes/resume-gzip",
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+
+
 def test_resume_file_route_returns_pdf_from_stored_resume_path(tmp_path: Path) -> None:
     """PDF 预览接口只通过简历 id 读取数据库中的文件路径。"""
 
@@ -238,6 +340,237 @@ def test_resume_preview_image_route_renders_pdf_page(tmp_path: Path) -> None:
     assert response.content.startswith(b"\x89PNG")
 
 
+def test_resume_preview_pages_route_lists_and_renders_all_pdf_pages(tmp_path: Path) -> None:
+    """Multi-page PDFs should expose page image URLs and render each requested page."""
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "resume-multipage.pdf"
+    _write_multipage_pdf(pdf_path, page_count=2)
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-multipage",
+            name="Multi Page",
+            phone="13700137004",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(pdf_path), "rawText": "Multi page resume"},
+        )
+    )
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        pages = client.get("/api/resumes/resume-multipage/preview-pages")
+        first = client.get("/api/resumes/resume-multipage/preview-image?page=1")
+        second = client.get("/api/resumes/resume-multipage/preview-image?page=2")
+        out_of_range = client.get("/api/resumes/resume-multipage/preview-image?page=3")
+
+    assert pages.status_code == 200
+    assert pages.json() == {
+        "pageCount": 2,
+        "pages": [
+            {"page": 1, "imageUrl": "/api/resumes/resume-multipage/preview-image?page=1"},
+            {"page": 2, "imageUrl": "/api/resumes/resume-multipage/preview-image?page=2"},
+        ],
+    }
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.content.startswith(b"\x89PNG")
+    assert second.content.startswith(b"\x89PNG")
+    assert first.content != second.content
+    assert out_of_range.status_code == 422
+    assert out_of_range.json()["detail"] == "resume_preview_page_out_of_range"
+
+
+def test_resume_preview_image_cache_key_includes_pdf_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cached first page must not be reused for later PDF pages."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "cached-pages.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\npages\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-cached-pages",
+            name="Cached Pages",
+            phone="13700137005",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(pdf_path), "rawText": "Cached page resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path, *, page: int = 1) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return f"png-{render_count}-page-{page}-{path.name}".encode(), "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first = client.get("/api/resumes/resume-cached-pages/preview-image?page=1")
+        second = client.get("/api/resumes/resume-cached-pages/preview-image?page=2")
+        first_again = client.get("/api/resumes/resume-cached-pages/preview-image?page=1")
+        second_again = client.get("/api/resumes/resume-cached-pages/preview-image?page=2")
+
+    assert first.content == b"png-1-page-1-cached-pages.pdf"
+    assert second.content == b"png-2-page-2-cached-pages.pdf"
+    assert first_again.content == first.content
+    assert second_again.content == second.content
+    assert render_count == 2
+
+
+def test_resume_preview_image_route_caches_pdf_render_until_file_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated PDF previews should reuse rendered PNG bytes until the source file changes."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "cached-resume.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\nfirst\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-cached-image",
+            name="Cached",
+            phone="13700137001",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(pdf_path), "rawText": "Cached AI product resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return f"png-{render_count}-{path.name}".encode(), "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first = client.get("/api/resumes/resume-cached-image/preview-image")
+        second = client.get("/api/resumes/resume-cached-image/preview-image")
+        pdf_path.write_bytes(b"%PDF-1.4\nchanged-and-longer\n")
+        changed = client.get("/api/resumes/resume-cached-image/preview-image")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert changed.status_code == 200
+    assert first.content == b"png-1-cached-resume.pdf"
+    assert second.content == first.content
+    assert changed.content == b"png-2-cached-resume.pdf"
+    assert render_count == 2
+
+
+def test_resume_preview_image_route_does_not_cache_non_pdf_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Image previews should keep the existing passthrough behavior."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    image_path = tmp_path / "resume.png"
+    image_path.write_bytes(b"\x89PNG\r\nimage\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-png-image",
+            name="Image",
+            phone="13700137002",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(image_path), "rawText": "Image resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return f"image-{render_count}-{path.name}".encode(), "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first = client.get("/api/resumes/resume-png-image/preview-image")
+        second = client.get("/api/resumes/resume-png-image/preview-image")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.content == b"image-1-resume.png"
+    assert second.content == b"image-2-resume.png"
+    assert render_count == 2
+
+
+def test_resume_preview_image_route_checks_permission_before_cache_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached preview must not let an unauthorized member read a hidden resume."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "forbidden-resume.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\nforbidden\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-forbidden-cached-image",
+            name="Forbidden",
+            phone="13700137003",
+            job_type="外部财务产品顾问",
+            payload={"pdfPath": str(pdf_path), "rawText": "Forbidden finance resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return b"cached-secret-preview", "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        cached = client.get("/api/resumes/resume-forbidden-cached-image/preview-image")
+        client.post("/api/auth/logout")
+        client.post("/api/auth/login", json={"username": "member", "password": "member"})
+        forbidden = client.get("/api/resumes/resume-forbidden-cached-image/preview-image")
+
+    assert cached.status_code == 200
+    assert forbidden.status_code == 403
+    assert forbidden.json()["detail"] == "resume_forbidden"
+    assert render_count == 1
+
+
 def _service(tmp_path: Path) -> tuple[ResumeRepository, ResumeReviewService]:
     database = tmp_path / "review.sqlite"
     resume_repo = ResumeRepository(database)
@@ -284,5 +617,16 @@ def _write_minimal_pdf(path: Path) -> None:
     document = fitz.open()
     page = document.new_page(width=360, height=480)
     page.insert_text((48, 80), "Resume Preview", fontsize=18)
+    document.save(path)
+    document.close()
+
+
+def _write_multipage_pdf(path: Path, *, page_count: int) -> None:
+    import fitz
+
+    document = fitz.open()
+    for page_number in range(1, page_count + 1):
+        page = document.new_page(width=360, height=480)
+        page.insert_text((48, 80), f"Resume Preview Page {page_number}", fontsize=18)
     document.save(path)
     document.close()

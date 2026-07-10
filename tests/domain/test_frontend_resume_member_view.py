@@ -84,7 +84,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260706-candidate-card-meta" in html
+    assert "/assets/app.js?v=20260710-multipage-pdf-preview" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +118,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260706-candidate-card-meta" in html
+    assert "20260710-multipage-pdf-preview" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +242,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260706-candidate-card-meta" in html
+    assert "20260710-multipage-pdf-preview" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +392,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260706-candidate-card-meta" in html
+    assert "20260710-multipage-pdf-preview" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -659,6 +659,38 @@ def test_resume_image_preview_left_click_downloads_file() -> None:
     assert ".resume-download-link" in styles
 
 
+def test_resume_preview_supports_multi_page_pdf_stack() -> None:
+    """PDF previews should stack page images vertically without changing page width."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    render_block = script.split("function renderResumePreview(context)", 1)[1].split(
+        "function renderContext",
+        1,
+    )[0]
+    open_block = script.split("async function openResume(id)", 1)[1].split(
+        "function resumeText",
+        1,
+    )[0]
+    page_image_block = styles.split(".resume-page-image {", 1)[1].split("}", 1)[0]
+
+    assert "function resumePreviewPagesUrl(resume)" in script
+    assert "previewPagesUrl: resumePreviewPagesUrl(resume)" in script
+    assert "function loadResumePreviewPages(context)" in script
+    assert "api(pagesUrl, { signal: controller.signal })" in script
+    assert "requestSequence !== state.resumePreviewPagesRequestSequence" in script
+    assert "state.selectedId !== resumeId" in script
+    assert "state.resumePreviewPagesAbortController.abort()" in open_block
+    assert "normalizedPreviewPages(context)" in render_block
+    assert "renderPreviewPageStack(resume, pages)" in render_block
+    assert "resume-page-stack" in script
+    assert "data-preview-page" in script
+    assert ".resume-page-stack" in styles
+    assert "gap: 18px" in styles
+    assert "width: min(100%, 920px)" in styles
+    assert "max-height" not in page_image_block
+
+
 def test_resume_keyboard_navigation_crosses_page_boundaries() -> None:
     """Left/right shortcuts should move between resumes and across pages."""
 
@@ -726,6 +758,107 @@ def test_resume_filters_debounce_cancel_stale_requests_and_delay_prefetch() -> N
     assert "scheduleResumePrefetchAfterFilter()" in script
     assert "loadResumes({ fromFilter: true })" in script
     assert "loadResumes();" not in apply_block
+
+
+def test_job_tabs_are_cache_first_without_clearing_context_cache() -> None:
+    """Switching job tabs should render cached lists and keep detail cache warm."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    job_tabs_block = script.split("function buildJobTabs()", 1)[1].split(
+        "function queryFromFilters",
+        1,
+    )[0]
+    clear_cache_block = script.split("function clearResumePrefetchCache()", 1)[1].split(
+        "async function clearResumePrefetchCacheAfterMutation",
+        1,
+    )[0]
+    load_block = script.split("async function loadResumes", 1)[1].split(
+        "async function loadQueue",
+        1,
+    )[0]
+
+    assert "loadResumes({ fromFilter: true, preferCache: true })" in job_tabs_block
+    assert "clearResumePrefetchCache()" not in job_tabs_block
+    assert "state.resumeContextCache.clear()" not in clear_cache_block
+    assert "fromFilter && cached" in load_block
+    assert "applyResumeListData(cached, { stale: true })" in load_block
+    assert "refreshCachedResumeList(cacheKey, requestSequence, fromFilter)" in load_block
+
+
+def test_job_tab_switch_prefetches_neighbor_jobs_without_blocking_current_page() -> None:
+    """After a job switch, the library should warm nearby job tabs."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert "function prefetchAdjacentJobFirstPages()" in script
+    assert "state.lastJobTabPrefetchKey" in script
+    assert "prefetchAdjacentJobFirstPages()" in script
+    assert "resumeListCacheKeyForJob(job, 1)" in script
+
+
+def test_job_tab_prefetch_waits_until_current_list_is_rendered() -> None:
+    """Job switches should not start adjacent prefetches before the current list is visible."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    load_block = script.split("async function loadResumes", 1)[1].split(
+        "async function loadQueue",
+        1,
+    )[0]
+    refresh_block = script.split("async function refreshCachedResumeList", 1)[1].split(
+        "async function loadResumes",
+        1,
+    )[0]
+    schedule_block = script.split("function scheduleResumePrefetchAfterFilter()", 1)[
+        1
+    ].split("async function refreshCachedResumeList", 1)[0]
+
+    assert "scheduleResumePrefetchAfterFilter();" in load_block
+    assert "scheduleResumePrefetchAfterFilter();" in refresh_block
+    assert "prefetchAdjacentJobFirstPages();" not in load_block
+    assert "prefetchAdjacentJobFirstPages();" not in refresh_block
+    assert "prefetchNextResumePages();" in schedule_block
+    assert "prefetchAdjacentJobFirstPages();" in schedule_block
+
+
+def test_candidate_list_uses_slim_resume_fields_without_raw_text_fallback() -> None:
+    """Candidate cards should render from slim list fields, not full resume payload text."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    render_block = script.split("function renderMiniList()", 1)[1].split(
+        "function renderPagination",
+        1,
+    )[0]
+
+    assert "resumeListMajor(resume)" in render_block
+    assert "resumeListSchool(resume)" in render_block
+    assert "resumeListSchoolTierBadge(resume)" in render_block
+    assert "resumeSchool(resume)" not in render_block
+    assert "resumeSchoolTierBadge(resume)" not in render_block
+    assert "resumeRawText(resume)" not in render_block
+    assert "rawText" not in render_block
+
+
+def test_open_resume_updates_selection_and_cancels_stale_context() -> None:
+    """Fast contact switches should ignore stale review-context responses."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    open_block = script.split("async function openResume(id)", 1)[1].split(
+        "function resumeText",
+        1,
+    )[0]
+
+    assert "resumeContextAbortController" in script
+    assert "resumeContextRequestSequence" in script
+    assert "function updateResumeSelectionDom(previousId, nextId)" in script
+    assert "function renderOptimisticResumeContext(resume)" in script
+    assert "updateResumeSelectionDom(previousId, id)" in open_block
+    assert "renderOptimisticResumeContext(resume)" in open_block
+    assert "new AbortController()" in open_block
+    assert "state.resumeContextAbortController.abort()" in open_block
+    assert "requestSequence !== state.resumeContextRequestSequence" in open_block
+    assert "api(`/api/resumes/${id}/review-context`, { signal: controller.signal })" in open_block
+    assert "renderRows();" not in open_block
+    assert "renderMiniList();" not in open_block
 
 
 def test_resume_library_prefetches_next_ten_preview_images_without_marking_viewed() -> None:
@@ -868,7 +1001,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260706-candidate-card-meta" in html
+    assert "20260710-multipage-pdf-preview" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -917,8 +1050,8 @@ def test_candidate_card_shows_major_account_and_compact_date() -> None:
     assert "return account ? `${platform} ' ${account}` : platform" in script
     assert 'class="candidate-card__job-main"' in script
     assert 'class="candidate-card__major"' in script
-    assert 'resumeMajor(resume) || "暂未提取到"' in script
-    assert "resumeCompactImportDate(resume)" in script
+    assert 'resumeListMajor(resume) || "暂未提取到"' in script
+    assert "resumeListCompactImportDate(resume)" in script
     assert "resumePlatformAccountLabel(resume)" in script
     assert ".candidate-card__major" in styles
 
@@ -1184,7 +1317,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260706-candidate-card-meta" in html
+    assert "/assets/styles.css?v=20260710-multipage-pdf-preview" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
