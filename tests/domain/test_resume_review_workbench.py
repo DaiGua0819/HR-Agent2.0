@@ -431,6 +431,107 @@ def test_resume_preview_image_cache_key_includes_pdf_page(
     assert render_count == 2
 
 
+def test_resume_preview_image_route_uses_disk_cache_after_memory_cache_clear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendered PDF pages should persist on disk so repeat opens avoid rerendering."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "disk-cached-resume.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\ndisk-cache\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-disk-cached-image",
+            name="Disk Cached",
+            phone="13700137006",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(pdf_path), "rawText": "Disk cached page resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path, *, page: int = 1) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return f"disk-png-{render_count}-page-{page}-{path.name}".encode(), "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    resume_routes._PDF_PREVIEW_IMAGE_CACHE.clear()
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+    app.state.resume_preview_cache_dir = tmp_path / "preview-cache"
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first = client.get("/api/resumes/resume-disk-cached-image/preview-image?page=2")
+        resume_routes._PDF_PREVIEW_IMAGE_CACHE.clear()
+        second = client.get("/api/resumes/resume-disk-cached-image/preview-image?page=2")
+
+    cache_files = list((tmp_path / "preview-cache").rglob("*.png"))
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.content == b"disk-png-1-page-2-disk-cached-resume.pdf"
+    assert second.content == first.content
+    assert first.headers["etag"]
+    assert "private" in first.headers["cache-control"]
+    assert len(cache_files) == 1
+    assert render_count == 1
+
+
+def test_resume_preview_image_route_returns_not_modified_for_matching_etag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser cache revalidation should avoid rerendering unchanged PDF pages."""
+
+    from app.api.routes import resumes as resume_routes
+
+    database = tmp_path / "review.sqlite"
+    pdf_path = tmp_path / "etag-resume.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\netag-cache\n")
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-etag-cached-image",
+            name="Etag Cached",
+            phone="13700137007",
+            job_type="AI产品经理",
+            payload={"pdfPath": str(pdf_path), "rawText": "ETag cached page resume"},
+        )
+    )
+    render_count = 0
+
+    def fake_render_preview_image(path: Path, *, page: int = 1) -> tuple[bytes, str]:
+        nonlocal render_count
+        render_count += 1
+        return f"etag-png-{render_count}-page-{page}-{path.name}".encode(), "image/png"
+
+    monkeypatch.setattr(resume_routes, "render_preview_image", fake_render_preview_image)
+    resume_routes._PDF_PREVIEW_IMAGE_CACHE.clear()
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_service = ResumeService(resume_repo)
+    app.state.resume_preview_cache_dir = tmp_path / "preview-cache"
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first = client.get("/api/resumes/resume-etag-cached-image/preview-image?page=1")
+        revalidated = client.get(
+            "/api/resumes/resume-etag-cached-image/preview-image?page=1",
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+
+    assert first.status_code == 200
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+    assert render_count == 1
+
+
 def test_resume_preview_image_route_caches_pdf_render_until_file_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

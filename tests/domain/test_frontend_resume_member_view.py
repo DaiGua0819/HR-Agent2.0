@@ -84,7 +84,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260710-multipage-pdf-preview" in html
+    assert "/assets/app.js?v=20260710-pdf-lazy-cache" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +118,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260710-multipage-pdf-preview" in html
+    assert "20260710-pdf-lazy-cache" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +242,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260710-multipage-pdf-preview" in html
+    assert "20260710-pdf-lazy-cache" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +392,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260710-multipage-pdf-preview" in html
+    assert "20260710-pdf-lazy-cache" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -681,11 +681,20 @@ def test_resume_preview_supports_multi_page_pdf_stack() -> None:
     assert "requestSequence !== state.resumePreviewPagesRequestSequence" in script
     assert "state.selectedId !== resumeId" in script
     assert "state.resumePreviewPagesAbortController.abort()" in open_block
+    assert "RESUME_PREVIEW_INITIAL_PAGE_LOAD_COUNT = 2" in script
+    assert "RESUME_PREVIEW_NEXT_PAGE_ROOT_MARGIN" in script
+    assert "function shouldEagerLoadPreviewPage(page)" in script
+    assert "function observeResumePreviewPages()" in script
+    assert "new IntersectionObserver" in script
+    assert "loadPreviewPageImage(nextImage)" in script
     assert "normalizedPreviewPages(context)" in render_block
     assert "renderPreviewPageStack(resume, pages)" in render_block
     assert "resume-page-stack" in script
+    assert "resume-page-frame" in script
     assert "data-preview-page" in script
+    assert "data-preview-page-src" in script
     assert ".resume-page-stack" in styles
+    assert ".resume-page-frame" in styles
     assert "gap: 18px" in styles
     assert "width: min(100%, 920px)" in styles
     assert "max-height" not in page_image_block
@@ -862,7 +871,7 @@ def test_open_resume_updates_selection_and_cancels_stale_context() -> None:
 
 
 def test_resume_library_prefetches_next_ten_preview_images_without_marking_viewed() -> None:
-    """Opening a resume should warm nearby preview images without touching review-context."""
+    """Opening a resume should delay nearby preview prefetches without touching review-context."""
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     assert "function prefetchFollowingResumePreviewImages" in script
@@ -887,7 +896,9 @@ def test_resume_library_prefetches_next_ten_preview_images_without_marking_viewe
     assert "image.src = url" in script
     assert "followingResumePreviewCandidates(selectedId).forEach(({ url }) => {" in script
     assert "enqueueResumePreviewImagePrefetch(url)" in preview_block
-    assert "prefetchFollowingResumePreviewImages(id)" in script
+    assert "function scheduleFollowingResumePreviewImages(selectedId)" in script
+    assert "RESUME_PREVIEW_PREFETCH_DELAY_MS" in script
+    assert "scheduleFollowingResumePreviewImages(id)" in script
     assert "review-context" not in preview_block
 
 
@@ -1001,7 +1012,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260710-multipage-pdf-preview" in html
+    assert "20260710-pdf-lazy-cache" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1317,7 +1328,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260710-multipage-pdf-preview" in html
+    assert "/assets/styles.css?v=20260710-pdf-lazy-cache" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

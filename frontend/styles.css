@@ -1184,8 +1184,21 @@ h3 { font-size: 15px; }
   gap: 18px;
   width: 100%;
 }
+.resume-page-frame {
+  display: grid;
+  justify-items: center;
+  width: min(100%, 920px);
+}
 .resume-page-image {
   display: block;
+}
+.resume-page-frame .resume-page-image {
+  width: 100%;
+}
+.resume-page-image[data-preview-page-src]:not([src]) {
+  aspect-ratio: 1 / 1.414;
+  min-height: 320px;
+  background: linear-gradient(180deg, #ffffff 0%, #f3f6fb 100%);
 }
 .resume-download-link {
   display: block;
@@ -1198,6 +1211,10 @@ h3 { font-size: 15px; }
   margin-inline: auto;
 }
 .ts-resume-workspace.is-library-collapsed .resume-image-stage img {
+  width: 100%;
+  max-width: 1040px;
+}
+.ts-resume-workspace.is-library-collapsed .resume-page-frame {
   width: 100%;
   max-width: 1040px;
 }

@@ -183,7 +183,7 @@ class ResumeReviewService:
                 "available": preview_path is not None,
                 "previewUrl": f"/api/resumes/{resume.id}/file" if preview_path else "",
                 "previewImageUrl": (
-                    f"/api/resumes/{resume.id}/preview-image" if preview_path else ""
+                    f"/api/resumes/{resume.id}/preview-image?page=1" if preview_path else ""
                 ),
                 "previewPagesUrl": (
                     f"/api/resumes/{resume.id}/preview-pages" if preview_path else ""

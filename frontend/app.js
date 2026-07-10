@@ -44,11 +44,16 @@ const state = {
   resumePreviewImageLoaders: new Map(),
   resumePreviewImageActiveCount: 0,
   resumePreviewImageGeneration: 0,
+  resumePreviewPageObserver: null,
+  resumePreviewPrefetchTimer: null,
 };
 const RESUME_FILTER_DEBOUNCE_MS = 250;
 const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
+const RESUME_PREVIEW_PREFETCH_DELAY_MS = 650;
+const RESUME_PREVIEW_INITIAL_PAGE_LOAD_COUNT = 2;
+const RESUME_PREVIEW_NEXT_PAGE_ROOT_MARGIN = "900px 0px";
 const SUMMARY_PANEL_STORAGE_KEY = "resumeSummaryPanelWidth";
 const SUMMARY_PANEL_COLLAPSED_STORAGE_KEY = "resumeSummaryPanelCollapsed";
 const SUMMARY_PANEL_DEFAULT_WIDTH = 276;
@@ -761,6 +766,11 @@ function resumePreviewPagesUrl(resume) {
 }
 function clearResumePreviewImagePrefetchQueue() {
   state.resumePreviewImageGeneration += 1;
+  if (state.resumePreviewPrefetchTimer) {
+    clearTimeout(state.resumePreviewPrefetchTimer);
+    state.resumePreviewPrefetchTimer = null;
+  }
+  disconnectResumePreviewPageObserver();
   state.resumePreviewImageLoaders.forEach((image) => {
     image.onload = null;
     image.onerror = null;
@@ -838,6 +848,14 @@ function prefetchFollowingResumePreviewImages(selectedId) {
   followingResumePreviewCandidates(selectedId).forEach(({ url }) => {
     enqueueResumePreviewImagePrefetch(url);
   });
+}
+function scheduleFollowingResumePreviewImages(selectedId) {
+  if (state.resumePreviewPrefetchTimer) clearTimeout(state.resumePreviewPrefetchTimer);
+  state.resumePreviewPrefetchTimer = setTimeout(() => {
+    state.resumePreviewPrefetchTimer = null;
+    if (state.selectedId !== selectedId) return;
+    prefetchFollowingResumePreviewImages(selectedId);
+  }, RESUME_PREVIEW_PREFETCH_DELAY_MS);
 }
 function prefetchNextResumePages() {
   if (state.view !== "resumes" || state.tab === "queue") return;
@@ -1178,7 +1196,7 @@ async function openResume(id) {
   const previousId = state.selectedId;
   state.selectedId = id;
   updateResumeSelectionDom(previousId, id);
-  prefetchFollowingResumePreviewImages(id);
+  scheduleFollowingResumePreviewImages(id);
   if (state.resumePreviewPagesAbortController) {
     state.resumePreviewPagesAbortController.abort();
     state.resumePreviewPagesAbortController = null;
@@ -1246,7 +1264,7 @@ function normalizedPreviewPages(context) {
   const firstPageUrl = file.previewImageUrl || resumePreviewImageUrl(resume);
   return firstPageUrl ? [{ page: 1, imageUrl: firstPageUrl }] : [];
 }
-function renderPreviewPageStack(resume, pages) {
+function renderPreviewPageStackLegacy(resume, pages) {
   return `
     <div class="resume-page-stack" data-page-count="${pages.length}">
       ${pages
@@ -1263,6 +1281,74 @@ function renderPreviewPageStack(resume, pages) {
         .join("")}
     </div>
   `;
+}
+function renderPreviewPageStack(resume, pages) {
+  return `
+    <div class="resume-page-stack" data-page-count="${pages.length}">
+      ${pages
+        .map((page) => {
+          const pageNumber = Number(page.page || 1);
+          const eager = shouldEagerLoadPreviewPage(page);
+          const imageUrl = escapeHtml(page.imageUrl);
+          const sourceAttribute = eager
+            ? `src="${imageUrl}"`
+            : `data-preview-page-src="${imageUrl}"`;
+          return `
+            <div class="resume-page-frame" data-preview-frame-page="${escapeHtml(String(pageNumber))}">
+              <img
+                class="resume-page-image${eager ? "" : " resume-page-image--pending"}"
+                data-preview-page="${escapeHtml(String(pageNumber))}"
+                alt="${escapeHtml(resumeName(resume))} resume page ${escapeHtml(String(pageNumber))}"
+                loading="${eager ? "eager" : "lazy"}"
+                decoding="async"
+                ${sourceAttribute}
+              />
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+function shouldEagerLoadPreviewPage(page) {
+  return Number(page?.page || page || 0) <= RESUME_PREVIEW_INITIAL_PAGE_LOAD_COUNT;
+}
+function disconnectResumePreviewPageObserver() {
+  if (!state.resumePreviewPageObserver) return;
+  state.resumePreviewPageObserver.disconnect();
+  state.resumePreviewPageObserver = null;
+}
+function loadPreviewPageImage(image) {
+  if (!image || !image.dataset.previewPageSrc) return;
+  image.src = image.dataset.previewPageSrc;
+  image.removeAttribute("data-preview-page-src");
+  image.classList.remove("resume-page-image--pending");
+}
+function observeResumePreviewPages() {
+  disconnectResumePreviewPageObserver();
+  const preview = $("resumePreview");
+  if (!preview) return;
+  const frames = Array.from(preview.querySelectorAll("[data-preview-frame-page]"));
+  if (!frames.length) return;
+  if (!("IntersectionObserver" in window)) {
+    preview.querySelectorAll("[data-preview-page-src]").forEach(loadPreviewPageImage);
+    return;
+  }
+  state.resumePreviewPageObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const frame = entry.target;
+        const pageNumber = Number(frame.dataset.previewFramePage || 0);
+        loadPreviewPageImage(frame.querySelector("[data-preview-page-src]"));
+        const nextFrame = preview.querySelector(`[data-preview-frame-page="${pageNumber + 1}"]`);
+        const nextImage = nextFrame?.querySelector("[data-preview-page-src]");
+        loadPreviewPageImage(nextImage);
+      });
+    },
+    { root: preview, rootMargin: RESUME_PREVIEW_NEXT_PAGE_ROOT_MARGIN, threshold: 0.01 },
+  );
+  frames.forEach((frame) => state.resumePreviewPageObserver.observe(frame));
 }
 async function loadResumePreviewPages(context) {
   const resume = context?.resume || {};
@@ -1318,6 +1404,7 @@ function renderResumePreview(context) {
   const file = context.file || {};
   const preview = $("resumePreview");
   if (!preview) return;
+  disconnectResumePreviewPageObserver();
   const pages = normalizedPreviewPages(context);
   if (file.available && pages.length) {
     preview.className = "resume-preview image-preview";
@@ -1328,6 +1415,7 @@ function renderResumePreview(context) {
         </a>
       </div>
     `;
+    observeResumePreviewPages();
     if (!Array.isArray(file.previewPages) || !file.previewPages.length) {
       loadResumePreviewPages(context).catch((error) => {
         if (error?.name !== "AbortError") console.debug("resume preview pages failed", error);

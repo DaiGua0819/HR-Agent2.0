@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,10 +27,12 @@ from app.domain.resume.job_types import display_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.service import ResumeService, build_resume_service
 from app.domain.resume_review.service import ResumeReviewService
+from app.settings import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
 _PDF_PREVIEW_IMAGE_CACHE_MAX = 256
 _PDF_PREVIEW_IMAGE_CACHE: dict[tuple[str, str, int, int, int], tuple[bytes, str]] = {}
+_PDF_PREVIEW_CACHE_VERSION = "pdf-preview-v2-scale2"
 
 
 class ResumeUpdateRequest(BaseModel):
@@ -162,11 +165,16 @@ async def get_resume_preview_image(
     path = preview_file_path(resume)
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
+    if path.suffix.lower() != ".pdf" and page != 1:
+        raise HTTPException(status_code=422, detail="resume_preview_page_out_of_range")
+    headers = _preview_cache_headers(path, page=page)
+    if request.headers.get("if-none-match") == headers.get("ETag"):
+        return Response(status_code=304, headers=headers)
     try:
-        body, media_type = _render_preview_image_cached(resume_id, path, page=page)
+        body, media_type = _render_preview_image_cached(request, resume_id, path, page=page)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return Response(content=body, media_type=media_type)
+    return Response(content=body, media_type=media_type, headers=headers)
 
 
 @router.get("/{resume_id}/preview-pages")
@@ -253,7 +261,13 @@ def _assert_resume_visible(request: Request, resume: Resume | None) -> None:
         raise HTTPException(status_code=403, detail="resume_forbidden")
 
 
-def _render_preview_image_cached(resume_id: str, path: Path, *, page: int = 1) -> tuple[bytes, str]:
+def _render_preview_image_cached(
+    request: Request,
+    resume_id: str,
+    path: Path,
+    *,
+    page: int = 1,
+) -> tuple[bytes, str]:
     if page < 1:
         raise ValueError("resume_preview_page_out_of_range")
     if path.suffix.lower() != ".pdf":
@@ -265,13 +279,73 @@ def _render_preview_image_cached(resume_id: str, path: Path, *, page: int = 1) -
     cached = _PDF_PREVIEW_IMAGE_CACHE.get(key)
     if cached is not None:
         return cached
+    disk_path = _pdf_preview_disk_cache_path(request, resume_id, path, page=page, stat=stat)
+    if disk_path.is_file():
+        body = disk_path.read_bytes()
+        cached = (body, "image/png")
+        _remember_pdf_preview_cache(key, cached)
+        return cached
     body, media_type = (
         render_preview_image(path) if page == 1 else render_preview_image(path, page=page)
     )
+    _write_pdf_preview_disk_cache(disk_path, body)
+    _remember_pdf_preview_cache(key, (body, media_type))
+    return body, media_type
+
+
+def _remember_pdf_preview_cache(
+    key: tuple[str, str, int, int, int],
+    value: tuple[bytes, str],
+) -> None:
     if len(_PDF_PREVIEW_IMAGE_CACHE) >= _PDF_PREVIEW_IMAGE_CACHE_MAX:
         _PDF_PREVIEW_IMAGE_CACHE.pop(next(iter(_PDF_PREVIEW_IMAGE_CACHE)))
-    _PDF_PREVIEW_IMAGE_CACHE[key] = (body, media_type)
-    return body, media_type
+    _PDF_PREVIEW_IMAGE_CACHE[key] = value
+
+
+def _preview_cache_headers(path: Path, *, page: int) -> dict[str, str]:
+    stat = path.stat()
+    etag = hashlib.sha256(
+        f"{_PDF_PREVIEW_CACHE_VERSION}|{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{page}".encode()
+    ).hexdigest()
+    return {
+        "Cache-Control": "private, max-age=86400",
+        "ETag": f'"{etag}"',
+    }
+
+
+def _pdf_preview_disk_cache_path(
+    request: Request,
+    resume_id: str,
+    path: Path,
+    *,
+    page: int,
+    stat: Any,
+) -> Path:
+    cache_root = Path(
+        getattr(
+            request.app.state,
+            "resume_preview_cache_dir",
+            PROJECT_ROOT / "data" / "cache" / "resume_previews",
+        )
+    )
+    safe_resume_id = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "_"
+        for character in resume_id
+    )[:80] or "resume"
+    digest = hashlib.sha256(
+        f"{_PDF_PREVIEW_CACHE_VERSION}|{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{page}".encode()
+    ).hexdigest()
+    return cache_root / safe_resume_id / f"{digest}.png"
+
+
+def _write_pdf_preview_disk_cache(path: Path, body: bytes) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_bytes(body)
+        temporary.replace(path)
+    except OSError:
+        return
 
 
 def _resume_payload(
@@ -315,7 +389,9 @@ def _resume_display_payload(
         "sourceArtifactId": resume.source_artifact_id,
         "hasFilePreview": file_path is not None,
         "filePreviewUrl": f"/api/resumes/{resume.id}/file" if file_path else "",
-        "filePreviewImageUrl": f"/api/resumes/{resume.id}/preview-image" if file_path else "",
+        "filePreviewImageUrl": (
+            f"/api/resumes/{resume.id}/preview-image?page=1" if file_path else ""
+        ),
         "filePreviewPagesUrl": f"/api/resumes/{resume.id}/preview-pages" if file_path else "",
         "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
         "reviewState": _review_state_payload(review_state),
