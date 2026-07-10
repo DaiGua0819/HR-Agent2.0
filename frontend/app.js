@@ -46,6 +46,16 @@ const state = {
   resumePreviewImageGeneration: 0,
   resumePreviewPageObserver: null,
   resumePreviewPrefetchTimer: null,
+  resumePdfjsModulePromise: null,
+  resumePdfActiveKey: "",
+  resumePdfDocumentLoadingTask: null,
+  resumePdfDocument: null,
+  resumePdfRenderGeneration: 0,
+  resumePdfRenderTasks: new Map(),
+  resumePdfRequestedPages: new Set(),
+  resumePdfRenderedPages: new Set(),
+  resumePdfPageObserver: null,
+  resumePdfScrollCleanup: null,
 };
 const RESUME_FILTER_DEBOUNCE_MS = 250;
 const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
@@ -54,6 +64,11 @@ const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
 const RESUME_PREVIEW_PREFETCH_DELAY_MS = 650;
 const RESUME_PREVIEW_INITIAL_PAGE_LOAD_COUNT = 2;
 const RESUME_PREVIEW_NEXT_PAGE_ROOT_MARGIN = "900px 0px";
+const PDFJS_VENDOR_BASE = "/assets/vendor/pdfjs";
+const RESUME_PDFJS_INITIAL_PAGE_RENDER_COUNT = 2;
+const RESUME_PDFJS_NEXT_PAGE_ROOT_MARGIN = "900px 0px";
+const RESUME_PDFJS_RENDER_SCALE_MAX = 2.4;
+const RESUME_PDFJS_SCROLL_ACTIVATION_RATIO = 0.45;
 const SUMMARY_PANEL_STORAGE_KEY = "resumeSummaryPanelWidth";
 const SUMMARY_PANEL_COLLAPSED_STORAGE_KEY = "resumeSummaryPanelCollapsed";
 const SUMMARY_PANEL_DEFAULT_WIDTH = 276;
@@ -755,6 +770,17 @@ function applyResumeListData(data, { stale = false } = {}) {
 function resumePreviewImageUrl(resume) {
   return resume?.filePreviewImageUrl || resume?.file_preview_image_url || resume?.file?.previewImageUrl || "";
 }
+function resumePreviewPdfUrl(resume, file = {}) {
+  if (!resume) return "";
+  return (
+    file.previewUrl ||
+    file.preview_url ||
+    resume.filePreviewUrl ||
+    resume.file_preview_url ||
+    resume.file?.previewUrl ||
+    ""
+  );
+}
 function resumePreviewPagesUrl(resume) {
   if (!resume) return "";
   return (
@@ -795,6 +821,7 @@ function followingResumePreviewCandidates(selectedId) {
     for (const resume of items || []) {
       if (result.length >= RESUME_PREVIEW_PREFETCH_LIMIT) return;
       const id = resume?.id || "";
+      if (resumePreviewPdfUrl(resume)) continue;
       const url = resumePreviewImageUrl(resume);
       if (!id || seen.has(id) || !url) continue;
       seen.add(id);
@@ -1169,12 +1196,14 @@ function updateResumeSelectionDom(previousId, nextId) {
 function renderOptimisticResumeContext(resume) {
   if (!resume) return;
   const previewImageUrl = resumePreviewImageUrl(resume);
+  const previewPdfUrl = resumePreviewPdfUrl(resume);
   const context = {
     resume,
     reviewState: resume.reviewState || {},
     score: { value: resume.match_score ?? resume.matchScore ?? "", grade: resume.scoreGrade || "" },
     file: {
-      available: Boolean(previewImageUrl),
+      available: Boolean(previewPdfUrl || previewImageUrl),
+      previewUrl: previewPdfUrl,
       previewImageUrl,
       previewPagesUrl: resumePreviewPagesUrl(resume),
       downloadUrl: resume.fileDownloadUrl || resume.file_download_url || "",
@@ -1197,6 +1226,7 @@ async function openResume(id) {
   state.selectedId = id;
   updateResumeSelectionDom(previousId, id);
   scheduleFollowingResumePreviewImages(id);
+  cancelResumePdfRendering();
   if (state.resumePreviewPagesAbortController) {
     state.resumePreviewPagesAbortController.abort();
     state.resumePreviewPagesAbortController = null;
@@ -1263,6 +1293,252 @@ function normalizedPreviewPages(context) {
   if (normalized.length) return normalized;
   const firstPageUrl = file.previewImageUrl || resumePreviewImageUrl(resume);
   return firstPageUrl ? [{ page: 1, imageUrl: firstPageUrl }] : [];
+}
+async function loadPdfjsModule() {
+  if (!state.resumePdfjsModulePromise) {
+    state.resumePdfjsModulePromise = import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`).then((pdfjs) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = `${PDFJS_VENDOR_BASE}/build/pdf.worker.mjs`;
+      return pdfjs;
+    });
+  }
+  return state.resumePdfjsModulePromise;
+}
+function disconnectResumePdfPageObserver() {
+  if (state.resumePdfPageObserver) {
+    state.resumePdfPageObserver.disconnect();
+    state.resumePdfPageObserver = null;
+  }
+  if (state.resumePdfScrollCleanup) {
+    state.resumePdfScrollCleanup();
+    state.resumePdfScrollCleanup = null;
+  }
+}
+function cancelResumePdfRendering() {
+  disconnectResumePdfPageObserver();
+  state.resumePdfRenderGeneration += 1;
+  state.resumePdfRenderTasks.forEach((task) => {
+    try {
+      task.cancel();
+    } catch (error) {
+      console.debug("resume pdf render cancel failed", error);
+    }
+  });
+  state.resumePdfRenderTasks.clear();
+  state.resumePdfRequestedPages.clear();
+  state.resumePdfRenderedPages.clear();
+  if (state.resumePdfDocumentLoadingTask) {
+    const loadingTask = state.resumePdfDocumentLoadingTask;
+    state.resumePdfDocumentLoadingTask = null;
+    try {
+      const destroyed = loadingTask.destroy();
+      if (destroyed?.catch) destroyed.catch(() => {});
+    } catch (error) {
+      console.debug("resume pdf loading cancel failed", error);
+    }
+  }
+  if (state.resumePdfDocument?.destroy) {
+    try {
+      const destroyed = state.resumePdfDocument.destroy();
+      if (destroyed?.catch) destroyed.catch(() => {});
+    } catch (error) {
+      console.debug("resume pdf document destroy failed", error);
+    }
+  }
+  state.resumePdfDocument = null;
+  state.resumePdfActiveKey = "";
+}
+function pdfRenderKey(resume, file = {}) {
+  const pdfUrl = resumePreviewPdfUrl(resume, file);
+  return resume?.id && pdfUrl ? `${resume.id}:${pdfUrl}` : "";
+}
+function isCurrentPdfRender(key, generation, resumeId) {
+  return (
+    key &&
+    state.resumePdfActiveKey === key &&
+    state.resumePdfRenderGeneration === generation &&
+    state.selectedId === resumeId
+  );
+}
+function renderPdfjsPreview(context) {
+  const resume = context?.resume || {};
+  const file = context?.file || {};
+  const preview = $("resumePreview");
+  const pdfUrl = resumePreviewPdfUrl(resume, file);
+  if (!preview || !resume.id || !pdfUrl) return false;
+  const key = pdfRenderKey(resume, file);
+  const downloadUrl = file.downloadUrl || `/api/resumes/${resume.id}/download`;
+  const existingStack = preview.querySelector(".resume-pdfjs-stack");
+  if (state.resumePdfActiveKey === key && existingStack?.dataset.pdfjsActiveKey === key) {
+    const link = preview.querySelector(".resume-download-link");
+    if (link) link.href = downloadUrl;
+    return true;
+  }
+  cancelResumePdfRendering();
+  const generation = state.resumePdfRenderGeneration;
+  state.resumePdfActiveKey = key;
+  preview.className = "resume-preview image-preview pdfjs-preview";
+  preview.innerHTML = `
+    <div class="resume-image-stage">
+      <a href="${escapeHtml(downloadUrl)}" download class="resume-download-link" title="点击下载简历PDF">
+        <div class="resume-pdfjs-stack" data-pdfjs-active-key="${escapeHtml(key)}">
+          <div class="resume-pdfjs-loading">Loading resume preview...</div>
+        </div>
+      </a>
+    </div>
+  `;
+  startPdfjsDocumentRender(context, key, generation).catch((error) => {
+    fallbackPdfjsPreview(context, error, generation);
+  });
+  return true;
+}
+async function startPdfjsDocumentRender(context, key, generation) {
+  const resume = context?.resume || {};
+  const file = context?.file || {};
+  const pdfUrl = resumePreviewPdfUrl(resume, file);
+  const pdfjs = await loadPdfjsModule();
+  if (!isCurrentPdfRender(key, generation, resume.id)) return;
+  const loadingTask = pdfjs.getDocument({
+    url: pdfUrl,
+    withCredentials: true,
+    cMapUrl: `${PDFJS_VENDOR_BASE}/cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${PDFJS_VENDOR_BASE}/standard_fonts/`,
+    wasmUrl: `${PDFJS_VENDOR_BASE}/wasm/`,
+  });
+  state.resumePdfDocumentLoadingTask = loadingTask;
+  const pdfDocument = await loadingTask.promise;
+  if (!isCurrentPdfRender(key, generation, resume.id)) {
+    if (pdfDocument?.destroy) pdfDocument.destroy();
+    return;
+  }
+  state.resumePdfDocument = pdfDocument;
+  renderPdfjsPageFrames(context, pdfDocument.numPages || 1);
+  const initialPageCount = Math.min(
+    pdfDocument.numPages || 1,
+    RESUME_PDFJS_INITIAL_PAGE_RENDER_COUNT,
+  );
+  for (let pageNumber = 1; pageNumber <= initialPageCount; pageNumber += 1) {
+    renderPdfjsPage(pageNumber, context, key, generation);
+  }
+  observePdfjsPages(context, key, generation);
+}
+function renderPdfjsPageFrames(context, pageCount) {
+  const resume = context?.resume || {};
+  const preview = $("resumePreview");
+  const stack = preview?.querySelector(".resume-pdfjs-stack");
+  if (!stack) return;
+  stack.dataset.pageCount = String(pageCount);
+  stack.innerHTML = Array.from({ length: pageCount }, (_, index) => {
+    const pageNumber = index + 1;
+    return `
+      <div class="resume-pdfjs-page" data-pdfjs-frame-page="${escapeHtml(String(pageNumber))}">
+        <div class="resume-pdfjs-page-placeholder">
+          ${escapeHtml(resumeName(resume))} page ${escapeHtml(String(pageNumber))}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+function observePdfjsPages(context, key, generation) {
+  disconnectResumePdfPageObserver();
+  const preview = $("resumePreview");
+  const frames = Array.from(preview?.querySelectorAll("[data-pdfjs-frame-page]") || []);
+  if (!preview || !frames.length) return;
+  const queuePagesNearScroll = () => {
+    if (!isCurrentPdfRender(key, generation, context?.resume?.id || "")) return;
+    const pageNumber = activePdfjsPageNearScroll(preview);
+    renderPdfjsPage(pageNumber, context, key, generation);
+    renderPdfjsPage(pageNumber + 1, context, key, generation);
+  };
+  preview.addEventListener("scroll", queuePagesNearScroll, { passive: true });
+  state.resumePdfScrollCleanup = () => {
+    preview.removeEventListener("scroll", queuePagesNearScroll);
+  };
+  requestAnimationFrame(queuePagesNearScroll);
+}
+function activePdfjsPageNearScroll(preview) {
+  const frames = Array.from(preview?.querySelectorAll("[data-pdfjs-frame-page]") || []);
+  if (!frames.length) return 1;
+  const activationLine =
+    (preview.scrollTop || 0) + (preview.clientHeight || 0) * RESUME_PDFJS_SCROLL_ACTIVATION_RATIO;
+  let pageNumber = 1;
+  frames.forEach((frame) => {
+    const framePage = Number(frame.dataset.pdfjsFramePage || 0);
+    if (framePage > 0 && frame.offsetTop <= activationLine) {
+      pageNumber = framePage;
+    }
+  });
+  return pageNumber;
+}
+async function renderPdfjsPage(pageNumber, context, key, generation) {
+  const resume = context?.resume || {};
+  const pdfDocument = state.resumePdfDocument;
+  if (
+    !Number.isFinite(pageNumber) ||
+    pageNumber < 1 ||
+    !pdfDocument ||
+    pageNumber > (pdfDocument.numPages || 0) ||
+    state.resumePdfRequestedPages.has(pageNumber) ||
+    !isCurrentPdfRender(key, generation, resume.id)
+  ) {
+    return;
+  }
+  state.resumePdfRequestedPages.add(pageNumber);
+  const preview = $("resumePreview");
+  const frame = preview?.querySelector(`[data-pdfjs-frame-page="${pageNumber}"]`);
+  if (frame) frame.classList.add("resume-pdfjs-page--loading");
+  try {
+    const pdfPage = await pdfDocument.getPage(pageNumber);
+    if (!isCurrentPdfRender(key, generation, resume.id)) return;
+    const baseViewport = pdfPage.getViewport({ scale: 1 });
+    const frameWidth = frame?.clientWidth || Math.min(preview?.clientWidth || 920, 920);
+    const pixelRatio = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    const scale = Math.min(
+      RESUME_PDFJS_RENDER_SCALE_MAX,
+      Math.max(1, (frameWidth * pixelRatio) / Math.max(baseViewport.width, 1)),
+    );
+    const viewport = pdfPage.getViewport({ scale });
+    const offscreenCanvas = document.createElement("canvas");
+    offscreenCanvas.width = Math.ceil(viewport.width);
+    offscreenCanvas.height = Math.ceil(viewport.height);
+    offscreenCanvas.className = "resume-pdfjs-page-canvas";
+    offscreenCanvas.dataset.previewPage = String(pageNumber);
+    offscreenCanvas.setAttribute(
+      "aria-label",
+      `${resumeName(resume)} resume page ${pageNumber}`,
+    );
+    const canvasContext = offscreenCanvas.getContext("2d", { alpha: false });
+    if (!canvasContext) throw new Error("resume_pdf_canvas_context_unavailable");
+    const renderTask = pdfPage.render({ canvasContext, viewport });
+    state.resumePdfRenderTasks.set(pageNumber, renderTask);
+    await renderTask.promise;
+    state.resumePdfRenderTasks.delete(pageNumber);
+    if (!isCurrentPdfRender(key, generation, resume.id)) return;
+    if (frame) {
+      frame.innerHTML = "";
+      frame.appendChild(offscreenCanvas);
+      frame.classList.remove("resume-pdfjs-page--loading");
+      frame.classList.add("resume-pdfjs-page--loaded");
+    }
+    state.resumePdfRenderedPages.add(pageNumber);
+  } catch (error) {
+    state.resumePdfRenderTasks.delete(pageNumber);
+    if (isPdfjsRenderCancel(error)) return;
+    state.resumePdfRequestedPages.delete(pageNumber);
+    fallbackPdfjsPreview(context, error, generation);
+  }
+}
+function isPdfjsRenderCancel(error) {
+  return (
+    error?.name === "RenderingCancelledException" ||
+    String(error?.message || "").toLowerCase().includes("rendering cancelled")
+  );
+}
+function fallbackPdfjsPreview(context, error, generation) {
+  if (generation !== state.resumePdfRenderGeneration) return;
+  console.debug("resume pdfjs preview failed; falling back to preview images", error);
+  cancelResumePdfRendering();
+  renderResumePreviewImageFallback(context);
 }
 function renderPreviewPageStackLegacy(resume, pages) {
   return `
@@ -1359,7 +1635,7 @@ async function loadResumePreviewPages(context) {
     const pages = state.resumePreviewPagesCache.get(pagesUrl);
     if (state.selectedId !== resumeId || !state.context?.file) return;
     state.context.file.previewPages = pages;
-    renderResumePreview(state.context);
+    renderResumePreviewImageFallback(state.context);
     return;
   }
   const requestKey = `${resumeId}:${pagesUrl}`;
@@ -1388,7 +1664,7 @@ async function loadResumePreviewPages(context) {
     state.resumePreviewPagesCache.set(pagesUrl, pages);
     state.context.file.previewPages = pages;
     state.context.file.previewPageCount = data.pageCount || pages.length;
-    renderResumePreview(state.context);
+    renderResumePreviewImageFallback(state.context);
   } catch (error) {
     if (error?.name === "AbortError") return;
     console.debug("resume preview pages failed", error);
@@ -1400,6 +1676,14 @@ async function loadResumePreviewPages(context) {
   }
 }
 function renderResumePreview(context) {
+  const resume = context?.resume || {};
+  const file = context?.file || {};
+  if (file.available && resumePreviewPdfUrl(resume, file) && renderPdfjsPreview(context)) {
+    return;
+  }
+  renderResumePreviewImageFallback(context);
+}
+function renderResumePreviewImageFallback(context) {
   const resume = context.resume;
   const file = context.file || {};
   const preview = $("resumePreview");

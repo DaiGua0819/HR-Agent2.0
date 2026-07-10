@@ -136,7 +136,7 @@ async def get_resume(resume_id: str, request: Request) -> dict[str, object]:
 
 
 @router.get("/{resume_id}/file")
-async def get_resume_file(resume_id: str, request: Request) -> FileResponse:
+async def get_resume_file(resume_id: str, request: Request) -> Response:
     """按简历 id 返回数据库记录的 PDF/图片预览文件。"""
 
     resume = _service(request).get_resume(resume_id)
@@ -144,11 +144,15 @@ async def get_resume_file(resume_id: str, request: Request) -> FileResponse:
     path = preview_file_path(resume)
     if path is None:
         raise HTTPException(status_code=404, detail="resume_file_not_found")
+    headers = _preview_file_cache_headers(path)
+    if request.headers.get("if-none-match") == headers.get("ETag"):
+        return Response(status_code=304, headers=headers)
     return FileResponse(
         path,
         media_type=preview_media_type(path),
         filename=path.name,
         content_disposition_type="inline",
+        headers=headers,
     )
 
 
@@ -306,6 +310,17 @@ def _preview_cache_headers(path: Path, *, page: int) -> dict[str, str]:
     stat = path.stat()
     etag = hashlib.sha256(
         f"{_PDF_PREVIEW_CACHE_VERSION}|{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{page}".encode()
+    ).hexdigest()
+    return {
+        "Cache-Control": "private, max-age=86400",
+        "ETag": f'"{etag}"',
+    }
+
+
+def _preview_file_cache_headers(path: Path) -> dict[str, str]:
+    stat = path.stat()
+    etag = hashlib.sha256(
+        f"resume-file-v1|{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}".encode()
     ).hexdigest()
     return {
         "Cache-Control": "private, max-age=86400",

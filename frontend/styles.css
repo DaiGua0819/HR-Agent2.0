@@ -1195,6 +1195,49 @@ h3 { font-size: 15px; }
 .resume-page-frame .resume-page-image {
   width: 100%;
 }
+.resume-pdfjs-stack {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: 100%;
+}
+.resume-pdfjs-page {
+  display: grid;
+  justify-items: center;
+  width: min(100%, 920px);
+  min-height: 320px;
+  border-radius: 6px;
+}
+.resume-pdfjs-page-placeholder,
+.resume-pdfjs-loading {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1 / 1.414;
+  min-height: 320px;
+  border-radius: 6px;
+  color: #6b7280;
+  background: linear-gradient(180deg, #ffffff 0%, #f3f6fb 100%);
+  box-shadow: 0 18px 36px rgba(38, 49, 67, 0.12);
+}
+.resume-pdfjs-page-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 18px 36px rgba(38, 49, 67, 0.16);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s ease-in-out, box-shadow 0.2s ease-in-out, transform 0.15s ease-in-out;
+}
+.resume-pdfjs-page--loaded .resume-pdfjs-page-canvas {
+  opacity: 1;
+}
+.ts-resume-workspace.is-library-collapsed .resume-pdfjs-page {
+  width: 100%;
+  max-width: 1040px;
+}
 .resume-page-image[data-preview-page-src]:not([src]) {
   aspect-ratio: 1 / 1.414;
   min-height: 320px;
@@ -1218,7 +1261,8 @@ h3 { font-size: 15px; }
   width: 100%;
   max-width: 1040px;
 }
-.resume-download-link:hover img {
+.resume-download-link:hover img,
+.resume-download-link:hover .resume-pdfjs-page-canvas {
   box-shadow: 0 22px 46px rgba(38, 49, 67, 0.24);
   transform: translateY(-2px);
 }

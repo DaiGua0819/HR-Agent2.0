@@ -308,6 +308,8 @@ def test_resume_file_route_returns_pdf_from_stored_resume_path(tmp_path: Path) -
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["cache-control"] == "private, max-age=86400"
+    assert response.headers["etag"]
     assert response.content.startswith(b"%PDF-1.4")
 
 
