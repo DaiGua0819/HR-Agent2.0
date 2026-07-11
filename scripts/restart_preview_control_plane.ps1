@@ -9,6 +9,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Test-PreviewProcessChain {
+    param(
+        [System.Management.ManagementBaseObject]$Process,
+        [string]$ExpectedPythonPath
+    )
+
+    $expectedPython = [IO.Path]::GetFullPath($ExpectedPythonPath).ToLowerInvariant()
+    $sawRunner = $false
+    $sawExpectedPython = $false
+    $current = $Process
+    for ($depth = 0; $current -and $depth -lt 4; $depth += 1) {
+        $commandLine = [string]$current.CommandLine
+        $executablePath = [string]$current.ExecutablePath
+        if ($commandLine.Contains("run_control_plane.py")) {
+            $sawRunner = $true
+        }
+        if ($executablePath -and $executablePath.ToLowerInvariant() -eq $expectedPython) {
+            $sawExpectedPython = $true
+        }
+        if (-not $current.ParentProcessId) {
+            break
+        }
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" `
+            -ErrorAction SilentlyContinue
+    }
+    return $sawRunner -and $sawExpectedPython
+}
+
 if ($Port -eq 8080) {
     throw "Refusing to operate on legacy port 8080."
 }
@@ -23,7 +51,7 @@ $listenerProcess = $null
 if ($listener) {
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)"
     $commandLine = [string]$listenerProcess.CommandLine
-    if (-not $commandLine.Contains($resolvedProjectRoot) -or -not $commandLine.Contains("run_control_plane.py")) {
+    if (-not (Test-PreviewProcessChain -Process $listenerProcess -ExpectedPythonPath $PythonPath)) {
         throw "Port $Port is owned by an unexpected process: $commandLine"
     }
 }
@@ -83,7 +111,7 @@ do {
     }
     $newProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($newListener.OwningProcess)"
     $newCommandLine = [string]$newProcess.CommandLine
-    if (-not $newCommandLine.Contains($resolvedProjectRoot) -or -not $newCommandLine.Contains("run_control_plane.py")) {
+    if (-not (Test-PreviewProcessChain -Process $newProcess -ExpectedPythonPath $PythonPath)) {
         throw "New listener does not belong to the preview project: $newCommandLine"
     }
     $creationTime = [Management.ManagementDateTimeConverter]::ToDateTime($newProcess.CreationDate)
