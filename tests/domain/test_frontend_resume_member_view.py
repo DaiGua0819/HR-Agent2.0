@@ -84,7 +84,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260711-shared-review-inbox" in html
+    assert "/assets/app.js?v=20260711-shared-review-fix" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +118,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-inbox" in html
+    assert "20260711-shared-review-fix" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +242,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260711-shared-review-inbox" in html
+    assert "20260711-shared-review-fix" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +392,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-inbox" in html
+    assert "20260711-shared-review-fix" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -715,7 +715,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260711-shared-review-inbox" in html
+    assert "/assets/app.js?v=20260711-shared-review-fix" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1024,6 +1024,7 @@ def test_authorized_reviewers_see_named_member_decisions_and_hover_popover() -> 
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert "function reviewerDecisions(resume)" in script
     assert "reviewerDecisions" in script
@@ -1031,15 +1032,22 @@ def test_authorized_reviewers_see_named_member_decisions_and_hover_popover() -> 
     assert "function memberDecisionSummaryMarkup(resume)" in script
     assert "reviewerDecisionDisplayName" in script
     assert "成员判断" in script
-    assert "成员合适" in script
-    assert "成员不合适" in script
+    assert "成员合适" not in script
+    assert "成员不合适" not in script
+    assert "历史成员" not in script
     assert "member-decision-badge" in script
-    assert "member-decision-popover" in script
+    assert "function showReviewerDecisionPopover" in script
+    assert "function hideReviewerDecisionPopover" in script
+    assert "reviewerDecisionPopoverRoot" in script
+    assert 'id="reviewerDecisionPopoverRoot"' in html
     assert "已推送" in script
     assert "member-decision-list" in script
     assert ".member-decision-badge" in styles
-    assert ".member-decision-popover" in styles
-    assert ".candidate-card:hover .member-decision-popover" in styles
+    assert ".reviewer-decision-popover-root" in styles
+    popover_block = styles.split(".reviewer-decision-popover-root {", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in popover_block
+    assert "z-index: 4000" in popover_block
+    assert ".candidate-card:hover .member-decision-popover" not in styles
     assert ".member-decision-list" in styles
 
 
@@ -1054,6 +1062,64 @@ def test_admin_decision_refreshes_shared_queue_instead_of_falling_back_to_all_re
 
     assert 'if (state.tab === "queue")' in advance_block
     assert "await loadQueue();" in advance_block
+
+
+def test_resume_library_dispatches_to_shared_queue_when_queue_tab_is_active() -> None:
+    """Returning from My Tasks must not render all resumes under an active queue tab."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    set_view_block = script.split("function setView(view)", 1)[1].split(
+        "async function loadUser()",
+        1,
+    )[0]
+    dispatcher_block = script.split("function loadCurrentResumeCollection", 1)[1].split(
+        "async function loadUser()",
+        1,
+    )[0]
+
+    assert 'if (view === "resumes") loadCurrentResumeCollection();' in set_view_block
+    assert 'if (state.tab === "queue") return loadQueue();' in dispatcher_block
+    assert "return loadResumes(options);" in dispatcher_block
+
+
+def test_my_tasks_refresh_button_reloads_the_shared_queue() -> None:
+    """Administrators need an explicit refresh after another session completes a task."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="refreshQueueBtn"' in html
+    assert '$("refreshQueueBtn").onclick = loadQueue;' in script
+
+
+def test_shared_queue_uses_resume_request_abort_and_sequence_guards() -> None:
+    """A late queue response must not overwrite a newer all-resume request."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    queue_block = script.split("async function loadQueue()", 1)[1].split(
+        "function renderRows()",
+        1,
+    )[0]
+
+    assert "state.resumeListAbortController.abort()" in queue_block
+    assert "state.resumeListRequestSequence += 1" in queue_block
+    assert "signal: controller.signal" in queue_block
+    assert "requestSequence !== state.resumeListRequestSequence" in queue_block
+    assert 'state.tab !== "queue"' in queue_block
+
+
+def test_reviewer_badge_click_keeps_the_top_level_popover_open() -> None:
+    """Focus followed by click must not immediately toggle the reviewer popover closed."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    bind_block = script.split("function bindReviewerDecisionPopovers()", 1)[1].split(
+        "function memberDecisionSummaryMarkup",
+        1,
+    )[0]
+    click_block = bind_block.split('badge.addEventListener("click"', 1)[1].split("});", 1)[0]
+
+    assert "showReviewerDecisionPopover(badge);" in click_block
+    assert "hideReviewerDecisionPopover();" not in click_block
 
 
 def test_resume_summary_shows_degree_and_import_time() -> None:
@@ -1098,7 +1164,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-inbox" in html
+    assert "20260711-shared-review-fix" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1414,7 +1480,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260711-shared-review-inbox" in html
+    assert "/assets/styles.css?v=20260711-shared-review-fix" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

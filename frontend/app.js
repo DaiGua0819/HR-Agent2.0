@@ -574,10 +574,14 @@ function setView(view) {
   $("pageEyebrow").textContent = eyebrow;
   $("pageTitle").textContent = title;
   if (view === "dashboard") loadDashboard();
-  if (view === "resumes") loadResumes();
+  if (view === "resumes") loadCurrentResumeCollection();
   if (view === "queue") loadQueue();
   if (view === "interviews") loadInterviewSessions();
   if (view === "automation") renderAutomationControls();
+}
+function loadCurrentResumeCollection(options = {}) {
+  if (state.tab === "queue") return loadQueue();
+  return loadResumes(options);
 }
 async function loadUser() {
   const data = await api("/api/auth/me", { skipAuthExpiredHandler: true });
@@ -969,6 +973,7 @@ async function refreshCachedResumeList(cacheKey, requestSequence, fromFilter) {
   }
 }
 async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
+  if (state.tab === "queue") return loadQueue();
   buildTabs();
   const cacheKey = resumeListCacheKey(state.page);
   const cached = preferCache || fromFilter ? state.resumePageCache.get(cacheKey) : null;
@@ -1003,13 +1008,40 @@ async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
 async function loadQueue() {
   state.tab = "queue";
   buildTabs();
-  const data = await api("/api/resume-review/queue");
-  const items = data.items || [];
+  const requestSequence = (state.resumeListRequestSequence += 1);
+  if (state.resumeListAbortController) {
+    state.resumeListAbortController.abort();
+    state.resumeListAbortController = null;
+  }
+  const controller = new AbortController();
+  state.resumeListAbortController = controller;
+  try {
+    const data = await api("/api/resume-review/queue", { signal: controller.signal });
+    if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
+    const items = data.items || [];
+    applySharedQueueItems(items);
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") return null;
+    if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
+    applySharedQueueItems([]);
+    $("queueList").innerHTML = `<div class="empty-inline">待处理队列读取失败，请稍后重试。</div>`;
+    console.debug("shared review queue failed", error);
+    return null;
+  } finally {
+    if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
+  }
+}
+function applySharedQueueItems(items) {
   state.resumes = items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
   state.total = state.resumes.length;
   state.page = 1;
   state.pageSize = 10;
   state.pages = state.resumes.length ? 1 : 0;
+  if (state.selectedId && !state.resumes.some((resume) => resume.id === state.selectedId)) {
+    state.selectedId = "";
+    state.context = null;
+  }
   renderRows();
   renderMiniList();
   renderPagination();
@@ -1040,6 +1072,7 @@ function renderRows() {
   bindRowActions();
 }
 function renderMiniList() {
+  hideReviewerDecisionPopover();
   $("miniList").innerHTML = state.resumes
     .map((resume) => {
       const tier = resumeListSchoolTierBadge(resume);
@@ -1081,6 +1114,7 @@ function renderMiniList() {
   $("emptyState").textContent = state.resumes.length ? "" : "当前筛选条件下暂无简历";
   $("emptyState").style.display = state.resumes.length ? "none" : "block";
   bindRowActions();
+  bindReviewerDecisionPopovers();
   bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.08, radius: 120, marginFactor: 8, vertical: true });
   requestAnimationFrame(scrollSelectedCandidateIntoView);
 }
@@ -1095,35 +1129,96 @@ function reviewerDecisionDisplayName(item) {
   const name = item?.userName || item?.user_name;
   if (name) return String(name);
   const userId = String(item?.userId || item?.user_id || "");
-  return `历史成员（${userId.slice(-4) || "未知"}）`;
+  return `历史账号（${userId.slice(-4) || "未知"}）`;
 }
 function reviewerDecisionPushed(item) {
   return Boolean(item?.assignedTo || item?.assigned_to);
 }
-function memberDecisionBadgeMarkup(resume) {
+function reviewerDecisionGroups(resume) {
   const states = reviewerDecisions(resume).filter((item) => ["suitable", "unsuitable"].includes(item?.decision));
-  const groups = [
-    ["suitable", "成员合适"],
-    ["unsuitable", "成员不合适"],
+  return [
+    ["suitable", "合适"],
+    ["unsuitable", "不合适"],
   ]
     .map(([decision, label]) => ({ decision, label, items: states.filter((item) => item.decision === decision) }))
     .filter((group) => group.items.length);
+}
+function memberDecisionBadgeMarkup(resume) {
+  const groups = reviewerDecisionGroups(resume);
   if (!groups.length) return "";
-  const labels = groups.map((group) => `${group.label}${group.items.length}`);
-  const groupedNames = groups
+  const labels = groups.map((group) => `${group.label} ${group.items.length}`);
+  return `
+    <span class="member-decision-badge" tabindex="0" data-reviewer-resume-id="${escapeHtml(resume.id)}" aria-label="${escapeHtml(labels.join("，"))}">
+      <span class="member-decision-badge__label">${escapeHtml(labels.join(" / "))}</span>
+    </span>
+  `;
+}
+function reviewerDecisionPopoverMarkup(resume) {
+  return reviewerDecisionGroups(resume)
     .map((group) => `
-      <section class="member-decision-popover__group">
+      <section class="reviewer-decision-popover__group">
         <strong>${escapeHtml(group.label)}</strong>
         ${group.items.map((item) => `<span>${escapeHtml(reviewerDecisionDisplayName(item))}${reviewerDecisionPushed(item) ? " · 已推送" : ""}</span>`).join("")}
       </section>
     `)
     .join("");
-  return `
-    <span class="member-decision-badge" aria-label="${escapeHtml(labels.join("，"))}">
-      <span class="member-decision-badge__label">${escapeHtml(labels.join(" / "))}</span>
-      <span class="member-decision-popover" role="tooltip">${groupedNames}</span>
-    </span>
-  `;
+}
+let activeReviewerDecisionBadge = null;
+let reviewerDecisionPopoverHideTimer = null;
+function reviewerDecisionResume(resumeId) {
+  if (state.context?.resume?.id === resumeId) return state.context.resume;
+  return state.resumes.find((resume) => resume.id === resumeId) || null;
+}
+function showReviewerDecisionPopover(badge) {
+  const root = $("reviewerDecisionPopoverRoot");
+  const resume = reviewerDecisionResume(badge?.dataset?.reviewerResumeId || "");
+  if (!root || !badge || !resume) return;
+  if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
+  reviewerDecisionPopoverHideTimer = null;
+  activeReviewerDecisionBadge = badge;
+  root.innerHTML = reviewerDecisionPopoverMarkup(resume);
+  root.hidden = false;
+  positionReviewerDecisionPopover();
+}
+function positionReviewerDecisionPopover() {
+  const root = $("reviewerDecisionPopoverRoot");
+  const badge = activeReviewerDecisionBadge;
+  if (!root || root.hidden || !badge?.isConnected) return hideReviewerDecisionPopover();
+  const anchor = badge.getBoundingClientRect();
+  const popover = root.getBoundingClientRect();
+  const margin = 12;
+  const below = anchor.bottom + 6;
+  const above = anchor.top - popover.height - 6;
+  const top = below + popover.height <= window.innerHeight - margin ? below : Math.max(margin, above);
+  const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - popover.width - margin));
+  root.style.top = `${Math.round(top)}px`;
+  root.style.left = `${Math.round(left)}px`;
+}
+function hideReviewerDecisionPopover() {
+  if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
+  reviewerDecisionPopoverHideTimer = null;
+  activeReviewerDecisionBadge = null;
+  const root = $("reviewerDecisionPopoverRoot");
+  if (!root) return;
+  root.hidden = true;
+  root.innerHTML = "";
+}
+function scheduleReviewerDecisionPopoverHide() {
+  if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
+  reviewerDecisionPopoverHideTimer = setTimeout(hideReviewerDecisionPopover, 100);
+}
+function bindReviewerDecisionPopovers() {
+  document.querySelectorAll("[data-reviewer-resume-id]").forEach((badge) => {
+    badge.addEventListener("mouseenter", () => showReviewerDecisionPopover(badge));
+    badge.addEventListener("mouseleave", scheduleReviewerDecisionPopoverHide);
+    badge.addEventListener("focus", () => showReviewerDecisionPopover(badge));
+    badge.addEventListener("blur", scheduleReviewerDecisionPopoverHide);
+    badge.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showReviewerDecisionPopover(badge);
+    });
+  });
 }
 function memberDecisionSummaryMarkup(resume) {
   const states = reviewerDecisions(resume).filter((item) => item?.decision && item.decision !== "undecided");
@@ -2851,6 +2946,16 @@ function bindPageActions() {
   bindAutoApplyResumeFilters();
   bindSummaryPanelResize();
   bindSummaryPanelCollapse();
+  const reviewerDecisionPopoverRoot = $("reviewerDecisionPopoverRoot");
+  reviewerDecisionPopoverRoot?.addEventListener("mouseenter", () => {
+    if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
+  });
+  reviewerDecisionPopoverRoot?.addEventListener("mouseleave", scheduleReviewerDecisionPopoverHide);
+  window.addEventListener("resize", positionReviewerDecisionPopover);
+  window.addEventListener("scroll", positionReviewerDecisionPopover, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideReviewerDecisionPopover();
+  });
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
   $("filterToggleBtn").onclick = toggleFilterPanel;
@@ -2866,6 +2971,7 @@ function bindPageActions() {
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
+  $("refreshQueueBtn").onclick = loadQueue;
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("interviewBtn").onclick = requestInterview;

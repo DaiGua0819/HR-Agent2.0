@@ -214,7 +214,7 @@ def test_reviewer_decisions_include_persisted_names_and_historical_fallback(tmp_
     by_user_id = {item["userId"]: item for item in decisions}
 
     assert by_user_id["feishu:member-a"]["userName"] == "成员甲"
-    assert by_user_id["legacy-user-1234"]["userName"] == "历史成员（1234）"
+    assert by_user_id["legacy-user-1234"]["userName"] == "历史账号（1234）"
 
 
 def test_member_cannot_read_shared_admin_queue(tmp_path: Path) -> None:
@@ -293,7 +293,7 @@ def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> N
         {
             "id": service.state_for_resume("resume-1", "local-member").id,
             "userId": "local-member",
-            "userName": "历史成员（mber）",
+            "userName": "历史账号（mber）",
             "resumeId": "resume-1",
             "readStatus": "viewed",
             "decision": "unsuitable",

@@ -318,7 +318,7 @@ def _assignment_payload(assignment: ReviewAssignment | None) -> dict[str, object
 
 def _historical_user_name(user_id: str) -> str:
     suffix = str(user_id or "").strip()[-4:] or "未知"
-    return f"历史成员（{suffix}）"
+    return f"历史账号（{suffix}）"
 
 
 def _score_grade(score: int | None) -> str:
