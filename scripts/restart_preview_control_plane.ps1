@@ -4,7 +4,7 @@ param(
     [string]$ProjectRoot = "C:\RecruitAgent2Preview\hr-agent",
     [string]$PythonPath = "C:\RecruitAgent2Preview\.venv\Scripts\python.exe",
     [string]$TaskName = "RecruitAgent2PreviewControlPlane",
-    [string]$HealthUrl = "http://127.0.0.1:18080/api/health"
+    [string]$HealthUrl = "http://127.0.0.1:18080/health"
 )
 
 $ErrorActionPreference = "Stop"
