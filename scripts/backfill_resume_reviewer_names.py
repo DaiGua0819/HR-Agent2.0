@@ -33,6 +33,7 @@ def backfill_reviewer_names(
             """
             SELECT user_id, user_name, decision
             FROM resume_review_states
+            WHERE decision != 'undecided'
             ORDER BY user_id, resume_id
             """
         ).fetchall()
@@ -71,7 +72,9 @@ def backfill_reviewer_names(
                     """
                     UPDATE resume_review_states
                     SET user_name = ?
-                    WHERE user_id = ? AND TRIM(COALESCE(user_name, '')) = ''
+                    WHERE user_id = ?
+                      AND decision != 'undecided'
+                      AND TRIM(COALESCE(user_name, '')) = ''
                     """,
                     (name, user_id),
                 )
