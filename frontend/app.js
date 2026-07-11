@@ -11,7 +11,14 @@ const state = {
   total: 0,
   pages: 0,
   jobType: "",
-  jobFacets: [],
+  resumeJobFacets: [],
+  queueJobFacets: [],
+  queueSummaryLoaded: false,
+  queueVersion: "",
+  queueTotal: 0,
+  queueSummaryTimer: null,
+  queueSummaryAbortController: null,
+  queueSummaryInFlight: false,
   interviewSelection: null,
   interviewSessions: [],
   selectedInterviewId: "",
@@ -61,6 +68,7 @@ const state = {
   resumePdfForcePageImageFallback: false,
 };
 const RESUME_FILTER_DEBOUNCE_MS = 250;
+const QUEUE_SUMMARY_POLL_MS = 3000;
 const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
@@ -150,6 +158,7 @@ function handleAuthExpired(error) {
   state.pages = 0;
   state.interviewSessions = [];
   state.selectedInterviewId = "";
+  stopQueueSummaryPolling();
   clearResumePrefetchCache();
   state.resumeContextCache.clear();
   state.resumePreviewPagesCache.clear();
@@ -436,6 +445,7 @@ const canView = (view) => hrAuth.canView(state.user, view);
 const canAction = (action) => hrAuth.canAction(state.user, action);
 const setAllowedNavigation = () => hrAuth.setAllowedNavigation(state.user);
 const isMemberUser = () => (state.user?.roles || []).includes("member") && !(state.user?.roles || []).includes("super_admin");
+const isAdminUser = () => Boolean((state.user?.roles || []).some((role) => ["admin", "super_admin"].includes(role)));
 function visibleStatusTabs() {
   if (!isMemberUser()) return tabs;
   return tabs.filter(([key]) => !["undecided", "needs_more_info", "queue"].includes(key));
@@ -563,6 +573,11 @@ function renderActionDock() {
 }
 function setView(view) {
   if (state.user && !canView(view)) view = uiAccess().defaultView;
+  if (view === "queue") {
+    state.jobType = "";
+    state.page = 1;
+    if ($("filters")?.job_type) $("filters").job_type.value = "";
+  }
   state.view = view;
   document.querySelectorAll("[data-page]").forEach((node) => {
     node.classList.toggle("active", node.dataset.page === view);
@@ -664,7 +679,12 @@ function renderDailyRows(items) {
 function buildTabs() {
   if (!visibleStatusTabs().some(([key]) => key === state.tab)) state.tab = "all";
   $("statusTabs").innerHTML = visibleStatusTabs()
-    .map(([key, label]) => `<button data-tab="${key}" class="${tsSegmentClass(state.tab === key)}">${label}</button>`)
+    .map(([key, label]) => {
+      const count = key === "queue" && isAdminUser()
+        ? `<span class="queue-status-count">${state.queueSummaryLoaded ? state.queueTotal : "..."}</span>`
+        : "";
+      return `<button data-tab="${key}" class="${tsSegmentClass(state.tab === key)}">${label}${count}</button>`;
+    })
     .join("");
   renderActionDock();
   document.querySelectorAll("[data-tab]").forEach((button) => {
@@ -673,6 +693,7 @@ function buildTabs() {
       state.page = 1;
       renderActionDock();
       clearResumePrefetchCache();
+      buildJobTabs();
       if (state.tab === "queue") return loadQueue();
       loadResumes({ fromFilter: true });
     };
@@ -688,15 +709,22 @@ function buildJobTabs() {
     list.innerHTML = "";
     return;
   }
+  const isQueue = state.tab === "queue";
+  const facets = isQueue ? state.queueJobFacets : state.resumeJobFacets;
+  const countsLoaded = !isQueue || state.queueSummaryLoaded;
   const counts = new Map();
-  (state.jobFacets || []).forEach((item) => {
+  (facets || []).forEach((item) => {
     const job = canonicalResumeJobType(item.jobType);
     if (!job) return;
     counts.set(job, Math.max(counts.get(job) || 0, Number(item.count || 0)));
   });
-  const allCount = [...counts.values()].reduce((sum, count) => sum + Number(count || 0), 0);
-  const buttons = [["", `全部简历 (${allCount})`]].concat(
-    jobs.map((job) => [job, `${displayResumeJobType(job)} (${counts.get(canonicalResumeJobType(job)) || 0})`]),
+  const allCount = isQueue
+    ? state.queueTotal
+    : [...counts.values()].reduce((sum, count) => sum + Number(count || 0), 0);
+  const countLabel = (count) => countsLoaded ? String(count || 0) : "...";
+  const allLabel = isQueue ? "待处理全部" : "全部简历";
+  const buttons = [["", `${allLabel} (${countLabel(allCount)})`]].concat(
+    jobs.map((job) => [job, `${displayResumeJobType(job)} (${countLabel(counts.get(canonicalResumeJobType(job)))})`]),
   );
   list.innerHTML = buttons
     .map(([job, label]) => `<button data-job-tab="${escapeHtml(job)}" class="filter-tag ${state.jobType === job ? "active" : ""}">${escapeHtml(label)}</button>`)
@@ -706,6 +734,7 @@ function buildJobTabs() {
       state.jobType = button.dataset.jobTab || "";
       $("filters").job_type.value = state.jobType;
       state.page = 1;
+      if (state.tab === "queue") return loadQueue();
       loadResumes({ fromFilter: true, preferCache: true });
     };
   });
@@ -764,7 +793,7 @@ function applyResumeListData(data, { stale = false } = {}) {
   state.page = data.page || 1;
   state.pageSize = data.pageSize || 10;
   state.pages = data.pages || 0;
-  state.jobFacets = data.jobFacets || [];
+  state.resumeJobFacets = data.jobFacets || [];
   buildJobTabs();
   renderRows();
   renderMiniList();
@@ -1005,7 +1034,82 @@ async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
   }
   return data;
 }
-async function loadQueue() {
+function queueViewActive() {
+  return state.view === "queue" || (state.view === "resumes" && state.tab === "queue");
+}
+function renderQueueCountIndicators() {
+  const visible = isAdminUser();
+  const value = state.queueSummaryLoaded ? String(state.queueTotal) : "...";
+  [$("queueNavCount"), $("queueTabCount")].forEach((node) => {
+    if (!node) return;
+    node.hidden = !visible;
+    node.textContent = visible ? value : "";
+  });
+  const statusCount = document.querySelector('[data-tab="queue"] .queue-status-count');
+  if (statusCount) statusCount.textContent = value;
+}
+function stopQueueSummaryPolling() {
+  if (state.queueSummaryTimer) clearTimeout(state.queueSummaryTimer);
+  if (state.queueSummaryAbortController) state.queueSummaryAbortController.abort();
+  state.queueSummaryTimer = null;
+  state.queueSummaryAbortController = null;
+  state.queueSummaryInFlight = false;
+}
+function scheduleQueueSummaryPoll(delay = QUEUE_SUMMARY_POLL_MS) {
+  if (state.queueSummaryTimer) clearTimeout(state.queueSummaryTimer);
+  state.queueSummaryTimer = null;
+  if (!isAdminUser() || document.visibilityState !== "visible") return;
+  state.queueSummaryTimer = setTimeout(async () => {
+    state.queueSummaryTimer = null;
+    await refreshQueueSummary();
+    scheduleQueueSummaryPoll();
+  }, delay);
+}
+function startQueueSummaryPolling() {
+  stopQueueSummaryPolling();
+  renderQueueCountIndicators();
+  if (!isAdminUser()) return;
+  refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
+}
+async function refreshQueueNow() {
+  await refreshQueueSummary({ forceList: true });
+  scheduleQueueSummaryPoll();
+}
+async function refreshQueueSummary({ forceList = false } = {}) {
+  if (!isAdminUser()) return null;
+  if (!forceList && document.visibilityState !== "visible") return null;
+  if (state.queueSummaryInFlight && !forceList) return null;
+  if (forceList && state.queueSummaryAbortController) {
+    state.queueSummaryAbortController.abort();
+  }
+  const controller = new AbortController();
+  state.queueSummaryAbortController = controller;
+  state.queueSummaryInFlight = true;
+  try {
+    const data = await api("/api/resume-review/queue-summary", { signal: controller.signal });
+    const changed = data.version !== state.queueVersion;
+    state.queueJobFacets = data.jobFacets || [];
+    state.queueTotal = Number(data.total || 0);
+    state.queueVersion = data.version || state.queueVersion;
+    state.queueSummaryLoaded = true;
+    renderQueueCountIndicators();
+    if (state.tab === "queue") buildJobTabs();
+    if (forceList || (changed && queueViewActive())) {
+      await loadQueue({ preserveSelection: true });
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") return null;
+    console.debug("shared review queue summary failed", error);
+    return null;
+  } finally {
+    if (state.queueSummaryAbortController === controller) {
+      state.queueSummaryAbortController = null;
+      state.queueSummaryInFlight = false;
+    }
+  }
+}
+async function loadQueue({ preserveSelection = false } = {}) {
   state.tab = "queue";
   buildTabs();
   const requestSequence = (state.resumeListRequestSequence += 1);
@@ -1016,35 +1120,63 @@ async function loadQueue() {
   const controller = new AbortController();
   state.resumeListAbortController = controller;
   try {
-    const data = await api("/api/resume-review/queue", { signal: controller.signal });
+    const params = new URLSearchParams({
+      page: String(state.page || 1),
+      page_size: String(state.pageSize || 10),
+    });
+    if (state.jobType) params.set("job_type", state.jobType);
+    const data = await api(`/api/resume-review/queue?${params}`, { signal: controller.signal });
     if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
-    const items = data.items || [];
-    applySharedQueueItems(items);
+    applySharedQueueData(data, { preserveSelection });
     return data;
   } catch (error) {
     if (error?.name === "AbortError") return null;
     if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
-    applySharedQueueItems([]);
-    $("queueList").innerHTML = `<div class="empty-inline">待处理队列读取失败，请稍后重试。</div>`;
+    if (!preserveSelection) {
+      applySharedQueueData({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: state.pageSize || 10,
+        pages: 0,
+        jobFacets: state.queueJobFacets,
+        queueTotal: state.queueTotal,
+      });
+      $("queueList").innerHTML = `<div class="empty-inline">待处理队列读取失败，请稍后重试。</div>`;
+    }
+    state.queueVersion = "";
     console.debug("shared review queue failed", error);
     return null;
   } finally {
     if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
   }
 }
-function applySharedQueueItems(items) {
+function applySharedQueueData(data, { preserveSelection = false } = {}) {
+  const items = data.items || [];
   state.resumes = items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
-  state.total = state.resumes.length;
-  state.page = 1;
-  state.pageSize = 10;
-  state.pages = state.resumes.length ? 1 : 0;
-  if (state.selectedId && !state.resumes.some((resume) => resume.id === state.selectedId)) {
+  state.total = Number(data.total || 0);
+  state.page = Number(data.page || 1);
+  state.pageSize = Number(data.pageSize || 10);
+  state.pages = Number(data.pages || 0);
+  state.queueJobFacets = data.jobFacets || [];
+  const facetTotal = state.queueJobFacets.reduce(
+    (sum, item) => sum + Number(item.count || 0),
+    0,
+  );
+  state.queueTotal = Number(data.queueTotal ?? facetTotal);
+  state.queueVersion = data.version || state.queueVersion;
+  state.queueSummaryLoaded = Boolean(data.version || state.queueSummaryLoaded);
+  if (!preserveSelection && state.selectedId && !state.resumes.some((resume) => resume.id === state.selectedId)) {
     state.selectedId = "";
     state.context = null;
   }
+  buildTabs();
+  buildJobTabs();
+  renderQueueCountIndicators();
   renderRows();
   renderMiniList();
   renderPagination();
+  renderQueuePagination();
   renderQueue(items);
 }
 function renderRows() {
@@ -1261,14 +1393,35 @@ function renderPagination() {
     pageInput.value = String(targetPage);
     if (targetPage === current) return;
     state.page = targetPage;
-    loadResumes({ preferCache: true });
+    loadCurrentResumeCollection({ preferCache: true });
   });
   node.querySelectorAll("[data-page-move]").forEach((button) => {
     button.onclick = () => {
       const nextPage = current + Number(button.dataset.pageMove || 0);
       if (nextPage < 1 || nextPage > pages) return;
       state.page = nextPage;
-      loadResumes({ preferCache: true });
+      loadCurrentResumeCollection({ preferCache: true });
+    };
+  });
+}
+function renderQueuePagination() {
+  const node = $("queuePagination");
+  if (!node) return;
+  const pages = Math.max(1, state.pages || 1);
+  const current = Math.min(Math.max(1, state.page || 1), pages);
+  node.innerHTML = `
+    <span class="pagination-status">第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
+    <div class="ts-pagination">
+      <button class="${tsButtonClass("default")}" data-queue-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
+      <button class="${tsButtonClass("primary")}" data-queue-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
+    </div>
+  `;
+  node.querySelectorAll("[data-queue-page-move]").forEach((button) => {
+    button.onclick = () => {
+      const nextPage = current + Number(button.dataset.queuePageMove || 0);
+      if (nextPage < 1 || nextPage > pages) return;
+      state.page = nextPage;
+      loadQueue();
     };
   });
 }
@@ -2041,9 +2194,10 @@ function renderContext() {
 }
 async function setDecision(id, decision) {
   const reasonTags = { suitable: ["岗位匹配"], unsuitable: ["暂不匹配"], needs_more_info: ["信息待补充"] }[decision] || [];
-  await api(`/api/resumes/${id}/review-decision`, { method: "POST", body: JSON.stringify({ decision, reasonTags, note: "" }) });
+  const result = await api(`/api/resumes/${id}/review-decision`, { method: "POST", body: JSON.stringify({ decision, reasonTags, note: "" }) });
   await clearResumePrefetchCacheAfterMutation();
   await advanceAfterReviewAction(id);
+  if (result?.completedAssignment && isAdminUser()) await refreshQueueSummary();
 }
 async function pushSelectedResumeToAdmin() {
   if (!state.selectedId || selectedResumePushedToAdmin()) return;
@@ -2953,6 +3107,20 @@ function bindPageActions() {
   reviewerDecisionPopoverRoot?.addEventListener("mouseleave", scheduleReviewerDecisionPopoverHide);
   window.addEventListener("resize", positionReviewerDecisionPopover);
   window.addEventListener("scroll", positionReviewerDecisionPopover, true);
+  document.addEventListener("visibilitychange", () => {
+    if (!isAdminUser()) return;
+    if (document.visibilityState !== "visible") {
+      if (state.queueSummaryTimer) clearTimeout(state.queueSummaryTimer);
+      if (state.queueSummaryAbortController) state.queueSummaryAbortController.abort();
+      state.queueSummaryTimer = null;
+      return;
+    }
+    refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
+  });
+  window.addEventListener("focus", () => {
+    if (!isAdminUser() || document.visibilityState !== "visible") return;
+    refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideReviewerDecisionPopover();
   });
@@ -2971,7 +3139,7 @@ function bindPageActions() {
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
-  $("refreshQueueBtn").onclick = loadQueue;
+  $("refreshQueueBtn").onclick = refreshQueueNow;
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("interviewBtn").onclick = requestInterview;
@@ -3000,17 +3168,38 @@ function bindPageActions() {
   bindResumeKeyboardNavigation();
 }
 async function afterLogin(user) {
+  stopQueueSummaryPolling();
   clearResumePrefetchCache();
   state.resumeContextCache.clear();
   state.resumePreviewPagesCache.clear();
-  state.user = user; state.jobType = ""; state.jobFacets = []; hrAuth.updateUserCard(user); hrAuth.showApp(); setAllowedNavigation(); setResumeMemberMode();
+  state.user = user;
+  state.jobType = "";
+  state.resumeJobFacets = [];
+  state.queueJobFacets = [];
+  state.queueSummaryLoaded = false;
+  state.queueVersion = "";
+  state.queueTotal = 0;
+  hrAuth.updateUserCard(user);
+  hrAuth.showApp();
+  setAllowedNavigation();
+  setResumeMemberMode();
   const landingView = canView("resumes") ? "resumes" : uiAccess().defaultView;
   setView(landingView);
   if (canView("resumes")) await loadResumes();
+  startQueueSummaryPolling();
 }
 async function logout() {
+  stopQueueSummaryPolling();
   await api("/api/auth/logout", { method: "POST" });
-  state.user = null; state.selectedId = ""; state.context = null; state.jobType = ""; state.jobFacets = [];
+  state.user = null;
+  state.selectedId = "";
+  state.context = null;
+  state.jobType = "";
+  state.resumeJobFacets = [];
+  state.queueJobFacets = [];
+  state.queueSummaryLoaded = false;
+  state.queueVersion = "";
+  state.queueTotal = 0;
   clearResumePrefetchCache();
   state.resumeContextCache.clear();
   state.resumePreviewPagesCache.clear();

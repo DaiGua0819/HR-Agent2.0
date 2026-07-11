@@ -139,6 +139,57 @@ class ResumeRepository:
             return None
         return self._row_to_record(row) if row else None
 
+    def get_many(self, resume_ids: list[str]) -> dict[str, ResumeRecord]:
+        """Read a batch of resumes with one database query."""
+
+        ids = list(dict.fromkeys(str(resume_id) for resume_id in resume_ids if resume_id))
+        if not ids:
+            return {}
+        if self._is_memory:
+            return {
+                resume_id: self._memory_records[resume_id]
+                for resume_id in ids
+                if resume_id in self._memory_records
+            }
+        if self.read_only and not self.database_path.exists():
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        try:
+            with connect(self.database_path, read_only=self.read_only) as connection:
+                sql = (
+                    f"SELECT {_resume_select_columns(connection)} FROM resumes "
+                    f"WHERE id IN ({placeholders})"
+                )
+                rows = connection.execute(sql, tuple(ids)).fetchall()
+        except sqlite3.Error:
+            return {}
+        return {row["id"]: self._row_to_record(row) for row in rows}
+
+    def job_types_for_ids(self, resume_ids: list[str]) -> dict[str, str]:
+        """Read only indexed job types for lightweight queue summaries."""
+
+        ids = list(dict.fromkeys(str(resume_id) for resume_id in resume_ids if resume_id))
+        if not ids:
+            return {}
+        if self._is_memory:
+            return {
+                resume_id: self._memory_records[resume_id].job_type or ""
+                for resume_id in ids
+                if resume_id in self._memory_records
+            }
+        if self.read_only and not self.database_path.exists():
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        try:
+            with connect(self.database_path, read_only=self.read_only) as connection:
+                rows = connection.execute(
+                    f"SELECT id, job_type FROM resumes WHERE id IN ({placeholders})",
+                    tuple(ids),
+                ).fetchall()
+        except sqlite3.Error:
+            return {}
+        return {str(row["id"]): str(row["job_type"] or "") for row in rows}
+
     def save(self, resume: Resume) -> ResumeRecord:
         """保存简历，非内存模式真实 upsert 到 SQLite。"""
 

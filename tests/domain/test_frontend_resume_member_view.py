@@ -84,7 +84,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260711-shared-review-fix" in html
+    assert "/assets/app.js?v=20260711-queue-live-counts" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +118,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-fix" in html
+    assert "20260711-queue-live-counts" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +242,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260711-shared-review-fix" in html
+    assert "20260711-queue-live-counts" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +392,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-fix" in html
+    assert "20260711-queue-live-counts" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -715,7 +715,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260711-shared-review-fix" in html
+    assert "/assets/app.js?v=20260711-queue-live-counts" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1089,14 +1089,14 @@ def test_my_tasks_refresh_button_reloads_the_shared_queue() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="refreshQueueBtn"' in html
-    assert '$("refreshQueueBtn").onclick = loadQueue;' in script
+    assert '$("refreshQueueBtn").onclick = refreshQueueNow;' in script
 
 
 def test_shared_queue_uses_resume_request_abort_and_sequence_guards() -> None:
     """A late queue response must not overwrite a newer all-resume request."""
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-    queue_block = script.split("async function loadQueue()", 1)[1].split(
+    queue_block = script.split("async function loadQueue", 1)[1].split(
         "function renderRows()",
         1,
     )[0]
@@ -1106,6 +1106,147 @@ def test_shared_queue_uses_resume_request_abort_and_sequence_guards() -> None:
     assert "signal: controller.signal" in queue_block
     assert "requestSequence !== state.resumeListRequestSequence" in queue_block
     assert 'state.tab !== "queue"' in queue_block
+
+
+def test_queue_job_facets_are_separate_from_full_resume_facets() -> None:
+    """Pending counts must never reuse or overwrite the full resume-library facets."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    state_block = script.split("const state = {", 1)[1].split("};", 1)[0]
+    status_tabs_block = script.split("function buildTabs()", 1)[1].split(
+        "function buildJobTabs()",
+        1,
+    )[0]
+    job_tabs_block = script.split("function buildJobTabs()", 1)[1].split(
+        "function queryFromFilters",
+        1,
+    )[0]
+    list_block = script.split("function applyResumeListData", 1)[1].split(
+        "function resumePreviewImageUrl",
+        1,
+    )[0]
+    queue_block = script.split("async function loadQueue", 1)[1].split(
+        "function renderRows()",
+        1,
+    )[0]
+
+    assert "resumeJobFacets" in state_block
+    assert "queueJobFacets" in state_block
+    assert "queueSummaryLoaded" in state_block
+    assert (
+        "const facets = isQueue ? state.queueJobFacets : state.resumeJobFacets;"
+        in job_tabs_block
+    )
+    assert "state.resumeJobFacets = data.jobFacets || [];" in list_block
+    assert "state.queueJobFacets = data.jobFacets || [];" in queue_block
+    assert "state.queueTotal = Number(data.queueTotal" in queue_block
+    assert "state.queueVersion = data.version || state.queueVersion;" in queue_block
+    assert "buildJobTabs();" in queue_block
+    assert 'params.set("job_type", state.jobType)' in queue_block
+    assert 'if (state.tab === "queue") return loadQueue();' in job_tabs_block
+    assert "buildJobTabs();" in status_tabs_block
+
+
+def test_admin_queue_summary_polls_every_three_seconds_and_refreshes_on_version_change() -> None:
+    """Visible admin sessions poll a light summary and load full tasks only after a change."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    polling_block = script.split("async function refreshQueueSummary", 1)[1].split(
+        "async function loadQueue",
+        1,
+    )[0]
+    login_block = script.split("async function afterLogin(user)", 1)[1].split(
+        "async function logout()",
+        1,
+    )[0]
+    logout_block = script.split("async function logout()", 1)[1].split(
+        "async function init()",
+        1,
+    )[0]
+
+    assert "const QUEUE_SUMMARY_POLL_MS = 3000;" in script
+    assert 'api("/api/resume-review/queue-summary"' in polling_block
+    assert "data.version !== state.queueVersion" in polling_block
+    assert "renderQueueCountIndicators();" in polling_block
+    assert "await loadQueue({ preserveSelection: true });" in polling_block
+    assert 'document.visibilityState !== "visible"' in polling_block
+    assert "state.queueSummaryInFlight" in polling_block
+    assert 'document.addEventListener("visibilitychange"' in script
+    assert 'window.addEventListener("focus"' in script
+    assert "startQueueSummaryPolling();" in login_block
+    assert "stopQueueSummaryPolling();" in logout_block
+    assert 'id="queueNavCount"' in html
+    assert 'id="queueTabCount"' in html
+
+
+def test_queue_summary_manual_refresh_and_auth_failure_cleanup_are_wired() -> None:
+    """Manual refresh is immediate and polling stops when the session is no longer usable."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    refresh_block = script.split("async function refreshQueueNow()", 1)[1].split(
+        "async function refreshQueueSummary",
+        1,
+    )[0]
+    stop_block = script.split("function stopQueueSummaryPolling()", 1)[1].split(
+        "function scheduleQueueSummaryPoll",
+        1,
+    )[0]
+
+    assert "await refreshQueueSummary({ forceList: true });" in refresh_block
+    assert '$("refreshQueueBtn").onclick = refreshQueueNow;' in script
+    assert "state.queueSummaryAbortController.abort()" in stop_block
+    assert "clearTimeout(state.queueSummaryTimer)" in stop_block
+
+
+def test_queue_list_failure_keeps_last_counts_and_retries_on_next_summary_poll() -> None:
+    """A transient full-list failure must not turn known pending counts back into zero."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    queue_block = script.split("async function loadQueue", 1)[1].split(
+        "function applySharedQueueData",
+        1,
+    )[0]
+
+    assert "if (!preserveSelection)" in queue_block
+    assert "applySharedQueueData" in queue_block
+    assert 'state.queueVersion = "";' in queue_block
+
+
+def test_my_tasks_resets_hidden_job_filter_and_has_its_own_pagination() -> None:
+    """The task page always opens the whole queue and can reach tasks after page one."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    set_view_block = script.split("function setView(view)", 1)[1].split(
+        "function loadCurrentResumeCollection",
+        1,
+    )[0]
+    queue_pagination_block = script.split("function renderQueuePagination()", 1)[1].split(
+        "function renderQueue(items)",
+        1,
+    )[0]
+
+    assert 'if (view === "queue")' in set_view_block
+    assert 'state.jobType = "";' in set_view_block
+    assert '$("filters").job_type.value = "";' in set_view_block
+    assert "state.page = 1;" in set_view_block
+    assert 'id="queuePagination"' in html
+    assert 'const node = $("queuePagination");' in queue_pagination_block
+    assert "loadQueue();" in queue_pagination_block
+    assert "renderQueuePagination();" in script
+
+
+def test_hiding_page_aborts_inflight_queue_summary() -> None:
+    """A hidden admin page must not finish a summary request and start a full queue refresh."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    visibility_block = script.split('document.addEventListener("visibilitychange"', 1)[1].split(
+        'window.addEventListener("focus"',
+        1,
+    )[0]
+
+    assert "state.queueSummaryAbortController.abort()" in visibility_block
 
 
 def test_reviewer_badge_click_keeps_the_top_level_popover_open() -> None:
@@ -1164,7 +1305,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-shared-review-fix" in html
+    assert "20260711-queue-live-counts" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1480,7 +1621,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260711-shared-review-fix" in html
+    assert "/assets/styles.css?v=20260711-queue-live-counts" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

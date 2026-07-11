@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.domain.resume.files import preview_file_path
+from app.domain.resume.job_types import canonical_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume_review.models import (
@@ -260,9 +261,12 @@ class ResumeReviewService:
         """Return the one pending inbox shared by every administrator."""
 
         assignments = self.repository.list_assignments(self.shared_admin_inbox)
+        records = self.resume_repository.get_many(
+            [assignment.resume_id for assignment in assignments]
+        )
         result: list[dict[str, object]] = []
         for assignment in assignments:
-            record = self.resume_repository.get(assignment.resume_id)
+            record = records.get(assignment.resume_id)
             result.append(
                 {
                     "assignment": _assignment_payload(assignment),
@@ -270,6 +274,35 @@ class ResumeReviewService:
                 }
             )
         return result
+
+    def shared_admin_queue_summary(self) -> dict[str, object]:
+        """Return a lightweight summary without parsing full resume payloads."""
+
+        assignments = self.repository.list_assignments(self.shared_admin_inbox)
+        job_types = self.resume_repository.job_types_for_ids(
+            [assignment.resume_id for assignment in assignments]
+        )
+        visible_assignments = [
+            assignment for assignment in assignments if assignment.resume_id in job_types
+        ]
+        counts: dict[str, int] = {}
+        for assignment in visible_assignments:
+            job_type = canonical_resume_job_type(job_types.get(assignment.resume_id, ""))
+            if job_type:
+                counts[job_type] = counts.get(job_type, 0) + 1
+        latest_updated_at = max(
+            (assignment.updated_at for assignment in visible_assignments),
+            default="",
+        )
+        total = len(visible_assignments)
+        return {
+            "total": total,
+            "jobFacets": [
+                {"jobType": job_type, "count": counts[job_type]}
+                for job_type in sorted(counts)
+            ],
+            "version": f"{total}:{latest_updated_at}",
+        }
 
 
 def _state_payload(state: ReviewState | None) -> dict[str, object]:

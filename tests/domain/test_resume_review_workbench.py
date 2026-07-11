@@ -9,6 +9,7 @@ from app.api.routes.auth import AuthSessionStore
 from app.auth.access import user_payload
 from app.control_plane.main import create_app
 from app.db.engine import connect, run_migrations
+from app.domain.resume.job_types import AI_PRODUCT_MANAGER, OPERATION_B
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume.service import ResumeService
@@ -224,9 +225,92 @@ def test_member_cannot_read_shared_admin_queue(tmp_path: Path) -> None:
     with TestClient(app) as client:
         client.post("/api/auth/login", json={"username": "member", "password": "member"})
         response = client.get("/api/resume-review/queue")
+        summary = client.get("/api/resume-review/queue-summary")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "admin_queue_forbidden"
+    assert summary.status_code == 403
+    assert summary.json()["detail"] == "admin_queue_forbidden"
+
+
+def test_shared_queue_returns_pending_facets_filter_pagination_and_slim_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queue counts come from pending tasks and list items never include heavy payloads."""
+
+    app, service = _app_with_review_service(tmp_path)
+    resume_repo = app.state.resume_repository
+    resume_repo.save(
+        Resume(
+            id="resume-2",
+            name="Operation Candidate",
+            phone="13800138002",
+            job_type=OPERATION_B,
+            payload={"rawText": "heavy queue text " * 20_000},
+        )
+    )
+    for resume_id in ["resume-1", "resume-2"]:
+        service.set_decision(
+            resume_id=resume_id,
+            user_id="member-queue",
+            user_name="Queue Member",
+            decision="suitable",
+        )
+        service.push_to_admin(
+            resume_id=resume_id,
+            user_id="member-queue",
+            user_name="Queue Member",
+        )
+
+    def fail_get(_resume_id: str) -> None:
+        raise AssertionError("shared queue must not perform one resume get per assignment")
+
+    monkeypatch.setattr(resume_repo, "get", fail_get)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        first_page = client.get(
+            "/api/resume-review/queue",
+            params={"page": 1, "page_size": 1},
+        )
+        filtered = client.get(
+            "/api/resume-review/queue",
+            params={"job_type": OPERATION_B, "page": 1, "page_size": 10},
+        )
+        summary = client.get("/api/resume-review/queue-summary")
+
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert first_payload["total"] == 2
+    assert first_payload["queueTotal"] == 2
+    assert first_payload["page"] == 1
+    assert first_payload["pageSize"] == 1
+    assert first_payload["pages"] == 2
+    assert len(first_payload["items"]) == 1
+    assert "payload" not in first_payload["items"][0]["resume"]
+    assert "rawText" not in first_page.text
+    assert first_payload["jobFacets"] == [
+        {"jobType": AI_PRODUCT_MANAGER, "count": 1},
+        {"jobType": OPERATION_B, "count": 1},
+    ]
+
+    assert filtered.status_code == 200
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 1
+    assert filtered_payload["queueTotal"] == 2
+    assert filtered_payload["pages"] == 1
+    assert filtered_payload["items"][0]["resume"]["job_type"] == OPERATION_B
+    assert filtered_payload["jobFacets"] == first_payload["jobFacets"]
+
+    assert summary.status_code == 200
+    summary_payload = summary.json()
+    assert summary_payload == {
+        "total": 2,
+        "jobFacets": first_payload["jobFacets"],
+        "version": first_payload["version"],
+    }
+    assert summary_payload["version"].startswith("2:")
+    assert len(summary.content) < 10_000
 
 
 def test_two_feishu_admin_sessions_read_the_same_shared_pending_task(tmp_path: Path) -> None:

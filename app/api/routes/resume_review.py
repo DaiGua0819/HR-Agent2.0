@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import current_user_id, require_session_payload
-from app.auth.resume_scope import resume_visible_to_payload
+from app.api.routes.resumes import _resume_list_payload
+from app.auth.resume_scope import allowed_job_types, resume_visible_to_payload
+from app.domain.resume.job_types import canonical_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume_review.service import ResumeReviewService
@@ -135,15 +137,84 @@ async def push_to_admin(
 
 
 @router.get("/api/resume-review/queue")
-async def review_queue(request: Request) -> dict[str, Any]:
+async def review_queue(
+    request: Request,
+    job_type: str = "",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
     """返回当前用户的待处理队列。"""
 
     session = require_session_payload(request)
     if not _session_is_admin(session):
         raise HTTPException(status_code=403, detail="admin_queue_forbidden")
-    items = _review_service(request).shared_admin_queue()
-    items = _filter_visible_queue(items, session)
-    return {"items": items, "total": len(items)}
+    service = _review_service(request)
+    items = _filter_visible_queue(service.shared_admin_queue(), session)
+    summary = _queue_summary_from_items(items)
+    canonical_job_type = canonical_resume_job_type(job_type)
+    filtered_items = [
+        item
+        for item in items
+        if not canonical_job_type
+        or _queue_item_job_type(item) == canonical_job_type
+    ]
+    total = len(filtered_items)
+    pages = (total + page_size - 1) // page_size if total else 0
+    safe_page = min(page, pages) if pages else 1
+    start = (safe_page - 1) * page_size
+    paged_items = filtered_items[start : start + page_size]
+    resume_ids = [
+        str(item["resume"]["id"])
+        for item in paged_items
+        if isinstance(item.get("resume"), dict) and item["resume"].get("id")
+    ]
+    review_states = service.repository.states_for_user(current_user_id(request))
+    reviewer_decisions = service.reviewer_decisions_for_resumes(resume_ids)
+    return {
+        "items": [
+            {
+                "assignment": item.get("assignment"),
+                "resume": _resume_list_payload(
+                    Resume.model_validate(item["resume"]),
+                    review_state=review_states.get(str(item["resume"]["id"])),
+                    reviewer_decisions=reviewer_decisions.get(str(item["resume"]["id"]), []),
+                ),
+            }
+            for item in paged_items
+            if isinstance(item.get("resume"), dict)
+        ],
+        "total": total,
+        "queueTotal": summary["total"],
+        "page": safe_page,
+        "pageSize": page_size,
+        "pages": pages,
+        "jobFacets": summary["jobFacets"],
+        "version": summary["version"],
+    }
+
+
+@router.get("/api/resume-review/queue-summary")
+async def review_queue_summary(request: Request) -> dict[str, object]:
+    """Return lightweight pending counts for administrator polling."""
+
+    session = require_session_payload(request)
+    if not _session_is_admin(session):
+        raise HTTPException(status_code=403, detail="admin_queue_forbidden")
+    summary = _review_service(request).shared_admin_queue_summary()
+    scoped_job_types = allowed_job_types(session)
+    if "*" in scoped_job_types:
+        return summary
+    allowed = {canonical_resume_job_type(job_type) for job_type in scoped_job_types}
+    facets = [
+        item
+        for item in summary["jobFacets"]
+        if canonical_resume_job_type(str(item.get("jobType") or "")) in allowed
+    ]
+    return {
+        "total": sum(int(item.get("count") or 0) for item in facets),
+        "jobFacets": facets,
+        "version": summary["version"],
+    }
 
 
 def _filter_visible_queue(
@@ -159,6 +230,38 @@ def _filter_visible_queue(
         if resume_visible_to_payload(resume, session):
             visible.append(item)
     return visible
+
+
+def _queue_item_job_type(item: dict[str, object]) -> str:
+    resume_payload = item.get("resume")
+    if not isinstance(resume_payload, dict):
+        return ""
+    return canonical_resume_job_type(
+        str(resume_payload.get("job_type") or resume_payload.get("jobType") or "")
+    )
+
+
+def _queue_summary_from_items(items: list[dict[str, object]]) -> dict[str, object]:
+    counts: dict[str, int] = {}
+    updated_at: list[str] = []
+    for item in items:
+        job_type = _queue_item_job_type(item)
+        if job_type:
+            counts[job_type] = counts.get(job_type, 0) + 1
+        assignment = item.get("assignment")
+        if isinstance(assignment, dict):
+            value = str(assignment.get("updatedAt") or "")
+            if value:
+                updated_at.append(value)
+    total = len(items)
+    return {
+        "total": total,
+        "jobFacets": [
+            {"jobType": job_type, "count": counts[job_type]}
+            for job_type in sorted(counts)
+        ],
+        "version": f"{total}:{max(updated_at, default='')}",
+    }
 
 
 def _assert_resume_visible(request: Request, resume: Resume) -> dict[str, object]:
