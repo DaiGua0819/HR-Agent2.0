@@ -22,4 +22,5 @@ def test_preview_restart_script_has_explicit_18080_safety_guards() -> None:
     assert "Invoke-WebRequest" in script
     assert "http://127.0.0.1:18080/health" in script
     assert "http://127.0.0.1:18080/api/health" not in script
+    assert "$newProcess.CreationDate -is [datetime]" in script
     assert "Get-Date" in script

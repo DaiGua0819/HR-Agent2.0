@@ -114,7 +114,11 @@ do {
     if (-not (Test-PreviewProcessChain -Process $newProcess -ExpectedPythonPath $PythonPath)) {
         throw "New listener does not belong to the preview project: $newCommandLine"
     }
-    $creationTime = [Management.ManagementDateTimeConverter]::ToDateTime($newProcess.CreationDate)
+    $creationTime = if ($newProcess.CreationDate -is [datetime]) {
+        [datetime]$newProcess.CreationDate
+    } else {
+        [Management.ManagementDateTimeConverter]::ToDateTime([string]$newProcess.CreationDate)
+    }
     if ($creationTime -lt $startedAt.AddSeconds(-2)) {
         throw "Listener PID $($newProcess.ProcessId) predates this restart."
     }
