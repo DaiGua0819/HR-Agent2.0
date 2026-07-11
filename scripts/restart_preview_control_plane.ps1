@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 
 function Test-PreviewProcessChain {
     param(
-        [System.Management.ManagementBaseObject]$Process,
+        [object]$Process,
         [string]$ExpectedPythonPath
     )
 
