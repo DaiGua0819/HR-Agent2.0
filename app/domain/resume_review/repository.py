@@ -73,6 +73,7 @@ class ResumeReviewRepository:
         *,
         resume_id: str,
         user_id: str,
+        user_name: str | None = None,
         read_status: str | None = None,
         decision: str | None = None,
         reason_tags: Iterable[str] | None = None,
@@ -102,6 +103,11 @@ class ResumeReviewRepository:
         state = ReviewState(
             id=current.id if current else uuid4().hex,
             user_id=user_id,
+            user_name=(
+                user_name
+                if user_name is not None
+                else (current.user_name if current else "")
+            ),
             resume_id=resume_id,
             read_status=read_status or (current.read_status if current else "unread"),
             decision=decision or (current.decision if current else "undecided"),
@@ -116,11 +122,12 @@ class ResumeReviewRepository:
             connection.execute(
                 """
                 INSERT INTO resume_review_states (
-                  id, user_id, resume_id, read_status, decision, reason_tags,
+                  id, user_id, user_name, resume_id, read_status, decision, reason_tags,
                   note, assigned_to, viewed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, resume_id) DO UPDATE SET
+                  user_name = excluded.user_name,
                   read_status = excluded.read_status,
                   decision = excluded.decision,
                   reason_tags = excluded.reason_tags,
@@ -231,6 +238,92 @@ class ResumeReviewRepository:
             ).fetchall()
         return [_assignment_from_row(row) for row in rows]
 
+    def complete_shared_assignment(
+        self,
+        *,
+        resume_id: str,
+        shared_inbox_user_id: str,
+        completed_by_user_id: str,
+        completed_by_user_name: str,
+    ) -> ReviewAssignment | None:
+        """Atomically complete the one shared pending task for a resume."""
+
+        with connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM resume_assignments
+                WHERE resume_id = ?
+                  AND assigned_to_user_id = ?
+                  AND status = 'pending'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (resume_id, shared_inbox_user_id),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+
+            before = _assignment_from_row(row)
+            now = _now()
+            cursor = connection.execute(
+                """
+                UPDATE resume_assignments
+                SET status = 'completed',
+                    completed_by_user_id = ?,
+                    completed_by_user_name = ?,
+                    completed_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (
+                    completed_by_user_id,
+                    completed_by_user_name,
+                    now,
+                    now,
+                    before.id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.commit()
+                return None
+            completed_row = connection.execute(
+                "SELECT * FROM resume_assignments WHERE id = ?",
+                (before.id,),
+            ).fetchone()
+            assert completed_row is not None
+            completed = _assignment_from_row(completed_row)
+            before_json = json.dumps(
+                _assignment_audit_payload(before),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            after_json = json.dumps(
+                _assignment_audit_payload(completed),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            connection.execute(
+                """
+                INSERT INTO resume_review_events (
+                  id, resume_id, user_id, event_type, before_json, after_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid4().hex,
+                    resume_id,
+                    completed_by_user_id,
+                    "assignment_completed",
+                    before_json,
+                    after_json,
+                    now,
+                ),
+            )
+            connection.commit()
+        return completed
+
     def _active_assignment(
         self,
         resume_id: str,
@@ -251,6 +344,7 @@ def _state_params(state: ReviewState) -> tuple[object, ...]:
     return (
         state.id,
         state.user_id,
+        state.user_name,
         state.resume_id,
         state.read_status,
         state.decision,
@@ -267,6 +361,7 @@ def _state_from_row(row: sqlite3.Row) -> ReviewState:
     return ReviewState(
         id=row["id"],
         user_id=row["user_id"],
+        user_name=row["user_name"],
         resume_id=row["resume_id"],
         read_status=row["read_status"],
         decision=row["decision"],
@@ -288,9 +383,25 @@ def _assignment_from_row(row: sqlite3.Row) -> ReviewAssignment:
         status=row["status"],
         source_decision_id=row["source_decision_id"],
         note=row["note"],
+        completed_by_user_id=row["completed_by_user_id"],
+        completed_by_user_name=row["completed_by_user_name"],
+        completed_at=row["completed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _assignment_audit_payload(assignment: ReviewAssignment) -> dict[str, object]:
+    return {
+        "id": assignment.id,
+        "resumeId": assignment.resume_id,
+        "fromUserId": assignment.from_user_id,
+        "assignedToUserId": assignment.assigned_to_user_id,
+        "status": assignment.status,
+        "completedByUserId": assignment.completed_by_user_id,
+        "completedByUserName": assignment.completed_by_user_name,
+        "completedAt": assignment.completed_at,
+    }
 
 
 def _loads_list(value: str) -> list[str]:

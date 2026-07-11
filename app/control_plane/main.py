@@ -26,6 +26,7 @@ from app.domain.batch.service import BatchService
 from app.domain.email_import.service import GLOBAL_EMAIL_IMPORT_SERVICE
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume.service import ResumeService
+from app.domain.resume_review.models import SHARED_ADMIN_INBOX
 from app.domain.resume_review.repository import ResumeReviewRepository
 from app.domain.resume_review.service import ResumeReviewService
 from app.domain.scoring.service import ScoringService
@@ -59,6 +60,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     app.state.resume_review_service = ResumeReviewService(
         review_repository,
         resume_repository=repository,
+        shared_admin_inbox=SHARED_ADMIN_INBOX,
     )
     app.state.batch_service = BatchService()
     app.state.email_import_service = GLOBAL_EMAIL_IMPORT_SERVICE

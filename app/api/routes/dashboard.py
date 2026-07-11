@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from app.api.routes.auth import LOCAL_USER
 from app.control_plane.dispatcher import Dispatcher
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume_review.service import ResumeReviewService
@@ -101,7 +100,7 @@ def _pending_review_count(service: ResumeReviewService | None) -> int:
     if service is None:
         return 0
     try:
-        return len(service.queue_for_user(LOCAL_USER.id))
+        return len(service.shared_admin_queue())
     except Exception:
         return 0
 

@@ -22,6 +22,8 @@ VALID_DECISIONS = {
     DECISION_NEEDS_MORE_INFO,
 }
 
+SHARED_ADMIN_INBOX = "shared-admin-inbox"
+
 
 @dataclass(frozen=True)
 class ReviewState:
@@ -29,6 +31,7 @@ class ReviewState:
 
     id: str
     user_id: str
+    user_name: str
     resume_id: str
     read_status: str = READ_UNREAD
     decision: str = DECISION_UNDECIDED
@@ -51,6 +54,9 @@ class ReviewAssignment:
     status: str
     source_decision_id: str = ""
     note: str = ""
+    completed_by_user_id: str = ""
+    completed_by_user_name: str = ""
+    completed_at: str = ""
     created_at: str = ""
     updated_at: str = ""
 

@@ -104,9 +104,9 @@ async def list_resumes(
         sort=sort,
         descending=desc,
     )
-    member_review_states = (
-        review_service.member_decisions_for_resumes([item.id for item in result.items])
-        if review_service and _session_is_admin(session)
+    reviewer_decisions = (
+        review_service.reviewer_decisions_for_resumes([item.id for item in result.items])
+        if review_service
         else {}
     )
     return {
@@ -114,7 +114,7 @@ async def list_resumes(
             _resume_list_payload(
                 item,
                 review_state=review_states.get(item.id) if review_states else None,
-                member_review_states=member_review_states.get(item.id, []),
+                reviewer_decisions=reviewer_decisions.get(item.id, []),
             )
             for item in result.items
         ],
@@ -376,17 +376,17 @@ def _resume_payload(
 def _resume_list_payload(
     resume: Resume,
     review_state: object | None = None,
-    member_review_states: list[dict[str, object]] | None = None,
+    reviewer_decisions: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     payload = resume.model_dump(exclude={"payload"})
-    payload.update(_resume_display_payload(resume, review_state, member_review_states))
+    payload.update(_resume_display_payload(resume, review_state, reviewer_decisions))
     return payload
 
 
 def _resume_display_payload(
     resume: Resume,
     review_state: object | None = None,
-    member_review_states: list[dict[str, object]] | None = None,
+    reviewer_decisions: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     file_path = preview_file_path(resume)
     school = _resume_school(resume)
@@ -410,7 +410,8 @@ def _resume_display_payload(
         "filePreviewPagesUrl": f"/api/resumes/{resume.id}/preview-pages" if file_path else "",
         "fileDownloadUrl": f"/api/resumes/{resume.id}/download" if file_path else "",
         "reviewState": _review_state_payload(review_state),
-        "memberReviewStates": member_review_states or [],
+        "reviewerDecisions": reviewer_decisions or [],
+        "memberReviewStates": reviewer_decisions or [],
     }
 
 

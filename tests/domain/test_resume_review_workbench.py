@@ -5,14 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from app.api.routes.auth import AuthSessionStore
+from app.auth.access import user_payload
 from app.control_plane.main import create_app
 from app.db.engine import connect, run_migrations
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume.service import ResumeService
+from app.domain.resume_review.models import LocalUser
 from app.domain.resume_review.repository import ResumeReviewRepository
 from app.domain.resume_review.service import ResumeReviewService
 from fastapi.testclient import TestClient
+
+SHARED_ADMIN_INBOX = "shared-admin-inbox"
 
 
 def test_review_migration_creates_tables(tmp_path: Path) -> None:
@@ -67,17 +72,17 @@ def test_suitable_decision_waits_for_explicit_admin_push(tmp_path: Path) -> None
     assert result["state"]["decision"] == "suitable"
     assert result["state"]["assignedTo"] == ""
     assert result["assignment"] is None
-    assert service.queue_for_user("local-admin") == []
+    assert service.shared_admin_queue() == []
 
     pushed = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
     duplicate = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
-    queue = service.queue_for_user("local-admin")
+    queue = service.shared_admin_queue()
 
-    assert pushed["assignment"]["assignedToUserId"] == "local-admin"
+    assert pushed["assignment"]["assignedToUserId"] == SHARED_ADMIN_INBOX
     assert duplicate["assignment"]["id"] == pushed["assignment"]["id"]
     assert len(queue) == 1
     assert queue[0]["resume"]["id"] == "resume-1"
-    assert service.state_for_resume("resume-1", "viewer-1").assigned_to == "local-admin"
+    assert service.state_for_resume("resume-1", "viewer-1").assigned_to == SHARED_ADMIN_INBOX
 
 
 def test_push_to_admin_rejects_non_suitable_decision(tmp_path: Path) -> None:
@@ -95,7 +100,7 @@ def test_push_to_admin_rejects_non_suitable_decision(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="resume_not_suitable_for_push"):
         service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
 
-    assert service.queue_for_user("local-admin") == []
+    assert service.shared_admin_queue() == []
 
 
 def test_unsuitable_decision_does_not_create_assignment(tmp_path: Path) -> None:
@@ -114,7 +119,7 @@ def test_unsuitable_decision_does_not_create_assignment(tmp_path: Path) -> None:
 
     assert result["state"]["decision"] == "unsuitable"
     assert result["assignment"] is None
-    assert service.queue_for_user("local-admin") == []
+    assert service.shared_admin_queue() == []
 
 
 def test_member_push_route_creates_admin_queue_after_suitable_decision(
@@ -138,10 +143,131 @@ def test_member_push_route_creates_admin_queue_after_suitable_decision(
     assert decision.status_code == 200
     assert decision.json()["assignment"] is None
     assert pushed.status_code == 200
-    assert pushed.json()["assignment"]["assignedToUserId"] == "local-admin"
-    queue = service.queue_for_user("local-admin")
+    assert pushed.json()["assignment"]["assignedToUserId"] == SHARED_ADMIN_INBOX
+    queue = service.shared_admin_queue()
     assert len(queue) == 1
     assert queue[0]["assignment"]["fromUserId"] == "local-zhanghuaibin"
+
+
+def test_shared_admin_queue_is_completed_once_by_any_admin(tmp_path: Path) -> None:
+    """All admins share one pending task, and one decision completes it for everyone."""
+
+    resume_repo, service = _service(tmp_path)
+    _save_resume(resume_repo)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+        decision="suitable",
+    )
+    service.push_to_admin(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+    )
+
+    first_admin_queue = service.shared_admin_queue()
+    second_admin_queue = service.shared_admin_queue()
+    completed = service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:admin-a",
+        user_name="管理员甲",
+        decision="needs_more_info",
+        is_admin=True,
+    )
+
+    assert len(first_admin_queue) == len(second_admin_queue) == 1
+    assert first_admin_queue[0]["assignment"]["assignedToUserId"] == SHARED_ADMIN_INBOX
+    assert completed["completedAssignment"]["status"] == "completed"
+    assert completed["completedAssignment"]["completedByUserId"] == "feishu:admin-a"
+    assert completed["completedAssignment"]["completedByUserName"] == "管理员甲"
+    assert service.shared_admin_queue() == []
+
+    duplicate_completion = service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:admin-b",
+        user_name="管理员乙",
+        decision="suitable",
+        is_admin=True,
+    )
+    assert duplicate_completion["completedAssignment"] is None
+
+
+def test_reviewer_decisions_include_persisted_names_and_historical_fallback(tmp_path: Path) -> None:
+    """Decision lists expose reviewer names without guessing historical identities."""
+
+    resume_repo, service = _service(tmp_path)
+    _save_resume(resume_repo)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+        decision="suitable",
+    )
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="legacy-user-1234",
+        decision="unsuitable",
+    )
+
+    decisions = service.reviewer_decisions_for_resumes(["resume-1"])["resume-1"]
+    by_user_id = {item["userId"]: item for item in decisions}
+
+    assert by_user_id["feishu:member-a"]["userName"] == "成员甲"
+    assert by_user_id["legacy-user-1234"]["userName"] == "历史成员（1234）"
+
+
+def test_member_cannot_read_shared_admin_queue(tmp_path: Path) -> None:
+    """Members can submit decisions but cannot enumerate the shared admin inbox."""
+
+    app, _ = _app_with_review_service(tmp_path)
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "member", "password": "member"})
+        response = client.get("/api/resume-review/queue")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "admin_queue_forbidden"
+
+
+def test_two_feishu_admin_sessions_read_the_same_shared_pending_task(tmp_path: Path) -> None:
+    """Shared tasks are keyed by the inbox, not an individual Feishu administrator ID."""
+
+    app, service = _app_with_review_service(tmp_path)
+    service.set_decision(resume_id="resume-1", user_id="member-1", decision="suitable")
+    service.push_to_admin(resume_id="resume-1", user_id="member-1")
+    session_store = AuthSessionStore(app.state.auth_session_store_path)
+    for token, user_id, name in [
+        ("admin-a-token", "feishu:admin-a", "管理员甲"),
+        ("admin-b-token", "feishu:admin-b", "管理员乙"),
+    ]:
+        session_store.set(
+            token,
+            user_payload(
+                LocalUser(
+                    id=user_id,
+                    name=name,
+                    roles=["admin"],
+                    permissions=["resumes:read"],
+                    owners=[],
+                    platforms=[],
+                )
+            ),
+            ttl_seconds=3600,
+        )
+
+    with TestClient(app) as client:
+        first = client.get(
+            "/api/resume-review/queue",
+            headers={"cookie": "hr_agent_session=admin-a-token"},
+        )
+        second = client.get(
+            "/api/resume-review/queue",
+            headers={"cookie": "hr_agent_session=admin-b-token"},
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["items"] == second.json()["items"]
+    assert first.json()["items"][0]["assignment"]["assignedToUserId"] == SHARED_ADMIN_INBOX
 
 
 def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> None:
@@ -167,6 +293,7 @@ def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> N
         {
             "id": service.state_for_resume("resume-1", "local-member").id,
             "userId": "local-member",
+            "userName": "历史成员（mber）",
             "resumeId": "resume-1",
             "readStatus": "viewed",
             "decision": "unsuitable",
@@ -681,7 +808,6 @@ def _service(tmp_path: Path) -> tuple[ResumeRepository, ResumeReviewService]:
     service = ResumeReviewService(
         review_repo,
         resume_repository=resume_repo,
-        default_assignee="local-admin",
     )
     return resume_repo, service
 

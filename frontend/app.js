@@ -1084,29 +1084,54 @@ function renderMiniList() {
   bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.08, radius: 120, marginFactor: 8, vertical: true });
   requestAnimationFrame(scrollSelectedCandidateIntoView);
 }
+function reviewerDecisions(resume) {
+  const decisions = resume?.reviewerDecisions || resume?.reviewer_decisions || resume?.memberReviewStates || resume?.member_review_states || [];
+  return Array.isArray(decisions) ? decisions : [];
+}
 function memberReviewStates(resume) {
-  const states = resume?.memberReviewStates || resume?.member_review_states || [];
-  return Array.isArray(states) ? states : [];
+  return reviewerDecisions(resume);
+}
+function reviewerDecisionDisplayName(item) {
+  const name = item?.userName || item?.user_name;
+  if (name) return String(name);
+  const userId = String(item?.userId || item?.user_id || "");
+  return `历史成员（${userId.slice(-4) || "未知"}）`;
+}
+function reviewerDecisionPushed(item) {
+  return Boolean(item?.assignedTo || item?.assigned_to);
 }
 function memberDecisionBadgeMarkup(resume) {
-  if (isMemberUser()) return "";
-  const states = memberReviewStates(resume);
-  const suitableCount = states.filter((item) => item?.decision === "suitable").length;
-  const unsuitableCount = states.filter((item) => item?.decision === "unsuitable").length;
-  const parts = [];
-  if (suitableCount) parts.push(`成员合适${suitableCount}`);
-  if (unsuitableCount) parts.push(`成员不合适${unsuitableCount}`);
-  if (!parts.length) return "";
-  return `<span class="member-decision-badge">${escapeHtml(parts.join(" / "))}</span>`;
+  const states = reviewerDecisions(resume).filter((item) => ["suitable", "unsuitable"].includes(item?.decision));
+  const groups = [
+    ["suitable", "成员合适"],
+    ["unsuitable", "成员不合适"],
+  ]
+    .map(([decision, label]) => ({ decision, label, items: states.filter((item) => item.decision === decision) }))
+    .filter((group) => group.items.length);
+  if (!groups.length) return "";
+  const labels = groups.map((group) => `${group.label}${group.items.length}`);
+  const groupedNames = groups
+    .map((group) => `
+      <section class="member-decision-popover__group">
+        <strong>${escapeHtml(group.label)}</strong>
+        ${group.items.map((item) => `<span>${escapeHtml(reviewerDecisionDisplayName(item))}${reviewerDecisionPushed(item) ? " · 已推送" : ""}</span>`).join("")}
+      </section>
+    `)
+    .join("");
+  return `
+    <span class="member-decision-badge" aria-label="${escapeHtml(labels.join("，"))}">
+      <span class="member-decision-badge__label">${escapeHtml(labels.join(" / "))}</span>
+      <span class="member-decision-popover" role="tooltip">${groupedNames}</span>
+    </span>
+  `;
 }
 function memberDecisionSummaryMarkup(resume) {
-  if (isMemberUser()) return "";
-  const states = memberReviewStates(resume).filter((item) => item?.decision && item.decision !== "undecided");
+  const states = reviewerDecisions(resume).filter((item) => item?.decision && item.decision !== "undecided");
   if (!states.length) return "";
   const rows = states
     .map((item) => {
-      const pushed = item.assignedTo || item.assigned_to ? " · 已推送" : "";
-      return `<p><span class="${tsTagClass(item.decision)}">${escapeHtml(labelDecision(item.decision))}</span> ${escapeHtml(item.userId || item.user_id || "成员")}${escapeHtml(pushed)}</p>`;
+      const pushed = reviewerDecisionPushed(item) ? " · 已推送" : "";
+      return `<p><span class="${tsTagClass(item.decision)}">${escapeHtml(labelDecision(item.decision))}</span> ${escapeHtml(reviewerDecisionDisplayName(item))}${escapeHtml(pushed)}</p>`;
     })
     .join("");
   return `<div class="summary-card ts-summary-card member-decision-list"><h3>成员判断</h3>${rows}</div>`;
@@ -1937,6 +1962,21 @@ async function pushSelectedResumeToAdmin() {
 }
 async function advanceAfterReviewAction(id) {
   const currentIndex = state.resumes.findIndex((resume) => resume.id === id);
+  if (state.tab === "queue") {
+    await loadQueue();
+    const next = state.resumes[Math.max(0, Math.min(currentIndex, state.resumes.length - 1))];
+    if (next) {
+      await openResume(next.id);
+      return;
+    }
+    state.selectedId = "";
+    state.context = null;
+    $("previewTitle").textContent = "当前没有待你处理的简历";
+    $("resumePreview").textContent = "共享待处理池已经处理完成。";
+    $("summaryCards").innerHTML = `<p class="muted">当前没有待你处理的简历。</p>`;
+    renderActionDock();
+    return;
+  }
   const nextId = currentIndex >= 0 ? state.resumes[currentIndex + 1]?.id : "";
   const currentPage = state.page;
   const shouldLoadNextPage = !nextId && currentIndex >= 0 && currentPage < state.pages;

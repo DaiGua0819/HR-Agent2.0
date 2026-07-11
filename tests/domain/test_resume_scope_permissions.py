@@ -11,8 +11,6 @@ from app.control_plane.main import create_app
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume.service import ResumeService
-from app.domain.resume_review.repository import ResumeReviewRepository
-from app.domain.resume_review.service import ResumeReviewService
 from app.settings import load_settings
 from fastapi.testclient import TestClient
 
@@ -87,41 +85,20 @@ def test_unconfigured_member_cannot_read_seed_resumes(monkeypatch) -> None:
     assert listed.json()["total"] == 0
 
 
-def test_member_review_queue_filters_out_forbidden_resumes(monkeypatch, tmp_path: Path) -> None:
-    """Review queue follows the same job-scope visibility as resume lists."""
+def test_member_cannot_read_shared_admin_queue(monkeypatch, tmp_path: Path) -> None:
+    """Members cannot enumerate the shared administrator review inbox."""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
     app = _app_for_member("ou_she", "佘欣平")
-    service = _attach_review_service(app, tmp_path, assigned_to="feishu:ou_she")
-    service.set_decision(
-        resume_id="resume-operation",
-        user_id="reviewer",
-        decision="suitable",
-    )
-    service.push_to_admin(
-        resume_id="resume-operation",
-        user_id="reviewer",
-        assign_to="feishu:ou_she",
-    )
-    service.set_decision(
-        resume_id="resume-finance",
-        user_id="reviewer",
-        decision="suitable",
-    )
-    service.push_to_admin(
-        resume_id="resume-finance",
-        user_id="reviewer",
-        assign_to="feishu:ou_she",
-    )
 
     with TestClient(app) as client:
         _feishu_login(client)
         queue = client.get("/api/resume-review/queue")
 
     load_settings.cache_clear()
-    assert queue.status_code == 200
-    assert [item["resume"]["id"] for item in queue.json()["items"]] == ["resume-operation"]
+    assert queue.status_code == 403
+    assert queue.json()["detail"] == "admin_queue_forbidden"
 
 
 def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
@@ -272,22 +249,6 @@ def _app_for_member(open_id: str, name: str):
     app.state.resume_repository = repository
     app.state.resume_service = ResumeService(repository)
     return app
-
-
-def _attach_review_service(
-    app,
-    tmp_path: Path,
-    *,
-    assigned_to: str,
-) -> ResumeReviewService:
-    repository = ResumeReviewRepository(tmp_path / "review.sqlite")
-    service = ResumeReviewService(
-        repository,
-        resume_repository=app.state.resume_repository,
-        default_assignee=assigned_to,
-    )
-    app.state.resume_review_service = service
-    return service
 
 
 def _feishu_login(client: TestClient) -> None:

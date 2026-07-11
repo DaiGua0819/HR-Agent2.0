@@ -74,6 +74,30 @@ def run_migrations(database_path: str | Path | None = None) -> None:
             "TEXT",
         )
         _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
+        _add_column_if_missing(
+            connection,
+            "resume_review_states",
+            "user_name",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
+            "resume_assignments",
+            "completed_by_user_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
+            "resume_assignments",
+            "completed_by_user_name",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
+            "resume_assignments",
+            "completed_at",
+            "TEXT NOT NULL DEFAULT ''",
+        )
         _migrate_interview_sessions_if_present(connection)
         connection.commit()
 

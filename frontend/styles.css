@@ -1415,6 +1415,7 @@ h3 { font-size: 15px; }
   color: var(--muted);
 }
 .member-decision-badge {
+  position: relative;
   display: inline-flex;
   align-items: center;
   min-height: 20px;
@@ -1425,6 +1426,50 @@ h3 { font-size: 15px; }
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
+}
+.member-decision-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  min-width: 168px;
+  gap: 8px;
+  padding: 10px;
+  color: #1f2937;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.member-decision-popover__group {
+  display: grid;
+  gap: 3px;
+}
+.member-decision-popover__group strong {
+  color: #0f172a;
+  font-size: 12px;
+}
+.member-decision-popover__group span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.candidate-card:hover,
+.candidate-card:focus {
+  overflow: visible;
+}
+.candidate-card:hover .member-decision-popover,
+.candidate-card:focus .member-decision-popover {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .dashboard-head,

@@ -12,6 +12,7 @@ from app.domain.resume_review.models import (
     DECISION_UNDECIDED,
     READ_UNREAD,
     READ_VIEWED,
+    SHARED_ADMIN_INBOX,
     VALID_DECISIONS,
     ReviewAssignment,
     ReviewState,
@@ -27,11 +28,11 @@ class ResumeReviewService:
         repository: ResumeReviewRepository,
         *,
         resume_repository: ResumeRepository,
-        default_assignee: str = "local-admin",
+        shared_admin_inbox: str = SHARED_ADMIN_INBOX,
     ) -> None:
         self.repository = repository
         self.resume_repository = resume_repository
-        self.default_assignee = default_assignee
+        self.shared_admin_inbox = shared_admin_inbox
 
     def mark_viewed(self, resume_id: str, user_id: str) -> ReviewState:
         """打开简历时标记当前用户已看。"""
@@ -58,10 +59,11 @@ class ResumeReviewService:
         *,
         resume_id: str,
         user_id: str,
+        user_name: str = "",
         decision: str,
         reason_tags: list[str] | None = None,
         note: str = "",
-        assign_to: str = "",
+        is_admin: bool = False,
     ) -> dict[str, object]:
         """设置合适/不合适/待补充，只保存当前用户的判断。"""
 
@@ -72,6 +74,7 @@ class ResumeReviewService:
         state = self.repository.upsert_state(
             resume_id=resume_id,
             user_id=user_id,
+            user_name=user_name,
             read_status=READ_VIEWED,
             decision=decision,
             reason_tags=reason_tags or [],
@@ -86,9 +89,22 @@ class ResumeReviewService:
                 before=_state_payload(before),
                 after=_state_payload(state),
             )
+        completed_assignment = (
+            self.repository.complete_shared_assignment(
+                resume_id=resume_id,
+                shared_inbox_user_id=self.shared_admin_inbox,
+                completed_by_user_id=user_id,
+                completed_by_user_name=user_name,
+            )
+            if is_admin
+            else None
+        )
         return {
             "state": _state_payload(state),
             "assignment": None,
+            "completedAssignment": _assignment_payload(completed_assignment)
+            if completed_assignment
+            else None,
             "eventId": event_id,
         }
 
@@ -97,18 +113,19 @@ class ResumeReviewService:
         *,
         resume_id: str,
         user_id: str,
+        user_name: str = "",
         note: str = "",
-        assign_to: str = "",
     ) -> dict[str, object]:
         """把当前用户已标记合适的简历推送到管理员待处理队列。"""
 
         before = self.repository.get_state(resume_id, user_id)
         if before is None or before.decision != DECISION_SUITABLE:
             raise ValueError("resume_not_suitable_for_push")
-        assigned_to = assign_to or before.assigned_to or self.default_assignee
+        assigned_to = self.shared_admin_inbox
         state = self.repository.upsert_state(
             resume_id=resume_id,
             user_id=user_id,
+            user_name=user_name,
             read_status=READ_VIEWED,
             decision=DECISION_SUITABLE,
             reason_tags=before.reason_tags,
@@ -204,6 +221,7 @@ class ResumeReviewService:
         return self.repository.get_state(resume_id, user_id) or ReviewState(
             id="",
             user_id=user_id,
+            user_name="",
             resume_id=resume_id,
             read_status=READ_UNREAD,
             decision=DECISION_UNDECIDED,
@@ -214,27 +232,34 @@ class ResumeReviewService:
 
         return self.repository.states_for_user(user_id)
 
-    def member_decisions_for_resumes(
+    def reviewer_decisions_for_resumes(
         self,
         resume_ids: list[str],
     ) -> dict[str, list[dict[str, object]]]:
-        """返回成员对一批简历做出的合适/不合适等判断。"""
+        """Return every non-undecided reviewer decision for visible resumes."""
 
         grouped = self.repository.states_for_resumes(resume_ids)
         result: dict[str, list[dict[str, object]]] = {}
         for resume_id, states in grouped.items():
             result[resume_id] = [
-                _state_payload(state)
+                _reviewer_decision_payload(state)
                 for state in states
-                if state.user_id != self.default_assignee
-                and state.decision != DECISION_UNDECIDED
+                if state.decision != DECISION_UNDECIDED
             ]
         return result
 
-    def queue_for_user(self, user_id: str) -> list[dict[str, object]]:
-        """返回待我处理队列。"""
+    def member_decisions_for_resumes(
+        self,
+        resume_ids: list[str],
+    ) -> dict[str, list[dict[str, object]]]:
+        """Compatibility alias for consumers using the old field name."""
 
-        assignments = self.repository.list_assignments(user_id)
+        return self.reviewer_decisions_for_resumes(resume_ids)
+
+    def shared_admin_queue(self) -> list[dict[str, object]]:
+        """Return the one pending inbox shared by every administrator."""
+
+        assignments = self.repository.list_assignments(self.shared_admin_inbox)
         result: list[dict[str, object]] = []
         for assignment in assignments:
             record = self.resume_repository.get(assignment.resume_id)
@@ -253,6 +278,7 @@ def _state_payload(state: ReviewState | None) -> dict[str, object]:
     return {
         "id": state.id,
         "userId": state.user_id,
+        "userName": state.user_name,
         "resumeId": state.resume_id,
         "readStatus": state.read_status,
         "decision": state.decision,
@@ -263,6 +289,12 @@ def _state_payload(state: ReviewState | None) -> dict[str, object]:
         "createdAt": state.created_at,
         "updatedAt": state.updated_at,
     }
+
+
+def _reviewer_decision_payload(state: ReviewState) -> dict[str, object]:
+    payload = _state_payload(state)
+    payload["userName"] = state.user_name or _historical_user_name(state.user_id)
+    return payload
 
 
 def _assignment_payload(assignment: ReviewAssignment | None) -> dict[str, object]:
@@ -276,9 +308,17 @@ def _assignment_payload(assignment: ReviewAssignment | None) -> dict[str, object
         "status": assignment.status,
         "sourceDecisionId": assignment.source_decision_id,
         "note": assignment.note,
+        "completedByUserId": assignment.completed_by_user_id,
+        "completedByUserName": assignment.completed_by_user_name,
+        "completedAt": assignment.completed_at,
         "createdAt": assignment.created_at,
         "updatedAt": assignment.updated_at,
     }
+
+
+def _historical_user_name(user_id: str) -> str:
+    suffix = str(user_id or "").strip()[-4:] or "未知"
+    return f"历史成员（{suffix}）"
 
 
 def _score_grade(score: int | None) -> str:

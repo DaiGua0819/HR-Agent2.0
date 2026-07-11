@@ -255,6 +255,7 @@ CREATE INDEX IF NOT EXISTS idx_interview_logs_session
 CREATE TABLE IF NOT EXISTS resume_review_states (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',
   resume_id TEXT NOT NULL,
   read_status TEXT NOT NULL DEFAULT 'unread',
   decision TEXT NOT NULL DEFAULT 'undecided',
@@ -293,6 +294,9 @@ CREATE TABLE IF NOT EXISTS resume_assignments (
   status TEXT NOT NULL DEFAULT 'pending',
   source_decision_id TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',
+  completed_by_user_id TEXT NOT NULL DEFAULT '',
+  completed_by_user_name TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
