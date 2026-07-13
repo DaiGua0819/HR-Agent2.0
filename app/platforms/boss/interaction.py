@@ -20,6 +20,8 @@ from app.platforms.boss import selectors
 from app.settings import load_settings
 
 VerifyCallback = Callable[[], Awaitable[bool | dict[str, object]]]
+BOSS_THREAD_VERIFY_TIMEOUT_MS = 8000
+BOSS_SEND_VERIFY_TIMEOUT_MS = 8000
 
 
 async def boss_click_element(
@@ -34,6 +36,27 @@ async def boss_click_element(
     if is_fake(page):
         return await reliable_click_element(page, element, label=label, verify=verify)
     return await humanized_click_element(
+        page,
+        element,
+        label=label,
+        verify=verify,
+        profile=profile,
+    )
+
+
+async def boss_click_conversation_row(
+    page: Any,
+    element: Any,
+    *,
+    label: str,
+    verify: VerifyCallback | None = None,
+) -> dict[str, object]:
+    profile = replace(
+        _boss_profile(),
+        verify_timeout_ms=BOSS_THREAD_VERIFY_TIMEOUT_MS,
+        max_click_attempts=1,
+    )
+    return await boss_click_element(
         page,
         element,
         label=label,
@@ -133,7 +156,11 @@ async def boss_type_and_send(
             send_element,
             label="BOSS发送按钮",
             verify=verify_sent,
-            profile=replace(profile, max_click_attempts=1),
+            profile=replace(
+                profile,
+                verify_timeout_ms=BOSS_SEND_VERIFY_TIMEOUT_MS,
+                max_click_attempts=1,
+            ),
         )
 
 

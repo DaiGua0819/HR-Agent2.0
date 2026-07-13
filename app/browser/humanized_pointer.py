@@ -155,6 +155,31 @@ async def humanized_click_element(
                 continue
 
             await _sleep_range(profile.hover_ms, profile, randomizer)
+            final_box = await locator.bounding_box()
+            if (
+                not _valid_box(final_box)
+                or _box_distance(latest_box, final_box) > profile.geometry_tolerance_px
+                or not _inside(final_box, target_x, target_y)
+            ):
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "reason": "target_moved_before_mouse_down",
+                        "movedPx": round(_box_distance(latest_box, final_box), 2)
+                        if _valid_box(final_box)
+                        else 0.0,
+                    }
+                )
+                continue
+            if not await _locator_contains_point(locator, target_x, target_y):
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "reason": "target_not_at_pointer",
+                        "target": {"x": round(target_x, 2), "y": round(target_y, 2)},
+                    }
+                )
+                continue
             await mouse.down()
             await _sleep_range(profile.mouse_down_ms, profile, randomizer)
             await mouse.up()
@@ -164,6 +189,8 @@ async def humanized_click_element(
                 "attempt": attempt,
                 "clicked": True,
                 "verified": bool(verified.get("verified")),
+                "reason": str(verified.get("reason") or ""),
+                "verification": verified,
                 "pathPoints": len(points),
                 "target": {"x": round(target_x, 2), "y": round(target_y, 2)},
                 "movedPx": round(moved_px, 2),
@@ -186,11 +213,9 @@ async def humanized_click_element(
                 {"attempt": attempt, "reason": "humanized_click_error", "error": str(error)}
             )
 
-    reason = (
-        str(attempts[-1].get("reason") or "humanized_click_not_verified")
-        if attempts
-        else "humanized_click_not_verified"
-    )
+    reason = "humanized_click_not_verified"
+    if attempts:
+        reason = str(attempts[-1].get("reason") or reason)
     return _record(
         page,
         {
@@ -453,6 +478,24 @@ def _safe_target(box: dict[str, float], rng: random.Random) -> tuple[float, floa
     top = box["y"] + inset_y
     bottom = box["y"] + box["height"] - inset_y
     return rng.uniform(left, right), rng.uniform(top, bottom)
+
+
+async def _locator_contains_point(locator: Any, x: float, y: float) -> bool:
+    try:
+        value = await locator.evaluate(
+            """
+            (element, point) => {
+              const hit = document.elementFromPoint(point.x, point.y);
+              return Boolean(hit && (hit === element || element.contains(hit)));
+            }
+            """,
+            {"x": x, "y": y},
+        )
+    except TypeError:
+        return True
+    except Exception:
+        return False
+    return bool(value)
 
 
 async def _input_value(locator: Any) -> str:

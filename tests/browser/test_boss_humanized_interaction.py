@@ -8,6 +8,7 @@ from app.browser.humanized_pointer import (
     DEFAULT_HUMANIZED_PROFILE,
     humanized_click_element,
 )
+from app.platforms.boss import interaction as boss_interaction
 from app.platforms.boss.interaction import boss_type_and_send
 
 INSTANT_PROFILE = replace(
@@ -86,22 +87,33 @@ class RecordingLocator:
         box: dict[str, float],
         *,
         input_element: bool = False,
+        boxes: list[dict[str, float]] | None = None,
+        hit_matches: bool = True,
     ) -> None:
         self.raw_page = raw_page
         self.box = box
+        self.boxes = list(boxes or [])
+        self.box_calls = 0
         self.input_element = input_element
+        self.hit_matches = hit_matches
 
     async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
         self.raw_page.events.append(("scroll_into_view", timeout))
 
     async def bounding_box(self) -> dict[str, float]:
+        if self.boxes:
+            index = min(self.box_calls, len(self.boxes) - 1)
+            self.box_calls += 1
+            return dict(self.boxes[index])
         return dict(self.box)
 
     async def focus(self, timeout: int | None = None) -> None:
         self.raw_page.events.append(("focus", timeout))
 
-    async def evaluate(self, script: str) -> str:
-        _ = script
+    async def evaluate(self, script: str, arg: object | None = None) -> str | bool:
+        _ = arg
+        if "elementFromPoint" in script:
+            return self.hit_matches
         return self.raw_page.input_text if self.input_element else ""
 
 
@@ -179,6 +191,87 @@ def test_humanized_click_preverifies_before_retry_without_second_click() -> None
 
     assert result["ok"] is True
     assert result["reason"] == "verified_before_retry"
+    assert sum(1 for event in page.page.events if event[0] == "down") == 1
+
+
+def test_humanized_click_does_not_press_after_target_moves_during_hover() -> None:
+    page = WrappedPage()
+    original = {"x": 300, "y": 160, "width": 120, "height": 44}
+    moved = {"x": 300, "y": 260, "width": 120, "height": 44}
+    target = WrappedElement(
+        RecordingLocator(
+            page.page,
+            original,
+            boxes=[original, original, original, moved],
+        )
+    )
+
+    result = asyncio.run(
+        humanized_click_element(
+            page,
+            target,
+            label="BOSS联系人",
+            profile=replace(INSTANT_PROFILE, max_click_attempts=1),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "target_moved_before_mouse_down"
+    assert not any(event[0] == "down" for event in page.page.events)
+
+
+def test_humanized_click_requires_final_point_to_hit_target_element() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(
+            page.page,
+            {"x": 300, "y": 160, "width": 120, "height": 44},
+            hit_matches=False,
+        )
+    )
+
+    result = asyncio.run(
+        humanized_click_element(
+            page,
+            target,
+            label="BOSS联系人",
+            profile=replace(INSTANT_PROFILE, max_click_attempts=1),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "target_not_at_pointer"
+    assert not any(event[0] == "down" for event in page.page.events)
+
+
+def test_boss_conversation_click_waits_for_delayed_identity_switch(monkeypatch) -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(page.page, {"x": 300, "y": 160, "width": 120, "height": 44})
+    )
+    checks = 0
+
+    async def delayed_verify() -> dict[str, object]:
+        nonlocal checks
+        checks += 1
+        return {
+            "verified": checks >= 3,
+            "reason": "conversation_id_matched" if checks >= 3 else "opened_thread_mismatch",
+        }
+
+    monkeypatch.setattr(boss_interaction, "_boss_profile", lambda: INSTANT_PROFILE)
+
+    result = asyncio.run(
+        boss_interaction.boss_click_conversation_row(
+            page,
+            target,
+            label="BOSS候选人会话",
+            verify=delayed_verify,
+        )
+    )
+
+    assert result["ok"] is True
+    assert checks >= 3
     assert sum(1 for event in page.page.events if event[0] == "down") == 1
 
 
@@ -269,6 +362,41 @@ def test_boss_send_button_is_never_clicked_twice_when_verification_fails() -> No
     ]
     assert result["ok"] is False
     assert len(send_clicks) == 1
+
+
+def test_boss_send_verification_waits_eight_seconds_but_clicks_once(monkeypatch) -> None:
+    page = WrappedPage()
+    send_profiles = []
+
+    async def click_element(
+        wrapped_page,
+        element,
+        *,
+        label,
+        verify=None,
+        profile=None,
+    ):
+        _ = element, verify
+        if "发送按钮" in label:
+            send_profiles.append(profile)
+            wrapped_page.page.sent_messages.append("测试消息")
+        return {"ok": True}
+
+    monkeypatch.setattr(boss_interaction, "_boss_profile", lambda: INSTANT_PROFILE)
+    monkeypatch.setattr(boss_interaction, "boss_click_element", click_element)
+
+    result = asyncio.run(
+        boss_interaction.boss_type_and_send(
+            page,
+            "测试消息",
+            verify_sent=lambda: _verified(True),
+        )
+    )
+
+    assert result["ok"] is True
+    assert len(send_profiles) == 1
+    assert send_profiles[0].verify_timeout_ms == 8000
+    assert send_profiles[0].max_click_attempts == 1
 
 
 def test_boss_message_entrypoints_do_not_use_locator_click_layer() -> None:

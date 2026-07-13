@@ -91,6 +91,8 @@ READ_UNREAD_ROWS_JS = r"""
     rows: rows.map((row, index) => ({
       index,
       id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
+      name: visibleText(row.querySelector(".geek-name, [class*='geek-name']")),
+      position: visibleText(row.querySelector(".position-name, [class*='position-name']")),
       label: visibleText(row),
       unreadCount: parseBadgeCount(row),
     })),

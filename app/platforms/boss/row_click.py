@@ -1,107 +1,30 @@
-"""BOSS conversation row click helpers.
-
-The chat list can behave like a virtual scroll area on real BOSS pages.  This
-module keeps row opening logic separate from business decisions: first try the
-normal reliable click, then fall back to a DOM event click that re-finds the row
-by id/label and verifies the chat pane changed.
-"""
+"""BOSS conversation row lookup and precise mouse click helpers."""
 
 from __future__ import annotations
-
-from typing import Any
 
 from app.browser.base import BrowserElement, BrowserPage
 from app.browser.reliable_support import VerifyCallback, record_result, result_dict
 from app.platforms.boss import selectors
-from app.platforms.boss.interaction import boss_click_element
+from app.platforms.boss.interaction import boss_click_conversation_row
 
-DOM_CLICK_ROW_JS = r"""
-payload => {
-  const visible = (el) => {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" &&
-      rect.width > 0 && rect.height > 0;
-  };
-  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
-  const compact = (value) => String(value || "").replace(/\s+/g, "");
-  const rowId = String(payload.id || "").replace(/^_/, "");
-  const targetLabel = compact(payload.label || "");
-  const rows = Array.from(document.querySelectorAll(payload.selector)).filter(visible);
-  let target = null;
-  if (rowId) {
-    target = rows.find((row) => {
-      const current = String(
-        row.getAttribute("id") || row.getAttribute("data-id") || row.getAttribute("data-uid") || ""
-      ).replace(/^_/, "");
-      return current === rowId;
-    });
-  }
-  if (!target && targetLabel) {
-    target = rows.find((row) => compact(text(row)) === targetLabel);
-  }
-  if (!target && Number.isInteger(payload.index) && payload.index >= 0) {
-    target = rows[payload.index] || null;
-  }
-  if (!target) {
-    return { clicked: false, reason: "row_not_found", rowCount: rows.length };
-  }
-  const scrollParent = (() => {
-    let node = target.parentElement;
-    while (node && node !== document.body) {
-      const style = getComputedStyle(node);
-      if (/(auto|scroll)/.test(style.overflowY || "") && node.scrollHeight > node.clientHeight) {
-        return node;
-      }
-      node = node.parentElement;
-    }
-    return null;
-  })();
-  target.scrollIntoView({ block: "center", inline: "nearest" });
-  if (scrollParent) {
-    const parentRect = scrollParent.getBoundingClientRect();
-    const rect = target.getBoundingClientRect();
-    scrollParent.scrollTop +=
-      rect.top - parentRect.top - (parentRect.height / 2) + (rect.height / 2);
-    scrollParent.dispatchEvent(new Event("scroll", { bubbles: true }));
-  }
-  const rect = target.getBoundingClientRect();
-  if (!rect.width || !rect.height) {
-    return { clicked: false, reason: "row_not_visible_after_scroll", id: rowId };
-  }
-  const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
-  const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
-  const pointTarget = document.elementFromPoint(x, y);
-  const clickTarget = pointTarget && target.contains(pointTarget) ? pointTarget : target;
-  const init = {
-    bubbles: true,
-    cancelable: true,
-    view: window,
-    clientX: x,
-    clientY: y,
-    button: 0,
-  };
-  for (const name of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-    const EventClass = name.startsWith("pointer") ? PointerEvent : MouseEvent;
-    clickTarget.dispatchEvent(new EventClass(name, {
-      ...init,
-      pointerId: 1,
-      pointerType: "mouse",
-      isPrimary: true,
-    }));
-  }
-  if (typeof clickTarget.click === "function") clickTarget.click();
-  return {
-    clicked: true,
-    reason: "dom_event_click",
-    id: rowId,
-    text: text(target).slice(0, 120),
-    x: Math.round(x),
-    y: Math.round(y),
-  };
-}
-"""
+SAFE_ROW_TARGET_SELECTORS = (".geek-name", ".geek-info", ".geek-item-main")
+STABLE_ROW_SELECTOR = ":is(.geek-item, .user-list-item, .user-item)"
+ROW_CLICK_ATTEMPTS = 2
+
+
+class _LocatorElement:
+    def __init__(self, locator: object) -> None:
+        self.locator = locator
+
+    async def click(self, timeout_ms: int | None = None) -> None:
+        kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
+        await self.locator.click(**kwargs)
+
+    async def text(self) -> str:
+        return str(await self.locator.inner_text())
+
+    async def attr(self, name: str) -> str | None:
+        return await self.locator.get_attribute(name)
 
 
 async def find_row_for_state(
@@ -112,21 +35,36 @@ async def find_row_for_state(
 
     row_id = str(state.get("id") or "")
     row_id_norm = row_id.lstrip("_")
-    label = str(state.get("label") or "")
-    rows = await page.query_all(selectors.SESSION_ITEM)
+    label = str(state.get("label") or "").strip()
+    expected_name = str(state.get("name") or "").strip()
+    expected_position = str(state.get("position") or "").strip()
 
     if row_id_norm:
+        stable = await _stable_row_for_id(page, row_id)
+        if stable is not None:
+            return stable
+        rows = await page.query_all(selectors.SESSION_ITEM)
         for row in rows:
-            current_id = str(await row.attr("id") or await row.attr("data-id") or "")
-            if current_id.lstrip("_") == row_id_norm:
+            current_ids = {
+                str(await row.attr(name) or "").lstrip("_")
+                for name in ("id", "data-id", "data-uid")
+            }
+            if row_id_norm in current_ids:
                 return row
+        return None
+    rows = await page.query_all(selectors.SESSION_ITEM)
     if label:
         for row in rows:
             if (await row.text()).strip() == label:
                 return row
-    index = _safe_int(state.get("index"))
-    if 0 <= index < len(rows):
-        return rows[index]
+    if expected_name:
+        matches: list[BrowserElement] = []
+        for row in rows:
+            text = (await row.text()).strip()
+            if expected_name in text and (not expected_position or expected_position in text):
+                matches.append(row)
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -139,17 +77,70 @@ async def click_row_state(
 ) -> dict[str, object]:
     """Open a BOSS row and verify the target conversation became active."""
 
-    row = await find_row_for_state(page, state)
-    if row is None:
-        result = result_dict(False, "click_element", label, reason="row_not_found")
-        record_result(page, result)
-        return result
+    row_attempts: list[dict[str, object]] = []
+    last_result: dict[str, object] = {}
+    for attempt in range(1, ROW_CLICK_ATTEMPTS + 1):
+        row = await find_row_for_state(page, state)
+        if row is None:
+            last_result = result_dict(False, "click_element", label, reason="row_not_found")
+            row_attempts.append({"attempt": attempt, "result": last_result})
+            break
+        target, target_source = await _safe_row_click_target(row)
+        result = await boss_click_conversation_row(page, target, label=label, verify=verify)
+        last_result = {**result, "targetSource": target_source}
+        row_attempts.append(
+            {"attempt": attempt, "targetSource": target_source, "result": last_result}
+        )
+        if result.get("ok"):
+            return {**last_result, "rowAttempts": row_attempts}
 
-    return await boss_click_element(page, row, label=label, verify=verify)
+    final = {
+        **last_result,
+        "ok": False,
+        "reason": last_result.get("reason") or "row_click_not_verified",
+        "rowAttempts": row_attempts,
+    }
+    record_result(page, final)
+    return final
 
 
-def _safe_int(value: Any) -> int:
+async def _safe_row_click_target(
+    row: BrowserElement,
+) -> tuple[BrowserElement | _LocatorElement, str]:
+    locator = getattr(row, "locator", None)
+    if locator is None or not hasattr(locator, "locator"):
+        return row, "row"
+    for selector in SAFE_ROW_TARGET_SELECTORS:
+        try:
+            child = locator.locator(selector).first
+            if await child.count() > 0 and await child.is_visible():
+                return _LocatorElement(child), selector
+        except Exception:
+            continue
+    return row, "row"
+
+
+async def _stable_row_for_id(page: BrowserPage, row_id: str) -> _LocatorElement | None:
+    raw_page = getattr(page, "page", None)
+    if raw_page is None or not hasattr(raw_page, "locator"):
+        return None
+    normalized = str(row_id or "").strip().lstrip("_")
+    if not normalized:
+        return None
+    values = (f"_{normalized}", normalized)
+    selectors_by_id = [
+        f'{STABLE_ROW_SELECTOR}[{attribute}="{_css_attr_value(value)}"]'
+        for attribute in ("id", "data-id", "data-uid")
+        for value in values
+    ]
+    locator = raw_page.locator(", ".join(selectors_by_id)).first
     try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
+        if await locator.count() > 0 and await locator.is_visible():
+            return _LocatorElement(locator)
+    except Exception:
+        return None
+    return None
+
+
+def _css_attr_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')

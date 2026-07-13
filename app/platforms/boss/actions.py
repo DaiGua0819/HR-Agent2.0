@@ -157,6 +157,8 @@ async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
                 "index": index,
                 "id": await row.attr("id") or "",
                 "label": label,
+                "name": "",
+                "position": "",
                 "unread_count": unread_count,
             }
         )
@@ -296,30 +298,6 @@ async def mark_unsuitable(page: BrowserPage, *, reason: str = "") -> dict[str, o
         return {"marked": False, "reason": "unsuitable_button_not_found", "detail": reason}
     click = await boss_click_element(page, button, label="BOSS标记不合适")
     return {"marked": bool(click.get("ok")), "reason": reason, "click": click}
-
-
-async def _find_row_for_state(
-    page: BrowserPage,
-    state: dict[str, object],
-) -> BrowserElement | None:
-    row_id = str(state.get("id") or "")
-    row_id_norm = row_id.lstrip("_")
-    label = str(state.get("label") or "")
-    rows = await page.query_all(selectors.SESSION_ITEM)
-
-    if row_id_norm:
-        for row in rows:
-            current_id = str(await row.attr("id") or "")
-            if current_id.lstrip("_") == row_id_norm:
-                return row
-    if label:
-        for row in rows:
-            if (await row.text()).strip() == label:
-                return row
-    index = _safe_int(state.get("index"))
-    if 0 <= index < len(rows):
-        return rows[index]
-    return None
 
 
 async def _find_button_by_text(
@@ -487,6 +465,8 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
                 "label": str(item.get("label") or ""),
+                "name": str(item.get("name") or ""),
+                "position": str(item.get("position") or ""),
                 "unread_count": unread_count,
             }
         )

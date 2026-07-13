@@ -12,6 +12,8 @@ import asyncio
 import json
 import os
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
@@ -25,8 +27,8 @@ from app.platforms.boss import actions as boss_actions
 from app.platforms.boss import selectors
 from app.platforms.boss.adapter import BossAdapter
 from app.platforms.boss.interaction import boss_click_element
-from app.platforms.boss.row_click import click_row_state
-from app.settings import load_settings
+from app.platforms.boss.row_click import click_row_state, find_row_for_state
+from app.settings import PROJECT_ROOT, load_settings
 
 from boss_once_support import print_summary, reliable_actions_since
 from boss_targeting import process_boss_targets, select_all_filter
@@ -225,21 +227,38 @@ async def _verify_boss_thread_opened(page: Any, target_state: dict[str, Any]) ->
     conversation = await boss_actions.read_chat_context(page, owner="")
     target_id = str(target_state.get("id") or "").lstrip("_")
     current_id = str(conversation.id or "").lstrip("_")
+    expected = _expected_boss_identity(target_state)
+    actual = {
+        "id": current_id,
+        "name": conversation.candidate.name,
+        "position": _normalize_boss_position(conversation.candidate.applied_position),
+    }
     if target_id and current_id == target_id:
-        return {"verified": True, "reason": "conversation_id_matched"}
-    label = _compact_text(str(target_state.get("label") or ""))
-    name = _compact_text(conversation.candidate.name)
-    position = _compact_text(conversation.candidate.applied_position)
-    if label and name and name in label and (not position or position in label):
-        return {"verified": True, "reason": "candidate_label_matched"}
+        return {
+            "verified": True,
+            "reason": "conversation_id_matched",
+            "expected": expected,
+            "actual": actual,
+        }
+    expected_name = _compact_text(expected["name"])
+    actual_name = _compact_text(actual["name"])
+    expected_position = _compact_text(expected["position"])
+    actual_position = _compact_text(actual["position"])
+    position_conflict = bool(
+        expected_position and actual_position and expected_position != actual_position
+    )
+    if expected_name and expected_name == actual_name and not position_conflict:
+        return {
+            "verified": True,
+            "reason": "candidate_identity_matched",
+            "expected": expected,
+            "actual": actual,
+        }
     return {
         "verified": False,
         "reason": "opened_thread_mismatch",
-        "targetId": target_id,
-        "currentId": current_id,
-        "targetLabel": str(target_state.get("label") or "")[:120],
-        "currentName": conversation.candidate.name,
-        "currentPosition": conversation.candidate.applied_position,
+        "expected": expected,
+        "actual": actual,
     }
 
 
@@ -251,18 +270,31 @@ async def _process_boss(
     artifact_store: Any,
 ) -> list[dict[str, Any]]:
     await adapter.select_positions(None)
-    states = await boss_actions.read_unread_row_states(adapter.page)
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for unread_state in states:
-        if len(summaries) >= limit:
+    attempted: set[str] = set()
+    while len(summaries) < limit:
+        states = await boss_actions.read_unread_row_states(adapter.page)
+        unread_state = next(
+            (state for state in states if _boss_state_key(state) not in attempted),
+            None,
+        )
+        if unread_state is None:
             break
+        attempted.add(_boss_state_key(unread_state))
         label = str(unread_state.get("label") or "").strip()
         if _skip_row_label(label):
             continue
         row = await _find_boss_row(adapter.page, unread_state)
         if row is None:
-            continue
+            failure = _boss_open_failure_summary(
+                unread_state,
+                label=label,
+                click={"ok": False, "reason": "row_not_found"},
+            )
+            summaries.append(failure)
+            _report_boss_open_failure(failure)
+            break
         label = (await row.text()).strip()
         if _skip_row_label(label):
             continue
@@ -278,16 +310,15 @@ async def _process_boss(
             ),
         )
         if not click.get("ok"):
-            summaries.append(
-                {
-                    "conversationId": label,
-                    "action": "skip",
-                    "stage": "open_thread_failed",
-                    "decision": {"reason": click.get("reason") or "click_not_verified"},
-                    "reliableActions": reliable_actions_since(adapter.page, before_actions),
-                }
+            failure = _boss_open_failure_summary(
+                unread_state,
+                label=label,
+                click=click,
+                reliable_actions=reliable_actions_since(adapter.page, before_actions),
             )
-            continue
+            summaries.append(failure)
+            _report_boss_open_failure(failure)
+            break
         try:
             context = await _wait_for_context(adapter)
             state = await asyncio.wait_for(
@@ -347,24 +378,7 @@ async def _process_boss(
 
 
 async def _find_boss_row(page: Any, state: dict[str, Any]) -> Any | None:
-    row_id = str(state.get("id") or "")
-    row_id_norm = row_id.lstrip("_")
-    label = str(state.get("label") or "").strip()
-    rows = await page.query_all(selectors.SESSION_ITEM)
-
-    if row_id_norm:
-        for row in rows:
-            current_id = str(await row.attr("id") or "")
-            if current_id.lstrip("_") == row_id_norm:
-                return row
-    if label:
-        for row in rows:
-            if (await row.text()).strip() == label:
-                return row
-    index = _safe_int(state.get("index"))
-    if 0 <= index < len(rows):
-        return rows[index]
-    return None
+    return await find_row_for_state(page, state)
 
 
 async def _wait_for_context(adapter: BossAdapter, *, timeout_seconds: float = 6):
@@ -404,6 +418,95 @@ def _safe_int(value: Any) -> int:
 
 def _compact_text(value: str) -> str:
     return "".join(value.split())
+
+
+def _boss_state_key(state: dict[str, Any]) -> str:
+    row_id = str(state.get("id") or "").strip().lstrip("_")
+    if row_id:
+        return f"id:{row_id}"
+    return f"label:{_compact_text(str(state.get('label') or ''))}"
+
+
+def _expected_boss_identity(state: dict[str, Any]) -> dict[str, str]:
+    return {
+        "id": str(state.get("id") or "").strip().lstrip("_"),
+        "name": str(state.get("name") or "").strip(),
+        "position": _normalize_boss_position(str(state.get("position") or "")),
+        "label": str(state.get("label") or "")[:300],
+    }
+
+
+def _normalize_boss_position(value: str) -> str:
+    normalized = str(value or "").strip()
+    for prefix in ("沟通职位：", "沟通职位:"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :].strip()
+    return normalized
+
+
+def _boss_open_failure_summary(
+    state: dict[str, Any],
+    *,
+    label: str,
+    click: dict[str, Any],
+    reliable_actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "conversationId": str(state.get("id") or label),
+        "candidate": {
+            "name": str(state.get("name") or ""),
+            "position": str(state.get("position") or ""),
+        },
+        "action": "skip",
+        "stage": "open_thread_failed",
+        "decision": {
+            "reason": click.get("reason") or "click_not_verified",
+            "expected": _expected_boss_identity(state),
+            "actual": _last_click_actual(click),
+            "click": click,
+        },
+        "reliableActions": reliable_actions or [],
+    }
+
+
+def _last_click_actual(click: dict[str, Any]) -> dict[str, Any]:
+    direct = click.get("actual")
+    if isinstance(direct, dict):
+        return direct
+    attempts = click.get("attempts")
+    if not isinstance(attempts, list):
+        return {}
+    for attempt in reversed(attempts):
+        if not isinstance(attempt, dict):
+            continue
+        verification = attempt.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("actual"), dict):
+            return verification["actual"]
+    return {}
+
+
+def _report_boss_open_failure(summary: dict[str, Any]) -> None:
+    payload = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "platform": "boss",
+        **summary,
+    }
+    print(
+        "[BOSS] 打开联系人失败，已停止本轮: "
+        + json.dumps(payload, ensure_ascii=False, default=str),
+        flush=True,
+    )
+    _write_open_failure_diagnostic(payload)
+
+
+def _write_open_failure_diagnostic(payload: dict[str, Any]) -> None:
+    path = Path(PROJECT_ROOT) / "data" / "diagnostics" / "boss_open_failures.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except OSError as error:
+        print(f"[BOSS] 写入打开失败诊断失败: {error}", file=sys.stderr, flush=True)
 
 
 async def _close_manager(manager: BrowserManager) -> None:
