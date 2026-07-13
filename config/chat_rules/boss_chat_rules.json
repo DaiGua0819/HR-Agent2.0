@@ -3052,12 +3052,15 @@
         "answer": "需要独立上手，没有传统的一带一"
       },
       {
-        "topic": "salaryAndOvertime",
+        "topic": "salaryAmount",
         "questionPatterns": [
           "薪资",
           "工资",
           "日薪",
-          "多少钱"
+          "多少钱",
+          "工资多少",
+          "薪资多少",
+          "日薪多少"
         ],
         "answer": "实习是150一天"
       },
@@ -3089,10 +3092,17 @@
         "answer": "每周一到周三加班，18点到21点，周六不算加班"
       },
       {
-        "topic": "salaryAndOvertime",
+        "topic": "salaryPaymentDate",
         "questionPatterns": [
           "几号发",
-          "什么时候发工资"
+          "什么时候发工资",
+          "一个月一结",
+          "月结",
+          "每月结算",
+          "工资怎么发",
+          "多久发一次工资",
+          "薪资发放时间",
+          "工资发放时间"
         ],
         "answer": "每月10号发工资"
       },
@@ -3382,6 +3392,17 @@
           "哪些客户"
         ],
         "answer": "客户涉及建材、石油、化妆品、农药等"
+      },
+      {
+        "topic": "availabilityPresence",
+        "questionPatterns": [
+          "还在吗",
+          "您还在吗",
+          "人还在吗",
+          "在线吗",
+          "可以回复一下吗"
+        ],
+        "answer": "在的，岗位还在招聘"
       },
       {
         "topic": "hiringStatus",

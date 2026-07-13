@@ -212,6 +212,41 @@ def test_zhilian_batch_does_not_reselect_unread_after_preflight(monkeypatch) -> 
     assert adapter.events == ["find", "find"]
 
 
+def test_zhilian_batch_stops_after_anomaly_threshold_is_exceeded(monkeypatch) -> None:
+    class FailedRunner:
+        def __init__(self, adapter: object, **kwargs: object) -> None:
+            _ = kwargs
+            self.adapter = adapter
+
+        async def run_current(self) -> dict[str, object]:
+            conversation_id = getattr(self.adapter, "current_conversation_id", "")
+            return {
+                "conversation_id": conversation_id,
+                "session_id": f"session-{conversation_id}",
+                "candidate": {"name": conversation_id},
+                "messages": [{"sender": "other", "text": "你好"}],
+                "next_action": "request_resume_failed",
+                "stage": "request_resume_action_failed",
+                "decision": {"action": "request_resume_failed"},
+            }
+
+    adapter = BatchUnreadAdapter()
+    adapter.refs = ["conv-1", "conv-2", "conv-3"]
+    monkeypatch.setattr("scripts.platform_once_common.ConversationRunner", FailedRunner)
+
+    summaries = asyncio.run(
+        _process_zhilian(
+            adapter,
+            3,
+            conversation_repository=None,
+            artifact_store=None,
+            max_anomalies=1,
+        )
+    )
+
+    assert [item["conversationId"] for item in summaries] == ["conv-1", "conv-2"]
+
+
 def test_boss_confirmed_live_allows_high_limit_for_full_unread_pass(monkeypatch) -> None:
     """用户确认 live 后，BOSS 单次处理不再限制 3/10 人。"""
 

@@ -79,6 +79,7 @@ async def humanized_click_element(
     *,
     label: str = "",
     verify: VerifyCallback | None = None,
+    pre_click_guard: VerifyCallback | None = None,
     profile: HumanizedInteractionProfile = DEFAULT_HUMANIZED_PROFILE,
     rng: random.Random | None = None,
 ) -> dict[str, object]:
@@ -180,6 +181,17 @@ async def humanized_click_element(
                     }
                 )
                 continue
+            if pre_click_guard is not None:
+                guard = await verify_once(pre_click_guard)
+                if not guard.get("verified"):
+                    attempts.append(
+                        {
+                            "attempt": attempt,
+                            "reason": str(guard.get("reason") or "pre_click_guard_failed"),
+                            "guard": guard,
+                        }
+                    )
+                    continue
             await mouse.down()
             await _sleep_range(profile.mouse_down_ms, profile, randomizer)
             await mouse.up()

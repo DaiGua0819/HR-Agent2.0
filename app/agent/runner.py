@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.judgement import judge_candidate_reply
-from app.agent.message_utils import append_sent, last_non_system, message_sent
+from app.agent.message_utils import (
+    append_sent,
+    candidate_messages_since_last_reply,
+    last_non_system,
+    message_sent,
+)
 from app.agent.persistence import ConversationPersistence
 from app.agent.policy import (
     prephrase_candidates,
@@ -15,7 +20,7 @@ from app.agent.policy import (
     should_use_company_info,
 )
 from app.agent.rules import (
-    find_knowledge_answer,
+    find_knowledge_answers,
     initial_common_phrase,
     is_ai_basic_rule,
     is_direct_resume_rule,
@@ -92,12 +97,14 @@ class ConversationRunner:
         last = last_non_system(conversation)
         if not last or last.sender != MessageSender.CANDIDATE:
             return self._finish(state, "wait", "last_message_not_candidate")
-        if _candidate_rejected_conversation(last.text):
+        candidate_turn = candidate_messages_since_last_reply(conversation)
+        turn_text = "\n".join(message.text for message in candidate_turn).strip() or last.text
+        if _candidate_rejected_conversation(turn_text):
             return self._finish(
                 state,
                 "skip",
                 "candidate_rejected",
-                evidence=last.text,
+                evidence=turn_text,
             )
         if self._needs_initial_ai_basic_phrase(conversation, rule):
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
@@ -106,7 +113,7 @@ class ConversationRunner:
             return await self._handle_direct_resume(state, conversation, rule)
 
         if is_silent_question(
-            last.text,
+            turn_text,
             self.rules,
             position=conversation.candidate.applied_position,
         ):
@@ -114,20 +121,20 @@ class ConversationRunner:
                 state,
                 "wait",
                 "silent_question",
-                evidence=last.text,
+                evidence=turn_text,
             )
 
-        if rule_screening(rule) and should_prioritize_screening(last.text, rule):
-            return await self._handle_screening(state, conversation, rule, last.text)
-        if self._should_handle_screening_before_knowledge(conversation, rule, last.text):
-            return await self._handle_screening(state, conversation, rule, last.text)
+        if rule_screening(rule) and should_prioritize_screening(turn_text, rule):
+            return await self._handle_screening(state, conversation, rule, turn_text)
+        if self._should_handle_screening_before_knowledge(conversation, rule, turn_text):
+            return await self._handle_screening(state, conversation, rule, turn_text)
 
-        answer = self._knowledge_answer(last.text, conversation)
+        answer = self._knowledge_answer(turn_text, conversation)
         if answer:
             screening = rule_screening(rule)
             if is_ai_basic_rule(conversation.candidate.applied_position, rule):
                 phrase = initial_common_phrase(rule)
-                judgement = await judge_candidate_reply(last.text, question=phrase, llm=self.llm)
+                judgement = await judge_candidate_reply(turn_text, question=phrase, llm=self.llm)
                 if judgement.status == "accept":
                     failed = await self._send_or_fail(
                         state,
@@ -174,15 +181,15 @@ class ConversationRunner:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
-        if looks_like_question(last.text):
+        if looks_like_question(turn_text):
             if rule_screening(rule):
-                return await self._handle_screening(state, conversation, rule, last.text)
-            state["pending_question"] = last.text
-            return self._finish(state, "escalate", "unknown_question", evidence=last.text)
+                return await self._handle_screening(state, conversation, rule, turn_text)
+            state["pending_question"] = turn_text
+            return self._finish(state, "escalate", "unknown_question", evidence=turn_text)
 
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
-            return await self._handle_ai_basic(state, conversation, rule, last.text)
-        return await self._handle_screening(state, conversation, rule, last.text)
+            return await self._handle_ai_basic(state, conversation, rule, turn_text)
+        return await self._handle_screening(state, conversation, rule, turn_text)
 
     async def _handle_direct_resume(
         self,
@@ -201,15 +208,11 @@ class ConversationRunner:
         position = conversation.candidate.applied_position
         if request_state.pending_resume_consent:
             result = await self.adapter.request_resume()
-            state["resume_requested"] = bool(
-                result.get("requested") or result.get("resumeReceived")
-            )
-            return self._finish(
+            return self._finish_resume_request_result(
                 state,
-                "request_resume",
-                "resume_consent_requested",
+                result,
+                success_reason="resume_consent_requested",
                 knowledgeAnswer=knowledge_answer,
-                result=result,
             )
         candidates = prephrase_candidates(conversation.platform, position, rule)
         if candidates and not any(message_sent(conversation, item) for item in candidates):
@@ -224,13 +227,11 @@ class ConversationRunner:
                 if failed:
                     return failed
         result = await self.adapter.request_resume()
-        state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
-        return self._finish(
+        return self._finish_resume_request_result(
             state,
-            "request_resume",
-            "direct_resume",
+            result,
+            success_reason="direct_resume",
             knowledgeAnswer=knowledge_answer,
-            result=result,
         )
 
     async def _handle_ai_basic(
@@ -272,14 +273,12 @@ class ConversationRunner:
         if handled:
             return handled
         result = await self.adapter.request_resume()
-        state["resume_requested"] = bool(result.get("requested") or result.get("resumeReceived"))
-        return self._finish(
+        return self._finish_resume_request_result(
             state,
-            "request_resume",
-            "basic_accept",
+            result,
+            success_reason="basic_accept",
             knowledgeAnswer=knowledge_answer,
             judgement=judgement,
-            result=result,
         )
 
     async def _send_initial_ai_basic_phrase(
@@ -367,16 +366,12 @@ class ConversationRunner:
             if handled:
                 return handled
             result = await self.adapter.request_resume()
-            state["resume_requested"] = bool(
-                result.get("requested") or result.get("resumeReceived")
-            )
-            return self._finish(
+            return self._finish_resume_request_result(
                 state,
-                "request_resume",
-                "screening_accept",
+                result,
+                success_reason="screening_accept",
                 knowledgeAnswer=knowledge_answer,
                 screening=analysis,
-                result=result,
             )
         if status == "reject":
             return self._finish(
@@ -450,12 +445,11 @@ class ConversationRunner:
                 else "resume_consent_requested"
             )
             return (
-                self._finish(
+                self._finish_resume_request_result(
                     state,
-                    "request_resume",
-                    reason,
+                    result,
+                    success_reason=reason,
                     **extra,
-                    result=result,
                 ),
                 request_state,
             )
@@ -498,12 +492,63 @@ class ConversationRunner:
             return True
         return bool(getattr(result, "sent", False) and getattr(result, "verified", False))
 
+    def _finish_resume_request_result(
+        self,
+        state: GraphState,
+        result: dict[str, Any],
+        *,
+        success_reason: str,
+        **extra: Any,
+    ) -> GraphState:
+        handled = self._resume_request_result_handled(result)
+        state["resume_requested"] = bool(
+            result.get("requested")
+            or result.get("confirmed")
+            or result.get("alreadyRequested")
+            or result.get("resumeReceived")
+            or result.get("acceptedResumeConsent")
+            or result.get("consentHandled")
+        )
+        if not handled:
+            return self._finish(
+                state,
+                "request_resume_failed",
+                "request_resume_action_failed",
+                attemptedAction="request_resume",
+                failureReason=str(result.get("reason") or "resume_request_unhandled"),
+                result=result,
+                **extra,
+            )
+        return self._finish(
+            state,
+            "request_resume",
+            success_reason,
+            result=result,
+            **extra,
+        )
+
+    def _resume_request_result_handled(self, result: dict[str, Any]) -> bool:
+        if bool(getattr(self.adapter, "dry_run", False) or result.get("dryRun")):
+            return True
+        return bool(
+            result.get("requested")
+            or result.get("confirmed")
+            or result.get("alreadyRequested")
+            or result.get("resumeReceived")
+            or result.get("acceptedResumeConsent")
+            or result.get("consentHandled")
+            or (result.get("downloaded") and result.get("filePath"))
+        )
+
     def _knowledge_answer(self, text: str, conversation: Conversation) -> str | None:
-        return find_knowledge_answer(
+        answers = find_knowledge_answers(
             text,
             self.rules,
             position=conversation.candidate.applied_position,
         )
+        if not answers:
+            return None
+        return "；".join(str(item["answer"]) for item in answers)
 
     @staticmethod
     def _needs_initial_ai_basic_phrase(

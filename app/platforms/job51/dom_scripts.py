@@ -151,7 +151,7 @@ CLICK_THREAD_BY_IDENTITY_JS = r"""
     "#conversation-list .list-item, .conversation-list .list-item, " +
     "[class*='conversation'] [class*='list-item'], [class*='im'] [class*='list-item']"
   )).filter(visible);
-  const scored = rows.map((row, index) => {
+  const evaluated = rows.map((row, index) => {
     const rowText = text(row);
     const rowId = String(attr(row, "id") || attr(row, "data-id") ||
       attr(row, "data-uid") || "").replace(/^_/, "");
@@ -200,11 +200,25 @@ CLICK_THREAD_BY_IDENTITY_JS = r"""
       position: rowPosition,
       latestMessage: rowLatest,
     };
-  }).filter((item) => item.score > 0 && !item.rejected)
+  });
+  const scored = evaluated.filter((item) => item.score > 0 && !item.rejected)
     .sort((a, b) => b.score - a.score || a.index - b.index);
   const target = scored[0];
   if (!target) {
-    return { clicked: false, reason: "thread_identity_not_found", candidates: scored.length };
+    return {
+      clicked: false,
+      reason: "thread_identity_not_found",
+      visibleRows: rows.length,
+      candidates: scored.length,
+      positionConflicts: evaluated.filter((item) => item.reason === "position_conflict").length,
+      rowSample: evaluated.slice(0, 5).map((item) => ({
+        index: item.index,
+        label: item.label,
+        name: item.name,
+        position: item.position,
+        reason: item.reason || "low_score",
+      })),
+    };
   }
   if (target.score < 55) {
     return {

@@ -75,7 +75,12 @@ async def _main_async(platform: Platform) -> None:
             raise SystemExit(2)
         _print_step("4/4 selector preflight passed")
 
-        summaries = await _process(adapter, platform, args.limit)
+        summaries = await _process(
+            adapter,
+            platform,
+            args.limit,
+            max_anomalies=args.max_anomalies,
+        )
         _print_summary(platform, summaries, live=live)
     finally:
         await _close_manager(manager)
@@ -91,6 +96,12 @@ def _parse_args(platform: Platform) -> argparse.Namespace:
     parser.add_argument("--wait", type=float, default=3.0, help="Seconds to wait after attach")
     parser.add_argument("--live", action="store_true", help="Actually send/request after checks")
     parser.add_argument("--confirm-live", action="store_true", help="Required with --live")
+    parser.add_argument(
+        "--max-anomalies",
+        type=int,
+        default=-1,
+        help="Stop after anomaly count exceeds this value; -1 keeps unlimited mode",
+    )
     return parser.parse_args()
 
 
@@ -167,7 +178,13 @@ async def _health_check(platform: Platform, adapter: Any) -> list[str]:
     return missing
 
 
-async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[str, Any]]:
+async def _process(
+    adapter: Any,
+    platform: Platform,
+    limit: int,
+    *,
+    max_anomalies: int = -1,
+) -> list[dict[str, Any]]:
     conversation_repository, artifact_store = build_persistence_from_settings()
     if platform == Platform.ZHILIAN:
         return await _process_zhilian(
@@ -175,6 +192,7 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             limit,
             conversation_repository=conversation_repository,
             artifact_store=artifact_store,
+            max_anomalies=max_anomalies,
         )
 
     summaries: list[dict[str, Any]] = []
@@ -182,13 +200,18 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
     max_items = max(1, limit)
     scrolls = 0
     idle_scans = 0
+    anomaly_count = 0
     while len(summaries) < max_items and idle_scans < 3:
         progressed = False
+        rescan_requested = False
         for row_state in await _candidate_row_states(adapter, platform):
             if len(summaries) >= max_items:
                 break
             label = str(row_state.get("label") or "").strip()
-            row_keys = _seen_keys_for_row(row_state)
+            row_keys = _seen_keys_for_row(
+                row_state,
+                include_index=platform != Platform.JOB51,
+            )
             if seen.intersection(row_keys) or _skip_label(platform, label):
                 continue
             if platform == Platform.JOB51:
@@ -211,11 +234,20 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                     return summaries
             row = await _find_candidate_row(adapter, platform, row_state)
             if row is None:
+                if platform == Platform.JOB51:
+                    print(
+                        "[job51] conversation list changed before open; refreshing snapshot",
+                        flush=True,
+                    )
+                    rescan_requested = True
+                    break
                 continue
             label = (await row.text()).strip()
-            if seen.intersection(_seen_keys_for_row({**row_state, "label": label})) or _skip_label(
-                platform, label
-            ):
+            current_row_keys = _seen_keys_for_row(
+                {**row_state, "label": label},
+                include_index=platform != Platform.JOB51,
+            )
+            if seen.intersection(current_row_keys) or _skip_label(platform, label):
                 continue
             print(f"[{platform.value}] preparing candidate: {label[:120]}", flush=True)
             before_actions = len(getattr(adapter.page, "reliable_actions", []))
@@ -245,6 +277,11 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                 )
                 seen.update(row_keys)
                 progressed = True
+                anomaly_count += 1
+                if _anomaly_limit_exceeded(platform, anomaly_count, max_anomalies):
+                    return summaries
+                if platform == Platform.JOB51:
+                    break
                 continue
             try:
                 state = await asyncio.wait_for(
@@ -273,14 +310,26 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
                     await _cleanup_job51(adapter.page, phase="after_timeout")
                 progressed = True
                 print(f"[{platform.value}] candidate timed out: {label[:120]}", flush=True)
+                anomaly_count += 1
+                if _anomaly_limit_exceeded(platform, anomaly_count, max_anomalies):
+                    return summaries
+                if platform == Platform.JOB51:
+                    break
                 continue
             summary = _summary_from_state(state)
             summary["reliableActions"] = getattr(adapter.page, "reliable_actions", [])[
                 before_actions:
             ]
             if platform == Platform.JOB51:
-                summary["cleanup"] = await _cleanup_job51(adapter.page, phase="after_candidate")
-            processed_keys = _seen_keys_for_processed_item(row_state, summary)
+                cleanup = await _cleanup_job51(adapter.page, phase="after_candidate")
+                summary["cleanup"] = cleanup
+                if summary.get("artifactWritten") or _cleanup_closed_something(cleanup):
+                    summary["listRefresh"] = await _refresh_job51_list_after_resume(adapter)
+            processed_keys = _seen_keys_for_processed_item(
+                row_state,
+                summary,
+                include_index=platform != Platform.JOB51,
+            )
             if seen.intersection(processed_keys):
                 seen.update(processed_keys)
                 progressed = True
@@ -288,10 +337,20 @@ async def _process(adapter: Any, platform: Platform, limit: int) -> list[dict[st
             summaries.append(summary)
             seen.update(processed_keys)
             progressed = True
+            if _summary_is_anomaly(summary):
+                anomaly_count += 1
+                if _anomaly_limit_exceeded(platform, anomaly_count, max_anomalies):
+                    return summaries
+            if platform == Platform.JOB51:
+                break
         if len(summaries) >= max_items:
             break
         if progressed:
             idle_scans = 0
+            continue
+        if rescan_requested:
+            idle_scans += 1
+            await asyncio.sleep(0.3)
             continue
         scrolled = await _scroll_thread_list(adapter, platform, scrolls)
         scrolls += 1
@@ -423,12 +482,14 @@ async def _process_zhilian(
     *,
     conversation_repository: Any,
     artifact_store: Any,
+    max_anomalies: int = -1,
 ) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
     max_items = max(1, limit)
     scrolls = 0
     idle_scans = 0
+    anomaly_count = 0
     while len(summaries) < max_items and idle_scans < 3:
         before_actions = len(getattr(adapter.page, "reliable_actions", []))
         ref = await adapter.find_next_unread_thread(exclude_ids=seen)
@@ -467,6 +528,13 @@ async def _process_zhilian(
                 f"[{Platform.ZHILIAN.value}] candidate timed out: {ref.conversation_id}",
                 flush=True,
             )
+            anomaly_count += 1
+            if _anomaly_limit_exceeded(
+                Platform.ZHILIAN,
+                anomaly_count,
+                max_anomalies,
+            ):
+                return summaries
             continue
         conversation_id = str(state.get("conversation_id") or ref.conversation_id)
         seen.update({ref.conversation_id, conversation_id})
@@ -476,7 +544,43 @@ async def _process_zhilian(
         ]
         summaries.append(summary)
         idle_scans = 0
+        if _summary_is_anomaly(summary):
+            anomaly_count += 1
+            if _anomaly_limit_exceeded(
+                Platform.ZHILIAN,
+                anomaly_count,
+                max_anomalies,
+            ):
+                return summaries
     return summaries
+
+
+def _summary_is_anomaly(summary: dict[str, Any]) -> bool:
+    action = str(summary.get("action") or "")
+    stage = str(summary.get("stage") or "")
+    return action in {"failed", "send_failed", "request_resume_failed"} or stage in {
+        "candidate_timeout",
+        "open_thread_failed",
+        "request_resume_action_failed",
+    }
+
+
+def _anomaly_limit_exceeded(
+    platform: Platform,
+    anomaly_count: int,
+    max_anomalies: int,
+) -> bool:
+    if max_anomalies < 0 or anomaly_count <= max_anomalies:
+        return False
+    message = (
+        f"[{platform.value}] anomaly count {anomaly_count} "
+        f"exceeded limit {max_anomalies}; stopping"
+    )
+    print(
+        message,
+        flush=True,
+    )
+    return True
 
 
 async def _candidate_row_states(adapter: Any, platform: Platform) -> list[dict[str, object]]:
@@ -502,10 +606,50 @@ async def _find_candidate_row(
         for row in rows:
             if (await _safe_element_text(row)).strip() == label:
                 return row
+    if platform == Platform.JOB51:
+        return None
     index = _safe_int(state.get("index"))
     if 0 <= index < len(rows):
         return rows[index]
     return None
+
+
+def _cleanup_closed_something(cleanup: dict[str, object]) -> bool:
+    try:
+        return int(cleanup.get("closed") or 0) > 0
+    except (TypeError, ValueError):
+        return bool(cleanup.get("closed"))
+
+
+async def _refresh_job51_list_after_resume(adapter: Any) -> dict[str, object]:
+    """Restore the all-position unread list after a resume preview changed page context."""
+
+    try:
+        position = await adapter.select_positions(None)
+        unread = await adapter.select_unread_filter()
+        await asyncio.sleep(0.5)
+        rows = await job51_chat.read_unread_row_states(adapter.page)
+    except Exception as error:
+        return {
+            "selected": False,
+            "reason": "job51_list_refresh_failed",
+            "error": str(error),
+        }
+    sample = [
+        {
+            "name": str(row.get("name") or ""),
+            "position": str(row.get("position") or ""),
+            "label": str(row.get("label") or "")[:160],
+        }
+        for row in rows[:5]
+    ]
+    return {
+        "selected": bool(position.get("selected") and unread.get("selected")),
+        "position": position,
+        "unread": unread,
+        "rowCount": len(rows),
+        "sample": sample,
+    }
 
 
 async def _safe_element_attr(element: Any, name: str, timeout_seconds: float = 3.0) -> str | None:
@@ -570,7 +714,11 @@ def _safe_int(value: object) -> int:
         return 0
 
 
-def _seen_keys_for_row(row_state: dict[str, object]) -> set[str]:
+def _seen_keys_for_row(
+    row_state: dict[str, object],
+    *,
+    include_index: bool = True,
+) -> set[str]:
     keys: set[str] = set()
     row_id = str(row_state.get("id") or "").strip()
     label = str(row_state.get("label") or "").strip()
@@ -579,7 +727,22 @@ def _seen_keys_for_row(row_state: dict[str, object]) -> set[str]:
         keys.add(f"row:{row_id.lstrip('_')}")
     if label:
         keys.add(f"label:{_compact(label)}")
-    if index:
+    stable_label = _stable_row_label(label)
+    if stable_label:
+        keys.add(f"rowcore:{stable_label}")
+    name = _compact(str(row_state.get("name") or row_state.get("candidateName") or ""))
+    position = _compact(str(row_state.get("position") or row_state.get("jobName") or ""))
+    latest = _compact(
+        str(
+            row_state.get("latest_message")
+            or row_state.get("latestMessage")
+            or row_state.get("message")
+            or ""
+        )
+    )
+    if name and position and latest and not _looks_anonymous_name(name):
+        keys.add(f"identity:{name}|{position}|{latest}")
+    if include_index and index:
         keys.add(f"index:{index}")
     return keys
 
@@ -587,8 +750,10 @@ def _seen_keys_for_row(row_state: dict[str, object]) -> set[str]:
 def _seen_keys_for_processed_item(
     row_state: dict[str, object],
     summary: dict[str, Any],
+    *,
+    include_index: bool = True,
 ) -> set[str]:
-    keys = _seen_keys_for_row(row_state)
+    keys = _seen_keys_for_row(row_state, include_index=include_index)
     conversation_id = str(summary.get("conversationId") or "").strip()
     session_id = str(summary.get("sessionId") or "").strip()
     if conversation_id:
@@ -602,6 +767,21 @@ def _seen_keys_for_processed_item(
     if name and job and fingerprint:
         keys.add(f"fingerprint:{_compact(name)}|{_compact(job)}|{fingerprint}")
     return keys
+
+
+def _stable_row_label(label: str) -> str:
+    volatile_lines = {"已投", "已读", "送达"}
+    lines = []
+    for raw_line in str(label or "").splitlines():
+        line = _compact(raw_line)
+        if not line or line.isdigit() or line in volatile_lines:
+            continue
+        lines.append(line)
+    return "|".join(lines)
+
+
+def _looks_anonymous_name(name: str) -> bool:
+    return any(name.endswith(_compact(suffix)) for suffix in ("女士", "先生", "同学", "小姐"))
 
 
 def _compact(value: str) -> str:

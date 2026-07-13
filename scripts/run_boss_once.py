@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--live", action="store_true", help="真实执行发送/求简历动作")
     parser.add_argument("--confirm-live", action="store_true", help="确认本次允许真实执行动作")
     parser.add_argument(
+        "--max-anomalies",
+        type=int,
+        default=0,
+        help="允许跳过的异常联系人数；超过该值立即停止，默认 0 表示遇到异常即停",
+    )
+    parser.add_argument(
         "--conversation-id",
         action="append",
         default=[],
@@ -123,6 +129,7 @@ async def main_async() -> None:
                 args.limit,
                 conversation_repository=conversation_repository,
                 artifact_store=artifact_store,
+                max_anomalies=args.max_anomalies,
             )
         )
         print_summary(summaries, live=live)
@@ -139,6 +146,8 @@ def _resolve_mode(args: argparse.Namespace) -> bool:
             _fail("本次 live 只允许处理 owner=宋峰峰。")
         if args.limit < 1:
             _fail("live 模式 limit 必须为正整数。")
+        if getattr(args, "max_anomalies", 0) < 0:
+            _fail("max-anomalies 不能小于 0。")
         os.environ["DRY_RUN"] = "false"
         load_settings.cache_clear()
         return True
@@ -268,11 +277,13 @@ async def _process_boss(
     *,
     conversation_repository: Any,
     artifact_store: Any,
+    max_anomalies: int = 0,
 ) -> list[dict[str, Any]]:
     await adapter.select_positions(None)
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
     attempted: set[str] = set()
+    anomaly_count = 0
     while len(summaries) < limit:
         states = await boss_actions.read_unread_row_states(adapter.page)
         unread_state = next(
@@ -294,7 +305,10 @@ async def _process_boss(
             )
             summaries.append(failure)
             _report_boss_open_failure(failure)
-            break
+            anomaly_count += 1
+            if _boss_anomaly_limit_exceeded(anomaly_count, max_anomalies):
+                break
+            continue
         label = (await row.text()).strip()
         if _skip_row_label(label):
             continue
@@ -318,7 +332,10 @@ async def _process_boss(
             )
             summaries.append(failure)
             _report_boss_open_failure(failure)
-            break
+            anomaly_count += 1
+            if _boss_anomaly_limit_exceeded(anomaly_count, max_anomalies):
+                break
+            continue
         try:
             context = await _wait_for_context(adapter)
             state = await asyncio.wait_for(
@@ -343,6 +360,9 @@ async def _process_boss(
                 }
             )
             print(f"[BOSS] 候选人处理超时，已跳过: {label[:120]}", flush=True)
+            anomaly_count += 1
+            if _boss_anomaly_limit_exceeded(anomaly_count, max_anomalies):
+                break
             continue
         conversation_id = str(state.get("conversation_id") or label)
         if conversation_id in seen:
@@ -356,24 +376,32 @@ async def _process_boss(
         candidate_status = (
             state.get("candidate_status") if isinstance(state.get("candidate_status"), dict) else {}
         )
-        summaries.append(
-            {
-                "sessionId": state.get("session_id") or "",
-                "conversationId": conversation_id,
-                "candidate": candidate or {"name": context.candidate.name},
-                "job": state.get("applied_position") or context.candidate.applied_position,
-                "lastMessage": last_message,
-                "action": state.get("next_action") or "",
-                "stage": state.get("stage") or "",
-                "ruleSource": state.get("rule_source") or "",
-                "sentMessages": state.get("sent_messages") or [],
-                "artifactWritten": bool(result.get("downloaded") and result.get("filePath")),
-                "candidateStatusWritten": bool(candidate_status),
-                "candidateStatus": candidate_status,
-                "decision": decision,
-                "reliableActions": reliable_actions_since(adapter.page, before_actions),
-            }
-        )
+        summary = {
+            "sessionId": state.get("session_id") or "",
+            "conversationId": conversation_id,
+            "candidate": candidate or {"name": context.candidate.name},
+            "job": state.get("applied_position") or context.candidate.applied_position,
+            "lastMessage": last_message,
+            "action": state.get("next_action") or "",
+            "stage": state.get("stage") or "",
+            "ruleSource": state.get("rule_source") or "",
+            "sentMessages": state.get("sent_messages") or [],
+            "artifactWritten": bool(result.get("downloaded") and result.get("filePath")),
+            "candidateStatusWritten": bool(candidate_status),
+            "candidateStatus": candidate_status,
+            "decision": decision,
+            "reliableActions": reliable_actions_since(adapter.page, before_actions),
+        }
+        summaries.append(summary)
+        if _boss_processing_requires_stop(summary):
+            anomaly_count += 1
+            print(
+                f"[BOSS] 候选人动作异常，已跳过（{anomaly_count}/{max_anomalies}）: "
+                + json.dumps(summary, ensure_ascii=False, default=str),
+                flush=True,
+            )
+            if _boss_anomaly_limit_exceeded(anomaly_count, max_anomalies):
+                break
     return summaries
 
 
@@ -425,6 +453,25 @@ def _boss_state_key(state: dict[str, Any]) -> str:
     if row_id:
         return f"id:{row_id}"
     return f"label:{_compact_text(str(state.get('label') or ''))}"
+
+
+def _boss_processing_requires_stop(summary: dict[str, Any]) -> bool:
+    action = str(summary.get("action") or "")
+    stage = str(summary.get("stage") or "")
+    return action in {"request_resume_failed", "send_failed", "failed"} or stage in {
+        "request_resume_action_failed",
+        "candidate_timeout",
+    }
+
+
+def _boss_anomaly_limit_exceeded(anomaly_count: int, max_anomalies: int) -> bool:
+    if anomaly_count <= max_anomalies:
+        return False
+    print(
+        f"[BOSS] 异常人数已达到 {anomaly_count}，超过允许值 {max_anomalies}，立即停止处理。",
+        flush=True,
+    )
+    return True
 
 
 def _expected_boss_identity(state: dict[str, Any]) -> dict[str, str]:

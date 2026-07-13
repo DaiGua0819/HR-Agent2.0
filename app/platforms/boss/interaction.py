@@ -30,6 +30,7 @@ async def boss_click_element(
     *,
     label: str,
     verify: VerifyCallback | None = None,
+    pre_click_guard: VerifyCallback | None = None,
     profile: HumanizedInteractionProfile | None = None,
 ) -> dict[str, object]:
     profile = profile or _boss_profile()
@@ -40,6 +41,32 @@ async def boss_click_element(
         element,
         label=label,
         verify=verify,
+        pre_click_guard=pre_click_guard,
+        profile=profile,
+    )
+
+
+async def boss_click_mutable_dialog_element(
+    page: Any,
+    element: Any,
+    *,
+    label: str,
+    verify: VerifyCallback,
+    pre_click_guard: VerifyCallback,
+) -> dict[str, object]:
+    """Click a dialog action once, with an immediate state guard before mouse down."""
+
+    profile = replace(
+        _boss_profile(),
+        verify_timeout_ms=BOSS_SEND_VERIFY_TIMEOUT_MS,
+        max_click_attempts=1,
+    )
+    return await boss_click_element(
+        page,
+        element,
+        label=label,
+        verify=verify,
+        pre_click_guard=pre_click_guard,
         profile=profile,
     )
 

@@ -14,6 +14,18 @@ def last_non_system(conversation: Conversation):
     return None
 
 
+def candidate_messages_since_last_reply(conversation: Conversation):
+    """Return the current consecutive candidate turn after the latest recruiter reply."""
+
+    pending = []
+    for message in reversed(conversation.messages):
+        if message.sender == MessageSender.ME:
+            break
+        if message.sender == MessageSender.CANDIDATE and message.text.strip():
+            pending.append(message)
+    return list(reversed(pending))
+
+
 def message_sent(conversation: Conversation, text: str) -> bool:
     """Return whether a normalized outgoing message already appears in history."""
 

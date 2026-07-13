@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.agent.graph import build_recruit_graph
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
-from app.agent.rules import find_knowledge_answer
+from app.agent.rules import find_knowledge_answer, find_knowledge_answers, load_chat_rules
 from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakeElement, FakePage
 from app.core.constants import Platform
@@ -478,6 +478,79 @@ def test_specific_question_pattern_wins_over_position_boost() -> None:
     assert answer == "工作时间是8-11，13-17，培训期间一天150"
 
 
+def test_boss_ai_intern_compound_food_lodging_and_payday_question_returns_all_topics() -> None:
+    answers = find_knowledge_answers(
+        "食宿自理吗，工资是一个月一结吗？",
+        load_chat_rules(),
+        position="AI应用开发实习生",
+    )
+
+    assert [item["topic"] for item in answers] == [
+        "accommodation",
+        "mealsAndBenefits",
+        "salaryPaymentDate",
+    ]
+    assert [item["answer"] for item in answers] == [
+        "公司包住，两人间",
+        "食堂3元一顿",
+        "每月10号发工资",
+    ]
+
+
+def test_boss_ai_intern_keeps_salary_amount_when_amount_and_payday_are_both_explicit() -> None:
+    answers = find_knowledge_answers(
+        "实习薪资多少，什么时候发工资？",
+        load_chat_rules(),
+        position="AI应用开发实习生",
+    )
+
+    assert [item["topic"] for item in answers] == ["salaryAmount", "salaryPaymentDate"]
+    assert [item["answer"] for item in answers] == ["实习是150一天", "每月10号发工资"]
+
+
+def test_boss_ai_intern_answers_all_candidate_messages_since_last_recruiter_reply() -> None:
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {"sender": "other", "text": "可以的"},
+                {"sender": "other", "text": "咱们的工作时间是？"},
+                {"sender": "other", "text": "还在吗 姐姐"},
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert page.sent_messages == ["在的，岗位还在招聘；8-11点，13-17点"]
+    assert page.resume_requests == 1
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "basic_accept"
+
+
+def test_boss_ai_intern_combines_location_and_accommodation_in_one_reply() -> None:
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {"sender": "other", "text": "您好，工作地点在哪，提供住宿吗"},
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert page.sent_messages == ["在湖州长兴泗安镇；公司包住，两人间"]
+    assert state["next_action"] == "answer_question"
+    assert state["stage"] == "knowledge_hit"
+
+
 def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
     """BOSS AI 应用开发：未发基础条件前，候选人提问也先发基础条件。"""
 
@@ -630,6 +703,91 @@ def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     assert page.resume_consent_clicked is True
     assert page.resume_button_clicked is False
     assert page.dom_click_scripts_called == []
+
+
+def test_boss_request_resume_switches_to_consent_when_resume_arrives_before_confirm(
+    monkeypatch,
+) -> None:
+    """确认弹窗出现后候选人发来简历时，不得继续点击旧确认按钮。"""
+
+    page = BossHardResumeActionPage()
+
+    async def fake_mouse_click(target_page, rect, **kwargs):
+        _ = kwargs
+        source = rect.get("source")
+        if source == "boss_request_resume_button_rect":
+            target_page.resume_button_clicked = True
+            target_page.pending_resume_consent = True
+        elif source == "boss_resume_consent_rect":
+            target_page.resume_consent_clicked = True
+        elif source == "boss_request_resume_confirm_rect":
+            target_page.resume_confirm_clicked = True
+        return {"ok": True, "method": "humanized_mouse"}
+
+    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["ok"] is True
+    assert result["outcome"] == "resume_consent_accepted"
+    assert result["acceptedResumeConsent"] is True
+    assert page.resume_consent_clicked is True
+    assert page.resume_confirm_clicked is False
+
+
+def test_boss_request_resume_reports_dialog_replacement_without_terminal_state(
+    monkeypatch,
+) -> None:
+    page = BossHardResumeActionPage()
+    page.resume_button_clicked = True
+
+    async def state_changed_click(target_page):
+        _ = target_page
+        return {
+            "ok": False,
+            "reason": "resume_request_state_changed",
+            "guard": {"reason": "resume_request_state_changed"},
+        }
+
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "_click_request_resume_confirm",
+        state_changed_click,
+    )
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["ok"] is False
+    assert result["outcome"] == "resume_request_state_changed"
+    assert result["reason"] == "resume_request_state_changed"
+    assert result["beforeState"]["alreadyRequested"] is False
+    assert result["afterState"]["alreadyRequested"] is False
+
+
+def test_boss_runner_marks_unhandled_resume_request_as_failure() -> None:
+    page = FakePage(
+        conversations=[
+            conversation("DirectRole", [{"sender": "other", "text": "你好"}])
+        ]
+    )
+    adapter = BossAdapter(page, owner="宋峰峰", dry_run=False)
+
+    async def fail_request_resume() -> dict[str, object]:
+        return {
+            "ok": True,
+            "requested": False,
+            "confirmed": False,
+            "reason": "resume_request_confirm_failed",
+        }
+
+    adapter.request_resume = fail_request_resume  # type: ignore[method-assign]
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    assert state["next_action"] == "request_resume_failed"
+    assert state["stage"] == "request_resume_action_failed"
+    assert state["decision"]["result"]["reason"] == "resume_request_confirm_failed"
 
 
 def test_boss_skill_documents_request_resume_function_call_contract() -> None:
@@ -824,6 +982,8 @@ def run_case(
     platform: Platform,
     convo: dict[str, object],
     llm: FakeLLM | None = None,
+    *,
+    rules: dict[str, object] | None = None,
 ):
     """按平台运行单条会话。"""
 
@@ -834,7 +994,12 @@ def run_case(
         else ZhilianAdapter(page, owner="宋峰峰")
     )
     sink = InMemoryDecisionSink()
-    runner = ConversationRunner(adapter, rules=sample_rules(), llm=llm, decision_sink=sink)
+    runner = ConversationRunner(
+        adapter,
+        rules=rules or sample_rules(),
+        llm=llm,
+        decision_sink=sink,
+    )
     state = asyncio.run(runner.run_current())
     assert sink.events
     return state, page

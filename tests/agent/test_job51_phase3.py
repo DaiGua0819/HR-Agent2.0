@@ -1119,6 +1119,16 @@ def test_job51_click_thread_by_state_rejects_same_name_different_position() -> N
     assert page.selected_index in {None, 0}
 
 
+def test_job51_identity_click_failure_reports_visible_row_diagnostics() -> None:
+    """Identity failures must distinguish an empty list from rejected visible rows."""
+
+    script = job51_dom_scripts.CLICK_THREAD_BY_IDENTITY_JS
+
+    assert "visibleRows" in script
+    assert "positionConflicts" in script
+    assert "rowSample" in script
+
+
 def test_job51_once_runner_fallback_passes_expected_identity(monkeypatch) -> None:
     """The terminal once runner must use identity fallback, not stale row indexes."""
 
@@ -1592,6 +1602,244 @@ def test_job51_find_candidate_row_skips_slow_virtual_rows() -> None:
     )
 
     assert row is target
+
+
+def test_job51_find_candidate_row_does_not_use_a_stale_index() -> None:
+    """A reordered 51job list must not resolve an old snapshot by row index."""
+
+    wrong = SlowRow(row_id="", label="HRBP Candidate\nhrbp\nhello")
+    adapter = RowAdapter([wrong])
+
+    row = asyncio.run(
+        _find_candidate_row(
+            adapter,
+            Platform.JOB51,
+            {
+                "id": "",
+                "label": "AI Candidate\nAI Product Manager\nresume sent",
+                "name": "AI Candidate",
+                "position": "AI Product Manager",
+                "index": 0,
+            },
+        )
+    )
+
+    assert row is None
+
+
+def test_job51_process_refreshes_rows_after_each_candidate(monkeypatch) -> None:
+    """51job must discard the remaining snapshot after each processed candidate."""
+
+    first = {
+        "id": "",
+        "label": "Candidate A\nAI Product Manager\n14:14\nhello",
+        "name": "Candidate A",
+        "position": "AI Product Manager",
+        "latest_message": "hello",
+        "index": 0,
+    }
+    stale = {
+        "id": "",
+        "label": "Candidate B\nAI Intern\nhello",
+        "name": "Candidate B",
+        "position": "AI Intern",
+        "latest_message": "hello",
+        "index": 1,
+    }
+    first_after_label_change = {
+        **first,
+        "label": "Candidate A\nAI Product Manager\n14:14\nhello\n已投",
+        "index": 0,
+    }
+    refreshed = {
+        "id": "",
+        "label": "Candidate C\nHRBP\nhello",
+        "name": "Candidate C",
+        "position": "HRBP",
+        "latest_message": "hello",
+        "index": 0,
+    }
+
+    class Page:
+        reliable_actions: list[object] = []
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.page = Page()
+            self.current: dict[str, object] = {}
+
+    class Row:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        async def text(self) -> str:
+            return self.label
+
+    scans = 0
+    opened: list[str] = []
+
+    async def fake_states(adapter, platform):  # type: ignore[no-untyped-def]
+        nonlocal scans
+        _ = adapter, platform
+        scans += 1
+        if scans == 1:
+            return [first, stale]
+        if scans == 2:
+            return [first_after_label_change, refreshed]
+        return []
+
+    async def fake_find_row(adapter, platform, state):  # type: ignore[no-untyped-def]
+        _ = adapter, platform
+        return Row(str(state["label"]))
+
+    async def fake_open(adapter, state):  # type: ignore[no-untyped-def]
+        adapter.current = state
+        opened.append(str(state["name"]))
+        return {"ok": True}
+
+    async def fake_cleanup(page, *, phase: str):  # type: ignore[no-untyped-def]
+        _ = page, phase
+        return {"closed": 0, "remaining": []}
+
+    class Runner:
+        def __init__(self, adapter, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            _ = kwargs
+            self.adapter = adapter
+
+        async def run_current(self) -> dict[str, object]:
+            state = self.adapter.current
+            return {
+                "conversation_id": str(state["name"]),
+                "session_id": f"session-{state['name']}",
+                "candidate": {
+                    "name": state["name"],
+                    "applied_position": state["position"],
+                },
+                "applied_position": state["position"],
+                "messages": [{"sender": "other", "text": "hello"}],
+                "next_action": "skip",
+                "stage": "done",
+                "decision": {"action": "skip"},
+            }
+
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(platform_once_common, "_candidate_row_states", fake_states)
+    monkeypatch.setattr(platform_once_common, "_find_candidate_row", fake_find_row)
+    monkeypatch.setattr(platform_once_common, "_open_job51_thread", fake_open)
+    monkeypatch.setattr(platform_once_common, "_cleanup_job51", fake_cleanup)
+    monkeypatch.setattr(platform_once_common, "ConversationRunner", Runner)
+
+    summaries = asyncio.run(_process(Adapter(), Platform.JOB51, 2))
+
+    assert len(summaries) == 2
+    assert opened == ["Candidate A", "Candidate C"]
+    assert scans >= 2
+
+
+def test_job51_process_restores_filters_after_resume_download(monkeypatch) -> None:
+    """Closing a downloaded resume must restore all positions and unread mode."""
+
+    state = {
+        "id": "candidate-a",
+        "label": "Candidate A\nAI Product Manager\nresume sent",
+        "name": "Candidate A",
+        "position": "AI Product Manager",
+        "latest_message": "resume sent",
+        "index": 0,
+    }
+
+    class Page:
+        reliable_actions: list[object] = []
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.page = Page()
+            self.current = state
+            self.position_refreshes = 0
+            self.unread_refreshes = 0
+
+        async def select_positions(self, target_position=None):  # type: ignore[no-untyped-def]
+            assert target_position is None
+            self.position_refreshes += 1
+            return {"selected": True, "mode": "all"}
+
+        async def select_unread_filter(self) -> dict[str, object]:
+            self.unread_refreshes += 1
+            return {"selected": True}
+
+    class Row:
+        async def text(self) -> str:
+            return str(state["label"])
+
+    class Runner:
+        def __init__(self, adapter, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            _ = adapter, kwargs
+
+        async def run_current(self) -> dict[str, object]:
+            return {
+                "conversation_id": "candidate-a",
+                "session_id": "session-a",
+                "candidate": {
+                    "name": "Candidate A",
+                    "applied_position": "AI Product Manager",
+                },
+                "applied_position": "AI Product Manager",
+                "messages": [{"sender": "other", "text": "resume sent"}],
+                "next_action": "request_resume",
+                "stage": "resume_attachment_downloaded",
+                "decision": {
+                    "action": "request_resume",
+                    "result": {
+                        "downloaded": True,
+                        "filePath": "data/downloads/job51/candidate-a.pdf",
+                    },
+                },
+            }
+
+    async def fake_states(adapter, platform):  # type: ignore[no-untyped-def]
+        _ = adapter, platform
+        return [state]
+
+    async def fake_find_row(adapter, platform, row_state):  # type: ignore[no-untyped-def]
+        _ = adapter, platform, row_state
+        return Row()
+
+    async def fake_open(adapter, row_state):  # type: ignore[no-untyped-def]
+        _ = adapter, row_state
+        return {"ok": True}
+
+    async def fake_cleanup(page, *, phase: str):  # type: ignore[no-untyped-def]
+        _ = page, phase
+        return {"closed": 1, "remaining": []}
+
+    async def fake_read_unread_rows(page):  # type: ignore[no-untyped-def]
+        _ = page
+        return [state]
+
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(platform_once_common, "_candidate_row_states", fake_states)
+    monkeypatch.setattr(platform_once_common, "_find_candidate_row", fake_find_row)
+    monkeypatch.setattr(platform_once_common, "_open_job51_thread", fake_open)
+    monkeypatch.setattr(platform_once_common, "_cleanup_job51", fake_cleanup)
+    monkeypatch.setattr(platform_once_common, "ConversationRunner", Runner)
+    monkeypatch.setattr(
+        platform_once_common.job51_chat,
+        "read_unread_row_states",
+        fake_read_unread_rows,
+    )
+
+    adapter = Adapter()
+    summaries = asyncio.run(_process(adapter, Platform.JOB51, 1))
+
+    assert adapter.position_refreshes == 1
+    assert adapter.unread_refreshes == 1
+    assert summaries[0]["listRefresh"]["selected"] is True
 
 
 def test_job51_processing_uses_guarded_identity_open_without_native_row_click(

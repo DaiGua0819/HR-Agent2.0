@@ -283,6 +283,141 @@ def test_process_boss_stops_immediately_after_open_failure(monkeypatch) -> None:
     assert summaries[0]["decision"]["click"]["reason"] == "opened_thread_mismatch"
 
 
+def test_process_boss_stops_immediately_after_resume_request_failure(monkeypatch) -> None:
+    first = _state("_first", "第一位")
+    second = _state("_second", "第二位")
+    clicked: list[str] = []
+
+    async def read_rows(page: object) -> list[dict[str, object]]:
+        _ = page
+        return [first, second]
+
+    async def find_row(page: object, state: dict[str, object]) -> Row:
+        _ = page
+        return Row(str(state["id"]), str(state["label"]))
+
+    async def click_row(
+        page: object,
+        state: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        _ = page, kwargs
+        clicked.append(str(state["id"]))
+        return {"ok": True}
+
+    async def wait_context(adapter: object) -> SimpleNamespace:
+        _ = adapter
+        return SimpleNamespace(
+            candidate=SimpleNamespace(name="候选人", applied_position="AI应用开发实习生"),
+            messages=[],
+        )
+
+    class Runner:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _ = args, kwargs
+
+        async def run_current(self) -> dict[str, object]:
+            return {
+                **_runner_state("_first", "第一位"),
+                "next_action": "request_resume_failed",
+                "stage": "request_resume_action_failed",
+                "decision": {
+                    "reason": "request_resume_action_failed",
+                    "result": {"reason": "resume_request_confirm_failed"},
+                },
+            }
+
+    monkeypatch.setattr(run_boss_once.boss_actions, "read_unread_row_states", read_rows)
+    monkeypatch.setattr(run_boss_once, "_find_boss_row", find_row)
+    monkeypatch.setattr(run_boss_once, "click_row_state", click_row)
+    monkeypatch.setattr(run_boss_once, "_wait_for_context", wait_context)
+    monkeypatch.setattr(run_boss_once, "ConversationRunner", Runner)
+
+    summaries = asyncio.run(
+        run_boss_once._process_boss(
+            Adapter(),
+            3,
+            conversation_repository=object(),
+            artifact_store=object(),
+        )
+    )
+
+    assert clicked == ["_first"]
+    assert len(summaries) == 1
+    assert summaries[0]["action"] == "request_resume_failed"
+
+
+def test_process_boss_skips_anomalies_until_threshold_is_exceeded(monkeypatch) -> None:
+    first = _state("_first", "第一位")
+    second = _state("_second", "第二位")
+    third = _state("_third", "第三位")
+    clicked: list[str] = []
+    results = [
+        {
+            **_runner_state("_first", "第一位"),
+            "next_action": "request_resume_failed",
+            "stage": "request_resume_action_failed",
+        },
+        {
+            **_runner_state("_second", "第二位"),
+            "next_action": "send_failed",
+            "stage": "direct_resume_prompt_send_failed",
+        },
+        _runner_state("_third", "第三位"),
+    ]
+
+    async def read_rows(page: object) -> list[dict[str, object]]:
+        _ = page
+        return [first, second, third]
+
+    async def find_row(page: object, state: dict[str, object]) -> Row:
+        _ = page
+        return Row(str(state["id"]), str(state["label"]))
+
+    async def click_row(
+        page: object,
+        state: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        _ = page, kwargs
+        clicked.append(str(state["id"]))
+        return {"ok": True}
+
+    async def wait_context(adapter: object) -> SimpleNamespace:
+        _ = adapter
+        return SimpleNamespace(
+            candidate=SimpleNamespace(name="候选人", applied_position="AI应用开发实习生"),
+            messages=[],
+        )
+
+    class Runner:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _ = args, kwargs
+
+        async def run_current(self) -> dict[str, object]:
+            return results.pop(0)
+
+    monkeypatch.setattr(run_boss_once.boss_actions, "read_unread_row_states", read_rows)
+    monkeypatch.setattr(run_boss_once, "_find_boss_row", find_row)
+    monkeypatch.setattr(run_boss_once, "click_row_state", click_row)
+    monkeypatch.setattr(run_boss_once, "_wait_for_context", wait_context)
+    monkeypatch.setattr(run_boss_once, "ConversationRunner", Runner)
+
+    summaries = asyncio.run(
+        run_boss_once._process_boss(
+            Adapter(),
+            3,
+            conversation_repository=object(),
+            artifact_store=object(),
+            max_anomalies=1,
+        )
+    )
+
+    assert clicked == ["_first", "_second"]
+    assert len(summaries) == 2
+    assert [item["action"] for item in summaries] == ["request_resume_failed", "send_failed"]
+
+
 def test_verify_opened_thread_accepts_exact_name_after_right_header_switch(monkeypatch) -> None:
     async def read_context(page: object, *, owner: str) -> SimpleNamespace:
         _ = page, owner

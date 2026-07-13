@@ -244,6 +244,34 @@ def test_humanized_click_requires_final_point_to_hit_target_element() -> None:
     assert not any(event[0] == "down" for event in page.page.events)
 
 
+def test_humanized_click_cancels_when_pre_click_guard_detects_state_change() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(page.page, {"x": 300, "y": 160, "width": 120, "height": 44})
+    )
+
+    async def guard() -> dict[str, object]:
+        return {
+            "verified": False,
+            "reason": "resume_request_state_changed",
+            "state": {"pendingResumeConsent": True},
+        }
+
+    result = asyncio.run(
+        humanized_click_element(
+            page,
+            target,
+            label="BOSS求简历确认",
+            pre_click_guard=guard,
+            profile=replace(INSTANT_PROFILE, max_click_attempts=1),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "resume_request_state_changed"
+    assert not any(event[0] == "down" for event in page.page.events)
+
+
 def test_boss_conversation_click_waits_for_delayed_identity_switch(monkeypatch) -> None:
     page = WrappedPage()
     target = WrappedElement(
@@ -412,6 +440,10 @@ def test_boss_message_entrypoints_do_not_use_locator_click_layer() -> None:
     for path in entrypoints:
         source = path.read_text(encoding="utf-8")
         assert "from app.browser.reliable_actions import" not in source, path
+
+    resume_source = entrypoints[1].read_text(encoding="utf-8")
+    assert "dispatchEvent(new" not in resume_source
+    assert "typeof el.click" not in resume_source
 
 
 async def _verified(value: bool) -> dict[str, object]:

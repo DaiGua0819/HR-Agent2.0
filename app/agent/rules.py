@@ -17,6 +17,19 @@ from app.settings import PROJECT_ROOT
 
 RULES_PATH = PROJECT_ROOT / "config" / "chat_rules" / "boss_chat_rules.json"
 OPERATION_RESUME_TYPES = {"运营A", "运营B"}
+KNOWLEDGE_TOPIC_ORDER = {
+    "availabilityPresence": 10,
+    "hiringStatus": 20,
+    "workLocation": 30,
+    "scheduleAndRest": 40,
+    "scheduleAndTrainingCompensation": 45,
+    "accommodation": 50,
+    "mealsAndBenefits": 60,
+    "salaryAmount": 70,
+    "salaryPaymentDate": 80,
+    "salaryAndOvertime": 90,
+    "interviewProcess": 100,
+}
 
 
 @lru_cache(maxsize=1)
@@ -183,9 +196,85 @@ def find_knowledge_answer(
 ) -> str | None:
     """从 companyKnowledgeBase 中查找简短答案。"""
 
+    matches = _knowledge_answer_matches(question, rules, position=position)
+    if not matches:
+        return None
+    best = max(
+        matches,
+        key=lambda item: (
+            int(item["matchLength"]),
+            int(item["score"]),
+            -int(item["candidateIndex"]),
+        ),
+    )
+    return str(best["answer"])
+
+
+def find_knowledge_answers(
+    question: str,
+    rules: dict[str, Any] | None = None,
+    *,
+    position: str = "",
+) -> list[dict[str, object]]:
+    """Return the best answer for every knowledge topic found in one candidate turn."""
+
+    matches = _knowledge_answer_matches(question, rules, position=position)
+    best_by_topic: dict[str, dict[str, object]] = {}
+    for item in matches:
+        topic = str(item["topic"] or item["answer"])
+        current = best_by_topic.get(topic)
+        rank = (
+            int(item["matchLength"]),
+            int(item["score"]),
+            -int(item["candidateIndex"]),
+        )
+        current_rank = (
+            int(current["matchLength"]),
+            int(current["score"]),
+            -int(current["candidateIndex"]),
+        ) if current else None
+        if current_rank is None or rank > current_rank:
+            best_by_topic[topic] = item
+
+    payment = best_by_topic.get("salaryPaymentDate")
+    amount = best_by_topic.get("salaryAmount")
+    if payment and amount and _compact(str(amount["matchedPattern"])) in {"工资", "薪资"}:
+        best_by_topic.pop("salaryAmount", None)
+
+    ordered = sorted(
+        best_by_topic.values(),
+        key=lambda item: (
+            KNOWLEDGE_TOPIC_ORDER.get(str(item["topic"]), 500),
+            int(item["candidateIndex"]),
+        ),
+    )
+    answers: list[dict[str, object]] = []
+    seen_answers: set[str] = set()
+    for item in ordered:
+        answer = str(item["answer"])
+        if answer in seen_answers:
+            continue
+        seen_answers.add(answer)
+        answers.append(
+            {
+                "topic": str(item["topic"]),
+                "answer": answer,
+                "matchedPattern": str(item["matchedPattern"]),
+                "score": int(item["score"]),
+            }
+        )
+    return answers
+
+
+def _knowledge_answer_matches(
+    question: str,
+    rules: dict[str, Any] | None,
+    *,
+    position: str,
+) -> list[dict[str, object]]:
     text = question.strip()
     if not text:
-        return None
+        return []
     data = rules or load_chat_rules()
     kb = (
         data.get("companyKnowledgeBase")
@@ -195,11 +284,12 @@ def find_knowledge_answer(
     candidates: list[dict[str, Any]] = []
     for source in _knowledge_answer_sources(kb, data, position):
         candidates.extend(_collect_answer_candidates(source))
-    scored: list[tuple[int, int, str]] = []
     compact_question = _compact(text)
     compact_position = _compact(position)
-    for item in candidates:
-        keys = [_compact(value) for value in item["keys"] if value]
+    matches: list[dict[str, object]] = []
+    for index, item in enumerate(candidates):
+        raw_keys = [str(value) for value in item["keys"] if value]
+        keys = [_compact(value) for value in raw_keys]
         if not keys:
             continue
         position_bonus = 0
@@ -207,25 +297,34 @@ def find_knowledge_answer(
             compact_position in key or key in compact_position for key in keys
         ):
             position_bonus = 2
+        best_pattern = ""
         question_match_len = 0
-        for key in keys:
-            if not key:
-                continue
+        for raw_key, key in zip(raw_keys, keys, strict=True):
+            match_len = 0
             if key == compact_question:
-                question_match_len = max(question_match_len, len(key))
+                match_len = len(key)
             elif key in compact_question:
-                question_match_len = max(question_match_len, len(key))
+                match_len = len(key)
             elif len(compact_question) >= 4 and compact_question in key:
-                question_match_len = max(question_match_len, len(compact_question))
-        if question_match_len:
-            if _is_hiring_status_question(compact_question) and _is_hiring_status_answer(item):
-                continue
-            score = 5 + position_bonus
-            scored.append((question_match_len, score, item["answer"]))
-    if not scored:
-        return None
-    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return scored[0][2]
+                match_len = len(compact_question)
+            if match_len > question_match_len:
+                question_match_len = match_len
+                best_pattern = raw_key
+        if not question_match_len:
+            continue
+        if _is_hiring_status_question(compact_question) and _is_hiring_status_answer(item):
+            continue
+        matches.append(
+            {
+                "topic": str(item.get("topic") or ""),
+                "answer": str(item["answer"]),
+                "matchedPattern": best_pattern,
+                "matchLength": question_match_len,
+                "score": 5 + position_bonus,
+                "candidateIndex": index,
+            }
+        )
+    return matches
 
 
 def looks_like_question(text: str) -> bool:
