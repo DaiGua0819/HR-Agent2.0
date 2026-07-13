@@ -13,6 +13,8 @@ from pathlib import Path
 
 from app.settings import PROJECT_ROOT
 
+_ANONYMOUS_NAME_SUFFIXES = ("女士", "先生", "同学", "老师")
+
 
 @dataclass
 class InMemoryResumeDownloadMemory:
@@ -170,15 +172,31 @@ def resume_identity_guard(
     compact_position = _compact_text(applied_position)
     name_ok = bool(compact_name and compact_name in compact_text)
     position_ok = bool(compact_position and compact_position in compact_text)
-    if name_ok or position_ok:
+    if name_ok:
         return {
             "blocked": False,
-            "nameMatched": name_ok,
+            "nameMatched": True,
             "positionMatched": position_ok,
+            "matchType": "exact_name_match",
+        }
+    anonymous_surname = _anonymous_surname(candidate_name)
+    if (
+        anonymous_surname
+        and position_ok
+        and _anonymous_full_name_visible(text, anonymous_surname)
+    ):
+        return {
+            "blocked": False,
+            "nameMatched": False,
+            "positionMatched": True,
+            "matchType": "anonymous_name_resolved",
         }
     return {
         "blocked": True,
         "reason": "resume_identity_mismatch",
+        "nameMatched": False,
+        "positionMatched": position_ok,
+        "matchType": "position_only_match" if position_ok else "identity_mismatch",
         "candidateName": candidate_name,
         "appliedPosition": applied_position,
         "textPreview": text[:300],
@@ -229,6 +247,23 @@ def _safe_filename(value: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     return cleaned[:120] or "resume"
+
+
+def _anonymous_surname(candidate_name: str) -> str:
+    compact = _compact_text(candidate_name)
+    for suffix in _ANONYMOUS_NAME_SUFFIXES:
+        compact_suffix = _compact_text(suffix)
+        if compact.endswith(compact_suffix):
+            surname = compact[: -len(compact_suffix)]
+            return surname if 0 < len(surname) <= 2 else ""
+    return ""
+
+
+def _anonymous_full_name_visible(text: str, surname: str) -> bool:
+    preview = "".join(str(text or "").split())[:400]
+    if not preview or not surname:
+        return False
+    return bool(re.search(rf"{re.escape(surname)}[\u4e00-\u9fff]{{1,3}}", preview))
 
 
 def _extract_resume_text_preview(content: bytes) -> str:

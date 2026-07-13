@@ -207,7 +207,7 @@ class ConversationRunner:
             return handled
         position = conversation.candidate.applied_position
         if request_state.pending_resume_consent:
-            result = await self.adapter.request_resume()
+            result = await self._request_resume(state)
             return self._finish_resume_request_result(
                 state,
                 result,
@@ -226,7 +226,7 @@ class ConversationRunner:
                 )
                 if failed:
                     return failed
-        result = await self.adapter.request_resume()
+        result = await self._request_resume(state)
         return self._finish_resume_request_result(
             state,
             result,
@@ -272,7 +272,7 @@ class ConversationRunner:
         )
         if handled:
             return handled
-        result = await self.adapter.request_resume()
+        result = await self._request_resume(state)
         return self._finish_resume_request_result(
             state,
             result,
@@ -365,7 +365,7 @@ class ConversationRunner:
             )
             if handled:
                 return handled
-            result = await self.adapter.request_resume()
+            result = await self._request_resume(state)
             return self._finish_resume_request_result(
                 state,
                 result,
@@ -410,7 +410,7 @@ class ConversationRunner:
             )
         request_state = await self.adapter.inspect_resume_request_state()
         if request_state.has_resume_attachment:
-            result = await self.adapter.request_resume()
+            result = await self._request_resume(state)
             if result.get("downloaded") and result.get("filePath"):
                 return (
                     self._finish(
@@ -438,7 +438,7 @@ class ConversationRunner:
                 request_state,
             )
         if request_state.pending_resume_consent:
-            result = await self.adapter.request_resume()
+            result = await self._request_resume(state)
             reason = (
                 "resume_attachment_downloaded"
                 if result.get("downloaded") and result.get("filePath")
@@ -465,6 +465,39 @@ class ConversationRunner:
                 request_state,
             )
         return None, request_state
+
+    async def _request_resume(self, state: GraphState) -> dict[str, Any]:
+        """Request a resume and finish explicit text fallbacks from platform adapters."""
+
+        result = await self.adapter.request_resume()
+        if not result.get("needsAttachmentRequest"):
+            return result
+        message = str(result.get("attachmentRequestMessage") or "").strip()
+        if not message:
+            return result
+        send_result = await self.adapter.send_message(message)
+        sent = self._send_result_ok(send_result)
+        if sent:
+            append_sent(state, message)
+        send_payload = (
+            asdict(send_result)
+            if is_dataclass(send_result)
+            else dict(send_result)
+            if isinstance(send_result, dict)
+            else {"value": str(send_result)}
+        )
+        return {
+            **result,
+            "requested": sent,
+            "textRequestSent": sent,
+            "needsAttachmentRequest": not sent,
+            "reason": (
+                "online_resume_not_exportable_attachment_message_sent"
+                if sent
+                else str(result.get("reason") or "attachment_request_message_failed")
+            ),
+            "attachmentRequestSendResult": send_payload,
+        }
 
     async def _send_or_fail(
         self,

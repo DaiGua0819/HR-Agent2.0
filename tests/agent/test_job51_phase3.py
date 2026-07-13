@@ -1482,6 +1482,48 @@ def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_system_banner_does_not_block_ai_product_manager_direct_resume() -> None:
+    """51job UI system banners must not replace the latest candidate message."""
+
+    state, page = run_case(
+        conversation(
+            "AI Product Manager",
+            [
+                {"sender": "other", "text": "您好，我对职位很感兴趣"},
+                {
+                    "sender": "system",
+                    "text": "该人才偏好电话/短信沟通\n发送短信\n立即拨打",
+                },
+            ],
+        )
+    )
+
+    assert state["stage"] == "direct_resume"
+    assert page.resume_requests == 1
+
+
+def test_job51_system_banner_after_recruiter_message_does_not_duplicate_reply() -> None:
+    """Ignoring a system banner must still preserve a recruiter-authored last turn."""
+
+    state, page = run_case(
+        conversation(
+            "AI Product Manager",
+            [
+                {"sender": "other", "text": "您好，我对职位很感兴趣"},
+                {"sender": "me", "text": "你好，方便发一份简历过来吗"},
+                {
+                    "sender": "system",
+                    "text": "该人才偏好电话/短信沟通\n发送短信\n立即拨打",
+                },
+            ],
+        )
+    )
+
+    assert state["stage"] == "last_message_not_candidate"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
 def test_job51_ai_product_manager_question_still_downloads_online_resume() -> None:
     """AI product manager direct-resume jobs must not stop on a silent question."""
 
@@ -1990,6 +2032,41 @@ def test_job51_resume_identity_guard_blocks_wrong_candidate_pdf() -> None:
     assert result["reason"] == "resume_identity_mismatch"
 
 
+def test_job51_resume_identity_guard_blocks_wrong_candidate_with_same_position() -> None:
+    """A stale PDF from the previous candidate cannot pass on job title alone."""
+
+    stale_pdf = minimal_pdf_with_text("蒋雨芩 AI Product Manager")
+
+    result = resume_identity_guard(
+        stale_pdf,
+        candidate_name="田先生",
+        applied_position="AI Product Manager",
+    )
+
+    assert result["blocked"] is True
+    assert result["reason"] == "resume_identity_mismatch"
+    assert result["nameMatched"] is False
+    assert result["positionMatched"] is True
+    assert result["matchType"] == "position_only_match"
+
+
+def test_job51_resume_identity_guard_resolves_anonymous_name_with_position() -> None:
+    """51job anonymous list names can resolve to the same-surname full PDF name."""
+
+    content = minimal_pdf_with_text("王娜娜 国际业务管培生")
+
+    result = resume_identity_guard(
+        content,
+        candidate_name="王女士",
+        applied_position="国际业务管培生",
+    )
+
+    assert result["blocked"] is False
+    assert result["nameMatched"] is False
+    assert result["positionMatched"] is True
+    assert result["matchType"] == "anonymous_name_resolved"
+
+
 def test_job51_resume_identity_guard_accepts_matching_candidate_pdf() -> None:
     """Matching candidate text should allow the downloaded PDF to be saved."""
 
@@ -2053,6 +2130,84 @@ def test_job51_preview_only_online_resume_uses_save_download_before_request() ->
     assert result["sourceKind"] == "online_resume"
     assert page.resume_requests == 0
     assert page.message_card_clicks == 1
+
+
+def test_job51_online_resume_without_export_requests_attachment_resume() -> None:
+    """A visible online resume without an export control must fall back to an attachment request."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                preview_only=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["requested"] is True
+    assert result["confirmed"] is True
+    assert result["downloaded"] is False
+    assert result["reason"] == "online_resume_not_exportable_attachment_requested"
+    assert result["onlineResumeFailure"]["reason"] == "online_resume_download_link_missing"
+    assert result["onlineResumeFailure"]["download"]["reason"] == "fake_download_missing"
+    assert page.resume_requests == 1
+    assert page.resume_preview_closes == 1
+
+
+def test_job51_online_resume_does_not_fetch_blob_without_visible_export_control() -> None:
+    """A private or stale preview blob is not export permission and must not be saved."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                    online_resume_bytes=b"%PDF-1.7\nstale private blob\n%%EOF",
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["requested"] is True
+    assert result["downloaded"] is False
+    assert result["onlineResumeFailure"]["reason"] == "online_resume_export_not_available"
+    assert page.resume_requests == 1
+
+
+def test_job51_runner_sends_attachment_message_when_native_request_is_unavailable() -> None:
+    """The runner must finish the fallback when 51 exposes no native request control."""
+
+    page = OnlineResumeWithoutNativeRequestPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                preview_only=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    result = state["decision"]["result"]
+    assert state["stage"] == "resume_consent_requested"
+    assert result["requested"] is True
+    assert result["textRequestSent"] is True
+    assert result["reason"] == "online_resume_not_exportable_attachment_message_sent"
+    assert page.sent_messages == ["在线简历暂时无法导出，方便发一份附件简历过来吗"]
+    assert page.resume_requests == 0
 
 
 def test_job51_attachment_without_download_link_blocks_without_request() -> None:
@@ -2233,6 +2388,60 @@ def test_job51_online_resume_prefers_trusted_message_card_click() -> None:
     assert result["resumeReceived"] is True
     assert page.message_card_clicks == 1
     assert page.top_right_clicks == 0
+
+
+def test_job51_online_resume_closes_stale_preview_before_opening_current_candidate() -> None:
+    """An already-open preview may belong to the previous row and must never be reused."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                    preview_only=True,
+                ),
+                "online_resume_opened": True,
+            }
+        ]
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))
+
+    assert opened["verified"] is True
+    assert opened["cleanup"]["remaining"] == []
+    assert page.resume_preview_closes == 1
+    assert page.message_card_clicks == 1
+
+
+def test_job51_online_resume_stops_when_stale_preview_cannot_be_closed() -> None:
+    """A stubborn previous-candidate preview must block every new online export attempt."""
+
+    opened = asyncio.run(_open_online_resume_preview(StubbornResumeOverlayPage()))
+
+    assert opened["clicked"] is False
+    assert opened["verified"] is False
+    assert opened["reason"] == "stale_resume_overlay_not_closed"
+    assert opened["cleanup"]["remaining"] == ["online_resume_preview"]
+
+
+def test_job51_hidden_mounted_preview_does_not_verify_current_click() -> None:
+    """Hidden Vue preview nodes must not prove that the current candidate opened."""
+
+    page = HiddenMountedOnlineResumePage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                preview_only=True,
+            )
+        ]
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))
+
+    assert opened["verified"] is False
+    assert opened["reason"] == "online_resume_preview_not_verified"
 
 
 def test_job51_online_resume_falls_back_to_trusted_top_right_click() -> None:
@@ -2830,6 +3039,30 @@ class OnlineResumeEntryElement:
         return None
 
 
+class HiddenMountedOnlineResumePage(OnlineResumeEntryPage):
+    """The old preview nodes stay mounted, but trusted clicks never open a visible preview."""
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        if selector in {"#sensor_imresume_download", "#IMResumePrint"}:
+            return [OnlineResumeEntryElement(self, "hidden_online_resume_preview")]
+        return await super().query_all(selector)
+
+    async def handle_online_resume_click(self, source: str) -> None:
+        if source == "message_card_online_resume":
+            self.message_card_clicks += 1
+        elif source == "top_right_online_resume":
+            self.top_right_clicks += 1
+
+
+class OnlineResumeWithoutNativeRequestPage(OnlineResumeEntryPage):
+    """Online preview exists, but 51 does not expose the native 求简历 action."""
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        if selector == "div.operate-item, button, [role='button']":
+            return []
+        return await super().query_all(selector)
+
+
 class AlwaysMismatchedJob51Page(FakePage):
     def __init__(self) -> None:
         super().__init__(
@@ -2908,7 +3141,8 @@ def minimal_pdf_with_text(text: str) -> bytes:
 
     document = fitz.open()
     page = document.new_page()
-    page.insert_text((72, 72), text)
+    font_name = "china-s" if any(ord(char) > 127 for char in text) else "helv"
+    page.insert_text((72, 72), text, fontname=font_name)
     return document.tobytes()
 
 

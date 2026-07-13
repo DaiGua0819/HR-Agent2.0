@@ -12,7 +12,7 @@ import base64
 from app.browser.base import BrowserPage
 from app.browser.reliable_actions import reliable_click_element
 from app.platforms.job51 import selectors
-from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
+from app.platforms.job51.actions_resume_close import cleanup_resume_overlays, resume_overlay_state
 from app.platforms.job51.dom_scripts import (
     ANNEX_DOWNLOAD_PAYLOAD_JS,
     CLICK_ATTACHMENT_RESUME_JS,
@@ -20,6 +20,7 @@ from app.platforms.job51.dom_scripts import (
     CLICK_ONLINE_RESUME_SAVE_JS,
     FETCH_BLOB_BYTES_JS,
     ONLINE_RESUME_DOWNLOAD_PAYLOAD_JS,
+    ONLINE_RESUME_PREVIEW_STATE_JS,
     READ_CHAT_CONTEXT_JS,
     RESUME_PAYLOAD_JS,
 )
@@ -49,6 +50,7 @@ ONLINE_RESUME_TOP_RIGHT_ENTRY_SELECTOR = (
     ".chat-new-header [class*='online']"
 )
 ONLINE_RESUME_LABEL = "\u5728\u7ebf\u7b80\u5386"
+ATTACHMENT_REQUEST_FALLBACK_MESSAGE = "在线简历暂时无法导出，方便发一份附件简历过来吗"
 
 __all__ = [
     "InMemoryResumeDownloadMemory",
@@ -139,13 +141,13 @@ async def request_or_download_resume(
         )
         if online.get("ok"):
             return {"requested": False, "resumeReceived": True, **online}
+        opened = online.get("opened")
         if (
-            online.get("blocked")
-            and online.get("buttonFound")
-            and online.get("reason") != "online_resume_preview_not_verified"
-            and not online.get("opened")
+            online.get("buttonFound")
+            and isinstance(opened, dict)
+            and opened.get("verified")
         ):
-            return {"requested": False, "downloaded": False, **online}
+            return await _request_attachment_after_online_failure(page, online)
         clicked, confirmed = await _request_resume_with_confirm(page)
         return {
             "requested": clicked,
@@ -162,7 +164,7 @@ async def request_or_download_resume(
     if online.get("ok"):
         return {"requested": False, "resumeReceived": True, **online}
     if online.get("blocked") and online.get("buttonFound"):
-        return {"requested": False, "downloaded": False, **online}
+        return await _request_attachment_after_online_failure(page, online)
     content = await _generic_attachment_bytes(page, payload)
     if isinstance(content, str):
         content = content.encode("utf-8")
@@ -246,6 +248,16 @@ async def _download_online_resume(
             "opened": opened,
         }
     try:
+        preview_state = await _online_resume_preview_ready(page)
+        if not preview_state.get("hasSaveButton"):
+            return {
+                "ok": False,
+                "blocked": True,
+                "buttonFound": True,
+                "reason": "online_resume_export_not_available",
+                "opened": opened,
+                "previewState": preview_state,
+            }
         payload = await _safe_eval_dict(page, "job51.online_resume_payload")
         if not payload:
             payload = await _safe_eval_dict(page, ONLINE_RESUME_DOWNLOAD_PAYLOAD_JS)
@@ -263,6 +275,8 @@ async def _download_online_resume(
                 "buttonFound": True,
                 "reason": "online_resume_download_link_missing",
                 "href": href,
+                "opened": opened,
+                "download": download,
             }
         return _with_source_kind(save_resume_bytes(
             content,
@@ -354,15 +368,20 @@ async def _open_attachment_resume_preview(page: BrowserPage) -> bool:
 
 
 async def _open_online_resume_preview(page: BrowserPage) -> dict[str, object]:
+    overlay_state = await resume_overlay_state(page)
     visible = await _online_resume_preview_ready(page)
-    if visible.get("verified"):
+    cleanup: dict[str, object] = {"closed": 0, "actions": [], "remaining": []}
+    if overlay_state.get("remaining") or visible.get("verified"):
+        cleanup = await cleanup_resume_overlays(page)
+    if cleanup.get("remaining"):
         return {
             "clicked": False,
-            "verified": True,
-            "source": visible.get("source") or "online_resume_already_open",
-            "reason": "",
+            "verified": False,
+            "reason": "stale_resume_overlay_not_closed",
+            "cleanup": cleanup,
         }
-    return await _open_online_resume_preview_from_entries(page)
+    opened = await _open_online_resume_preview_from_entries(page)
+    return {**opened, "cleanup": cleanup}
 
 
 async def _open_online_resume_preview_from_entries(page: BrowserPage) -> dict[str, object]:
@@ -510,18 +529,15 @@ async def _online_resume_download_visible(page: BrowserPage) -> dict[str, object
 
 
 async def _online_resume_preview_ready(page: BrowserPage) -> dict[str, object]:
-    if await _selector_present(page, "#sensor_imresume_download"):
-        return {"verified": True, "source": "online_resume_save_button"}
-    if await _selector_present(page, "#IMResumePrint"):
-        return {"verified": True, "source": "online_resume_print_preview"}
-    return await _online_resume_download_visible(page)
-
-
-async def _selector_present(page: BrowserPage, selector: str) -> bool:
-    try:
-        return bool(await page.query_all(selector))
-    except Exception:
-        return False
+    state = await _safe_eval_dict(page, "job51.online_resume_preview_state")
+    if not state:
+        state = await _safe_eval_dict(page, ONLINE_RESUME_PREVIEW_STATE_JS)
+    if state.get("verified"):
+        return state
+    download = await _online_resume_download_visible(page)
+    if download.get("verified"):
+        return download
+    return state or download
 
 
 def _best_online_resume_open_failure(
@@ -561,6 +577,29 @@ async def _request_resume_with_confirm(page: BrowserPage) -> tuple[bool, bool]:
         return False, False
     confirmed = await _click_request_resume_confirm(page)
     return True, confirmed
+
+
+async def _request_attachment_after_online_failure(
+    page: BrowserPage,
+    online_failure: dict[str, object],
+) -> dict[str, object]:
+    """Close an unusable online preview and request an attachment resume instead."""
+
+    await cleanup_resume_overlays(page)
+    clicked, confirmed = await _request_resume_with_confirm(page)
+    return {
+        "requested": clicked,
+        "confirmed": confirmed,
+        "downloaded": False,
+        "reason": (
+            "online_resume_not_exportable_attachment_requested"
+            if clicked
+            else "online_resume_not_exportable_attachment_request_unavailable"
+        ),
+        "needsAttachmentRequest": not clicked,
+        "attachmentRequestMessage": ATTACHMENT_REQUEST_FALLBACK_MESSAGE,
+        "onlineResumeFailure": online_failure,
+    }
 
 
 async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:

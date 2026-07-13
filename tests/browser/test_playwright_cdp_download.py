@@ -92,6 +92,40 @@ def test_job51_download_continues_when_pdf_button_is_not_stable(tmp_path: Path) 
     assert raw.confirm_clicks == 1
 
 
+def test_job51_download_stops_before_waiting_when_export_button_is_not_visible(
+    tmp_path: Path,
+) -> None:
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=None,
+        save_visible=False,
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is False
+    assert result["reason"] == "online_resume_export_not_available"
+    assert raw.save_clicks == 0
+    assert raw.expect_download_calls == 0
+
+
+def test_job51_download_targets_only_visible_save_dialog(tmp_path: Path) -> None:
+    download_file = tmp_path / "resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(download_file), suggested_filename="resume.pdf"),
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert ".el-dialog:visible" in raw.locator_requests
+    assert raw.confirm_clicks == 1
+
+
 class _FetchingCDPPage(PlaywrightCDPPage):
     def __init__(self, page: Any) -> None:
         super().__init__(page)
@@ -138,16 +172,21 @@ class _Job51DownloadRawPage:
         cdp_should_fail: bool = False,
         download: _Download | None = None,
         pdf_click_should_timeout: bool = False,
+        save_visible: bool = True,
     ) -> None:
         self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
         self.save_clicks = 0
         self.pdf_clicks = 0
         self.confirm_clicks = 0
         self.pdf_click_should_timeout = pdf_click_should_timeout
+        self.save_visible = save_visible
         self.url = "https://ehire.51job.com/Revision/chat"
         self.download = download
+        self.expect_download_calls = 0
+        self.locator_requests: list[str] = []
 
     def locator(self, selector: str) -> _Job51Locator:
+        self.locator_requests.append(selector)
         return _Job51Locator(self, selector)
 
     async def wait_for_timeout(self, timeout: int) -> None:
@@ -155,6 +194,7 @@ class _Job51DownloadRawPage:
 
     def expect_download(self, timeout: int):  # noqa: ANN001
         _ = timeout
+        self.expect_download_calls += 1
         if self.download is None:
             raise AssertionError("download should not be awaited when CDP setup fails")
         return _ExpectDownload(self.download)
@@ -234,7 +274,14 @@ class _Job51Locator:
         return _Job51Locator(self.page, selector, has_text=self.has_text)
 
     async def count(self) -> int:
+        if self.selector == "#sensor_imresume_download" and not self.page.save_visible:
+            return 0
         return 1
+
+    async def is_visible(self) -> bool:
+        if self.selector == "#sensor_imresume_download":
+            return self.page.save_visible
+        return True
 
     async def click(self, timeout: int) -> None:
         _ = timeout

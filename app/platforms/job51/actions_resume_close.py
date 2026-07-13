@@ -221,6 +221,12 @@ async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
     return {"closed": closed, "actions": actions, "remaining": remaining}
 
 
+async def resume_overlay_state(page: BrowserPage) -> dict[str, object]:
+    """Inspect visible resume/export overlays without performing any click."""
+
+    return await _overlay_state(page)
+
+
 async def _close_attachment_preview(page: BrowserPage) -> dict[str, object]:
     for element in await page.query_all(selectors.ANNEX_CLOSE):
         result = await reliable_click_element(page, element, label="51job关闭附件预览")

@@ -385,6 +385,28 @@ class FakePage:
                 "filename": convo.get("online_resume_filename", ""),
                 "source": "fake_online_resume",
             }
+        if (
+            script == "job51.online_resume_preview_state"
+            or "job51_online_resume_preview_state" in script
+        ):
+            opened = bool(self.current_conversation().get("online_resume_opened"))
+            has_save = opened and bool(
+                self.current_conversation().get("online_resume_export_available", True)
+            )
+            return {
+                "verified": opened,
+                "hasSaveButton": has_save,
+                "hasPrintPreview": opened,
+                "headerText": self.current_conversation().get("name", "") if opened else "",
+                "source": (
+                    "online_resume_save_button"
+                    if has_save
+                    else "online_resume_print_preview"
+                    if opened
+                    else "online_resume_preview_not_visible"
+                ),
+                "reason": "" if opened else "online_resume_preview_not_verified",
+            }
         if script == "job51.fetch_attachment_href":
             convo = self.current_conversation()
             if arg and str(arg) == str(convo.get("resume_href") or ""):

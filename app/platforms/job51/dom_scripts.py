@@ -907,6 +907,36 @@ async () => {
 }
 """
 
+ONLINE_RESUME_PREVIEW_STATE_JS = r"""
+() => {
+  /* job51_online_resume_preview_state */
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
+  };
+  const firstVisible = (selector) => Array.from(document.querySelectorAll(selector)).find(visible);
+  const save = firstVisible("#sensor_imresume_download");
+  const print = firstVisible("#IMResumePrint");
+  const root = print || (save && save.closest(
+    "#IMResumePrint, .imresume-container, .resume-preview, .el-dialog, [role='dialog']"
+  ));
+  const verified = Boolean(save || print);
+  return {
+    verified,
+    hasSaveButton: Boolean(save),
+    hasPrintPreview: Boolean(print),
+    headerText: text(root).slice(0, 600),
+    source: save ? "online_resume_save_button" :
+      (print ? "online_resume_print_preview" : "online_resume_preview_not_visible"),
+    reason: verified ? "" : "online_resume_preview_not_verified",
+  };
+}
+"""
+
 ONLINE_RESUME_DOWNLOAD_PAYLOAD_JS = r"""
 () => {
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");

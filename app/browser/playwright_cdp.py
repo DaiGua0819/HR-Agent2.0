@@ -345,21 +345,39 @@ class PlaywrightCDPPage:
                 "downloadPath": behavior.get("downloadPath") or "",
             }
         try:
+            save = self.page.locator("#sensor_imresume_download").first
+            if not await save.count() or not await save.is_visible():
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_export_not_available",
+                }
+            await save.click(timeout=5000)
+            clicked = {"clicked": True, "source": "job51_trusted_save_click"}
+            await self.page.wait_for_timeout(1000)
+            dialog = self.page.locator(".el-dialog:visible").filter(has_text="保存到本地").last
+            if not await dialog.count() or not await dialog.is_visible():
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_save_dialog_not_visible",
+                }
+            pdf = dialog.locator("button").filter(has_text="Pdf").first
+            if await pdf.count():
+                try:
+                    await pdf.click(timeout=8000)
+                    clicked["pdfSelected"] = True
+                except Exception as error:
+                    clicked["pdfSelected"] = False
+                    clicked["pdfSelectError"] = str(error)
+            confirm = dialog.locator("button.el-button--primary").filter(has_text="确定").last
+            if not await confirm.count() or not await confirm.is_visible():
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_save_confirm_not_visible",
+                }
             async with self.page.expect_download(timeout=timeout_ms) as download_info:
-                save = self.page.locator("#sensor_imresume_download").first
-                await save.click(timeout=5000)
-                clicked = {"clicked": True, "source": "job51_trusted_save_click"}
-                await self.page.wait_for_timeout(1000)
-                dialog = self.page.locator(".el-dialog").filter(has_text="保存到本地").last
-                pdf = dialog.locator("button").filter(has_text="Pdf").first
-                if await pdf.count():
-                    try:
-                        await pdf.click(timeout=8000)
-                        clicked["pdfSelected"] = True
-                    except Exception as error:
-                        clicked["pdfSelected"] = False
-                        clicked["pdfSelectError"] = str(error)
-                confirm = dialog.locator("button.el-button--primary").filter(has_text="确定").last
                 await confirm.click(timeout=10000)
                 clicked["confirmed"] = True
             download = await download_info.value
