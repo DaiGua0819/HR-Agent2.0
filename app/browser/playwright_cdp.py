@@ -18,6 +18,10 @@ from urllib.parse import urlparse
 from app.browser.base import BrowserElement
 from app.settings import PROJECT_ROOT
 
+CDP_DEFAULT_ACTION_TIMEOUT_MS = 30000
+CDP_TIMEOUT_GRACE_SECONDS = 2.0
+CDP_EVAL_TIMEOUT_SECONDS = 15.0
+
 
 class PlaywrightElement:
     """BrowserElement 的 Playwright Locator 包装。"""
@@ -27,11 +31,23 @@ class PlaywrightElement:
 
     async def click(self, timeout_ms: int | None = None) -> None:
         kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
-        await self.locator.click(**kwargs)
+        effective_timeout_ms = (
+            timeout_ms if timeout_ms is not None else CDP_DEFAULT_ACTION_TIMEOUT_MS
+        )
+        await asyncio.wait_for(
+            self.locator.click(**kwargs),
+            timeout=max(effective_timeout_ms, 0) / 1000 + CDP_TIMEOUT_GRACE_SECONDS,
+        )
 
     async def fill(self, value: str, timeout_ms: int | None = None) -> None:
         kwargs = {"timeout": timeout_ms} if timeout_ms is not None else {}
-        await self.locator.fill(value, **kwargs)
+        effective_timeout_ms = (
+            timeout_ms if timeout_ms is not None else CDP_DEFAULT_ACTION_TIMEOUT_MS
+        )
+        await asyncio.wait_for(
+            self.locator.fill(value, **kwargs),
+            timeout=max(effective_timeout_ms, 0) / 1000 + CDP_TIMEOUT_GRACE_SECONDS,
+        )
 
     async def text(self) -> str:
         return await self.locator.inner_text()
@@ -90,11 +106,12 @@ class PlaywrightCDPPage:
         return await element.text() if element else ""
 
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
-        return (
-            await self.page.evaluate(script, arg)
+        operation = (
+            self.page.evaluate(script, arg)
             if arg is not None
-            else await self.page.evaluate(script)
+            else self.page.evaluate(script)
         )
+        return await asyncio.wait_for(operation, timeout=CDP_EVAL_TIMEOUT_SECONDS)
 
     async def click_and_download(
         self,
