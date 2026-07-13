@@ -10,19 +10,27 @@ import asyncio
 from typing import Any
 
 from app.agent.runner import ConversationRunner
-from app.browser.reliable_actions import reliable_click_element
 from app.platforms.boss import selectors
 from app.platforms.boss.adapter import BossAdapter
+from app.platforms.boss.interaction import boss_click_element
 
 
 async def select_all_filter(page: Any) -> dict[str, object]:
     """切到 BOSS 全部会话，供指定 id 补处理使用。"""
 
     result: dict[str, object] = {"selected": False, "reason": "all_filter_not_found"}
-    for element in await page.query_all(selectors.UNREAD_FILTER):
+    candidates = await page.query_all(selectors.MESSAGE_FILTER_OPTION)
+    if not candidates:
+        candidates = await page.query_all(selectors.UNREAD_FILTER)
+    for element in candidates:
         label = (await element.text()).strip()
-        if label == "全部" or (label.startswith("全部") and len(label) <= 12):
-            click = await reliable_click_element(page, element, label="BOSS全部会话筛选")
+        if "".join(label.split()) == "全部":
+            click = await boss_click_element(
+                page,
+                element,
+                label="BOSS全部会话筛选",
+                verify=lambda: _verify_message_filter(page, "全部"),
+            )
             result = {"selected": bool(click.get("ok")), "label": label, "click": click}
             break
     await asyncio.sleep(1)
@@ -71,28 +79,57 @@ async def process_boss_targets(
 async def _click_conversation_by_id(page: Any, conversation_id: str) -> bool:
     raw = conversation_id.strip()
     raw_norm = raw.lstrip("_")
-    for row in await page.query_all(selectors.SESSION_ITEM):
-        row_id = str(await row.attr("id") or "")
-        label = (await row.text()).strip()
-        if row_id.lstrip("_") != raw_norm and label != raw:
-            continue
-        click = await reliable_click_element(
-            page,
-            row,
-            label=f"BOSS指定会话 {raw}",
-            verify=lambda: _verify_chat_ready(page),
-        )
-        clicked = bool(click.get("ok"))
-        if not clicked:
-            return False
-        await asyncio.sleep(1)
-        return True
+    deadline = asyncio.get_running_loop().time() + 6
+    while asyncio.get_running_loop().time() < deadline:
+        for row in await page.query_all(selectors.SESSION_ITEM):
+            row_ids = {
+                str(await row.attr(name) or "").lstrip("_")
+                for name in ("id", "data-id", "data-uid")
+            }
+            id_matches = bool(raw_norm and raw_norm in row_ids)
+            label_matches = False
+            if not id_matches and not raw_norm.replace("-", "").isdigit():
+                label_matches = (await row.text()).strip() == raw
+            if not id_matches and not label_matches:
+                continue
+            click = await boss_click_element(
+                page,
+                row,
+                label=f"BOSS指定会话 {raw}",
+                verify=lambda: _verify_chat_ready(page),
+            )
+            if not click.get("ok"):
+                return False
+            await asyncio.sleep(1)
+            return True
+        await asyncio.sleep(0.25)
     return False
 
 
 async def _verify_chat_ready(page: Any) -> dict[str, object]:
     ready = await page.wait_for(selectors.CHAT_INPUT, timeout_ms=6500)
     return {"verified": bool(ready), "reason": "" if ready else "chat_input_not_ready"}
+
+
+async def _verify_message_filter(page: Any, expected: str) -> dict[str, object]:
+    try:
+        actual = await page.eval_js(
+            """
+            () => {
+              const active = document.querySelector(".chat-message-filter-left span.active");
+              return active && active.innerText ? active.innerText.trim() : "";
+            }
+            """
+        )
+    except Exception:
+        actual = ""
+    actual = str(actual or "")
+    return {
+        "verified": actual == expected,
+        "actual": actual,
+        "expected": expected,
+        "reason": "" if actual == expected else "message_filter_not_active",
+    }
 
 
 async def _wait_for_context(adapter: BossAdapter, *, timeout_seconds: float = 6) -> Any:

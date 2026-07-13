@@ -6,21 +6,19 @@ Phase 2 测试通过 FakePage 验证顺序、选择器和业务分支。
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from app.browser.base import BrowserElement, BrowserPage
-from app.browser.reliable_actions import (
-    reliable_click,
-    reliable_click_element,
-    reliable_fill,
-)
 from app.core.constants import Platform
 from app.platforms.boss import actions_recommend, actions_resume, selectors
 from app.platforms.boss.dom_scripts import (
-    CLICK_UNREAD_FILTER_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
+)
+from app.platforms.boss.interaction import (
+    boss_click_element,
+    boss_click_selector,
+    boss_type_and_send,
 )
 from app.platforms.boss.row_click import click_row_state, find_row_for_state
 from app.platforms.types import (
@@ -50,18 +48,18 @@ async def open_chat_page(page: BrowserPage) -> None:
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """点击 BOSS 未读筛选。"""
 
-    clicked = await _safe_eval_dict(page, CLICK_UNREAD_FILTER_JS)
-    if clicked.get("selected"):
-        await asyncio.sleep(1)
-        active = await _active_message_filter_label(page)
-        clicked["active"] = active
-        clicked["selected"] = active == "未读"
-        return clicked
-    for element in await page.query_all(selectors.UNREAD_FILTER):
-        label = await element.text()
-        if label == "未读" or ("未读" in label and len(label) <= 12):
-            result = await reliable_click_element(page, element, label="BOSS未读筛选")
-            await asyncio.sleep(1)
+    candidates = await page.query_all(selectors.MESSAGE_FILTER_OPTION)
+    if not candidates:
+        candidates = await page.query_all(selectors.UNREAD_FILTER)
+    for element in candidates:
+        label = (await element.text()).strip()
+        if _compact(label) == "未读":
+            result = await boss_click_element(
+                page,
+                element,
+                label="BOSS未读筛选",
+                verify=lambda: _verify_filter_label(page, "未读"),
+            )
             active = await _active_message_filter_label(page)
             return {
                 "selected": bool(result.get("ok")) and active == "未读",
@@ -80,7 +78,7 @@ async def select_positions(
     label = target_position or selectors.ALL_POSITION_OPTION_TEXT
     if not target_position:
         return {"selected": True, "label": label, "mode": "all", "clicked": False}
-    result = await reliable_click(page, selectors.POSITION_FILTER, label="BOSS职位筛选")
+    result = await boss_click_selector(page, selectors.POSITION_FILTER, label="BOSS职位筛选")
     clicked = bool(result.get("ok"))
     if hasattr(page, "selected_recommend_position") and target_position:
         page.selected_recommend_position = target_position  # type: ignore[attr-defined]
@@ -127,9 +125,12 @@ async def find_next_unread_thread(
             continue
         if _should_skip_label(label):
             continue
-        result = await reliable_click_element(page, row, label="BOSS候选人会话")
-        if not result.get("ok"):
-            result = await click_row_state(page, state, label="BOSS候选人会话")
+        result = await click_row_state(
+            page,
+            state,
+            label="BOSS候选人会话",
+            verify=lambda target=state: _verify_thread_opened(page, target),
+        )
         if result.get("ok"):
             return ConversationRef(Platform.BOSS, owner, conversation_id)
     return None
@@ -196,14 +197,18 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
     text = message.strip()
     if not text:
         return SendResult(sent=False, blocked=True, message="BOSS 待发送内容为空")
-    fill = await reliable_fill(page, selectors.CHAT_INPUT, text, label="BOSS聊天输入框")
-    if not fill.get("ok"):
-        return SendResult(sent=False, blocked=True, message="BOSS 没有找到聊天输入框")
-    click = await reliable_click(
+    identity = await _current_thread_identity(page)
+    if not identity.get("confirmed"):
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="BOSS 当前联系人身份无法确认，已阻止发送",
+        )
+    click = await boss_type_and_send(
         page,
-        selectors.SEND_BUTTON,
-        label="BOSS发送按钮",
-        verify=lambda: _verify_recent_mine_message(page, selectors.MINE_MESSAGE, text),
+        text,
+        verify_sent=lambda: _verify_recent_mine_message(page, selectors.MINE_MESSAGE, text),
+        expected_conversation=lambda: _verify_same_thread(page, identity),
     )
     sent = bool(click.get("ok"))
     return SendResult(
@@ -231,7 +236,7 @@ async def send_company_info(
     if phrase:
         return await send_message(page, phrase)
     # 常用语面板真实路径尚未完成选择器逐项验证；无明确文本时才触发入口。
-    click = await reliable_click(page, selectors.COMMON_PHRASE_BUTTON, label="BOSS常用语入口")
+    click = await boss_click_selector(page, selectors.COMMON_PHRASE_BUTTON, label="BOSS常用语入口")
     if not click.get("ok"):
         return SendResult(sent=False, blocked=True, message="BOSS 常用语入口未找到")
     return SendResult(sent=True, verified=False, message="BOSS 常用语入口已触发")
@@ -289,7 +294,7 @@ async def mark_unsuitable(page: BrowserPage, *, reason: str = "") -> dict[str, o
     )
     if button is None:
         return {"marked": False, "reason": "unsuitable_button_not_found", "detail": reason}
-    click = await reliable_click_element(page, button, label="BOSS标记不合适")
+    click = await boss_click_element(page, button, label="BOSS标记不合适")
     return {"marked": bool(click.get("ok")), "reason": reason, "click": click}
 
 
@@ -371,6 +376,75 @@ async def _active_message_filter_label(page: BrowserPage) -> str:
     except Exception:
         return ""
     return str(value or "")
+
+
+async def _verify_filter_label(page: BrowserPage, expected: str) -> dict[str, object]:
+    actual = await _active_message_filter_label(page)
+    return {
+        "verified": actual == expected,
+        "expected": expected,
+        "actual": actual,
+        "reason": "" if actual == expected else "message_filter_not_active",
+    }
+
+
+async def _verify_thread_opened(
+    page: BrowserPage,
+    state: dict[str, object],
+) -> dict[str, object]:
+    raw = await _safe_eval_dict(page, "boss.read_chat_context")
+    if not raw:
+        raw = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+    expected_id = str(state.get("id") or "").lstrip("_")
+    actual_id = str(raw.get("id") or raw.get("conversation_id") or "").lstrip("_")
+    expected_label = _compact(str(state.get("label") or ""))
+    actual_name = _compact(str(raw.get("name") or raw.get("candidate_name") or ""))
+    input_ready = await page.wait_for(selectors.CHAT_INPUT, timeout_ms=1200)
+    identity_matches = bool(
+        (expected_id and actual_id and expected_id == actual_id)
+        or (actual_name and actual_name in expected_label)
+    )
+    return {
+        "verified": bool(input_ready and identity_matches),
+        "expectedId": expected_id,
+        "actualId": actual_id,
+        "actualName": actual_name,
+        "reason": "" if input_ready and identity_matches else "boss_thread_not_opened",
+    }
+
+
+async def _current_thread_identity(page: BrowserPage) -> dict[str, object]:
+    raw = await _safe_eval_dict(page, "boss.read_chat_context")
+    if not raw:
+        raw = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+    conversation_id = str(raw.get("id") or raw.get("conversation_id") or "").lstrip("_")
+    name = _compact(str(raw.get("name") or raw.get("candidate_name") or ""))
+    return {
+        "confirmed": bool(conversation_id or name),
+        "conversationId": conversation_id,
+        "name": name,
+    }
+
+
+async def _verify_same_thread(
+    page: BrowserPage,
+    expected: dict[str, object],
+) -> dict[str, object]:
+    actual = await _current_thread_identity(page)
+    expected_id = str(expected.get("conversationId") or "")
+    actual_id = str(actual.get("conversationId") or "")
+    expected_name = str(expected.get("name") or "")
+    actual_name = str(actual.get("name") or "")
+    matches = bool(
+        (expected_id and actual_id and expected_id == actual_id)
+        or (expected_name and actual_name and expected_name == actual_name)
+    )
+    return {
+        "verified": matches,
+        "expected": expected,
+        "actual": actual,
+        "reason": "" if matches else "conversation_changed_before_send",
+    }
 
 
 def _message_from_raw(item: dict[str, object]) -> ChatMessage:

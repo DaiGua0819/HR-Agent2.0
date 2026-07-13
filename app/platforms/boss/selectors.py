@@ -11,6 +11,7 @@ CHAT_URL = "https://www.zhipin.com/web/chat/index"
 RECOMMEND_URL = "https://www.zhipin.com/web/chat/recommend"
 
 UNREAD_FILTER = ".chat-message-filter-left, .chat-message-filter-left *, .chat-message-filter"
+MESSAGE_FILTER_OPTION = ".chat-message-filter-left span"
 POSITION_FILTER = (
     ".chat-top-job, .chat-select-job, .chat-job, "
     ".job-selecter-wrap .ui-dropmenu-label"

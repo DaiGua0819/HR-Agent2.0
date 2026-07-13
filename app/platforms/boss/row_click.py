@@ -8,13 +8,12 @@ by id/label and verifies the chat pane changed.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from app.browser.base import BrowserElement, BrowserPage
-from app.browser.reliable_actions import reliable_click_element
-from app.browser.reliable_support import VerifyCallback, record_result, result_dict, wait_verified
+from app.browser.reliable_support import VerifyCallback, record_result, result_dict
 from app.platforms.boss import selectors
+from app.platforms.boss.interaction import boss_click_element
 
 DOM_CLICK_ROW_JS = r"""
 payload => {
@@ -146,39 +145,7 @@ async def click_row_state(
         record_result(page, result)
         return result
 
-    primary = await reliable_click_element(page, row, label=label, verify=verify)
-    if primary.get("ok"):
-        return primary
-
-    payload = {
-        "selector": selectors.SESSION_ITEM,
-        "id": state.get("id") or "",
-        "label": state.get("label") or "",
-        "index": _safe_int(state.get("index")),
-    }
-    try:
-        fallback = await page.eval_js(DOM_CLICK_ROW_JS, payload)
-    except Exception as error:
-        fallback = {"clicked": False, "reason": "dom_click_error", "error": str(error)}
-    if not isinstance(fallback, dict):
-        fallback = {"clicked": False, "reason": "dom_click_bad_result", "value": str(fallback)}
-    await asyncio.sleep(1)
-    verified = await wait_verified(page, verify, 6500) if verify else {"verified": True}
-    ok = bool(fallback.get("clicked") and verified["verified"])
-    result = result_dict(
-        ok,
-        "click_element",
-        label,
-        attempts=[{"primary": primary}, {"fallback": fallback, **verified}],
-        verified=bool(verified["verified"]),
-        reason=(
-            ""
-            if ok
-            else str(verified.get("reason") or fallback.get("reason") or "dom_click_failed")
-        ),
-    )
-    record_result(page, result)
-    return result
+    return await boss_click_element(page, row, label=label, verify=verify)
 
 
 def _safe_int(value: Any) -> int:

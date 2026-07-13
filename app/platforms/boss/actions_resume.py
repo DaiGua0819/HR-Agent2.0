@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from app.browser.base import BrowserElement, BrowserPage
-from app.browser.reliable_actions import reliable_click_element, reliable_confirm
 from app.platforms.boss import selectors
 from app.platforms.boss.dom_scripts import INSPECT_RESUME_REQUEST_STATE_JS
+from app.platforms.boss.interaction import boss_click_element, boss_click_rect
 from app.platforms.types import ResumeRequestState
 
 
@@ -48,7 +47,12 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
             selectors.RESUME_CONSENT_TEXT,
         )
         if consent is not None:
-            click = await reliable_click_element(page, consent, label="BOSS同意接收简历")
+            click = await boss_click_element(
+                page,
+                consent,
+                label="BOSS同意接收简历",
+                verify=lambda: _resume_consent_accepted(page),
+            )
             return {
                 "requested": bool(click.get("ok")),
                 "acceptedResumeConsent": bool(click.get("ok")),
@@ -106,21 +110,22 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
 
 async def _click_request_resume_confirm(page: BrowserPage) -> bool:
     trusted_click = await _trusted_click_visible_request_resume_confirm(page)
-    if trusted_click.get("clicked"):
+    if trusted_click.get("ok"):
         return True
-    hard_click = await _click_request_resume_confirm_hard(page)
-    if hard_click.get("clicked"):
-        return True
-    result = await reliable_confirm(
+    button = await _find_button_by_any_text(
         page,
         selectors.REQUEST_RESUME_CONFIRM_BUTTON,
         selectors.REQUEST_RESUME_CONFIRM_TEXTS,
-        label="BOSS求简历确认",
     )
-    if result.get("ok"):
-        return True
-    fallback = await _click_confirm_by_prompt_position(page)
-    return bool(fallback.get("clicked"))
+    if button is None:
+        return False
+    result = await boss_click_element(
+        page,
+        button,
+        label="BOSS求简历确认",
+        verify=lambda: _resume_request_completed(page),
+    )
+    return bool(result.get("ok"))
 
 
 async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:
@@ -149,44 +154,49 @@ async def _confirm_prompt_visible(page: BrowserPage) -> dict[str, object]:
 
 
 async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
-    result = await _safe_eval_dict(page, _BOSS_RESUME_CONSENT_CLICK_JS)
-    if result.get("clicked"):
-        await asyncio.sleep(1)
-    return result
+    rect = await _safe_eval_dict(page, _BOSS_RESUME_CONSENT_RECT_JS)
+    if rect.get("found"):
+        result = await boss_click_rect(
+            page,
+            rect,
+            label="BOSS同意接收简历",
+            verify=lambda: _resume_consent_accepted(page),
+        )
+        if result.get("ok"):
+            return {"clicked": True, "humanizedClick": result, "rect": rect}
+    consent = await _find_button_by_text(
+        page,
+        selectors.REQUEST_RESUME_BUTTON,
+        selectors.RESUME_CONSENT_TEXT,
+    )
+    if consent is None:
+        return {
+            "clicked": False,
+            "reason": rect.get("reason") or "resume_consent_button_not_found",
+            "rect": rect,
+        }
+    result = await boss_click_element(
+        page,
+        consent,
+        label="BOSS同意接收简历",
+        verify=lambda: _resume_consent_accepted(page),
+    )
+    return {"clicked": bool(result.get("ok")), "humanizedClick": result, "rect": rect}
 
 
 async def _click_request_resume_button(page: BrowserPage) -> dict[str, object]:
     trusted_click = await _trusted_click_visible_request_resume_button(page)
-    if trusted_click.get("clicked"):
-        verified = await _request_resume_click_verified(page)
-        if verified.get("verified"):
-            return {
-                "ok": True,
-                "action": "click",
-                "label": "BOSS求简历",
-                "verified": True,
-                "reason": verified.get("reason", ""),
-                "trustedClick": trusted_click,
-            }
-    hard_click = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_BUTTON_CLICK_JS)
-    if hard_click.get("clicked"):
-        await asyncio.sleep(1)
-        verified = await _request_resume_click_verified(page)
-        if verified.get("verified"):
-            return {
-                "ok": True,
-                "action": "click",
-                "label": "BOSS求简历",
-                "verified": True,
-                "reason": verified.get("reason", ""),
-                "hardDom": hard_click,
-            }
+    if trusted_click.get("ok"):
+        return trusted_click
     button = await _find_button_by_text(
         page, selectors.REQUEST_RESUME_BUTTON, selectors.REQUEST_RESUME_TEXT
     )
     if button is None:
-        return {"ok": False, "reason": "request_resume_button_not_found", "hardDom": hard_click}
-    return await reliable_click_element(
+        return {
+            "ok": False,
+            "reason": trusted_click.get("reason") or "request_resume_button_not_found",
+        }
+    return await boss_click_element(
         page,
         button,
         label="BOSS求简历",
@@ -194,57 +204,40 @@ async def _click_request_resume_button(page: BrowserPage) -> dict[str, object]:
     )
 
 
-async def _click_request_resume_confirm_hard(page: BrowserPage) -> dict[str, object]:
-    result = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_CONFIRM_CLICK_JS)
-    if result.get("clicked"):
-        await asyncio.sleep(1)
-    return result
-
-
 async def _trusted_click_visible_request_resume_button(page: BrowserPage) -> dict[str, object]:
     rect = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_BUTTON_RECT_JS)
-    return await _trusted_mouse_click(page, rect, source="trusted_request_resume_button")
+    return await boss_click_rect(
+        page,
+        rect,
+        label="BOSS求简历",
+        verify=lambda: _request_resume_click_verified(page),
+    )
 
 
 async def _trusted_click_visible_request_resume_confirm(page: BrowserPage) -> dict[str, object]:
     rect = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_CONFIRM_RECT_JS)
-    return await _trusted_mouse_click(page, rect, source="trusted_request_resume_confirm")
+    return await boss_click_rect(
+        page,
+        rect,
+        label="BOSS求简历确认",
+        verify=lambda: _resume_request_completed(page),
+    )
 
 
-async def _trusted_mouse_click(
-    page: BrowserPage,
-    rect: dict[str, object],
-    *,
-    source: str,
-) -> dict[str, object]:
-    raw_page = getattr(page, "page", None)
-    mouse = getattr(raw_page, "mouse", None)
-    if mouse is None:
-        return {"clicked": False, "reason": "trusted_mouse_unavailable", "source": source}
-    if not rect.get("found"):
-        return {
-            "clicked": False,
-            "reason": rect.get("reason") or "target_not_found",
-            "source": source,
-        }
-    try:
-        x = float(rect.get("x") or 0) + float(rect.get("width") or 0) / 2
-        y = float(rect.get("y") or 0) + float(rect.get("height") or 0) / 2
-    except (TypeError, ValueError):
-        return {"clicked": False, "reason": "bad_target_rect", "source": source, "rect": rect}
-    await mouse.move(x, y)
-    await asyncio.sleep(0.2)
-    await mouse.down()
-    await asyncio.sleep(0.1)
-    await mouse.up()
-    await asyncio.sleep(1)
-    return {"clicked": True, "source": source, "x": round(x), "y": round(y), "rect": rect}
+async def _resume_consent_accepted(page: BrowserPage) -> dict[str, object]:
+    state = await inspect_resume_request_state(page)
+    return {
+        "verified": not state.pending_resume_consent,
+        "reason": "" if not state.pending_resume_consent else "resume_consent_still_pending",
+    }
 
 
-async def _click_confirm_by_prompt_position(page: BrowserPage) -> dict[str, object]:
-    result = await page.eval_js(_CLICK_CONFIRM_BY_PROMPT_POSITION_JS)
-    await asyncio.sleep(1)
-    return result if isinstance(result, dict) else {"clicked": False, "reason": "bad_result"}
+async def _resume_request_completed(page: BrowserPage) -> dict[str, object]:
+    state = await inspect_resume_request_state(page)
+    return {
+        "verified": state.already_requested,
+        "reason": "" if state.already_requested else "resume_request_not_completed",
+    }
 
 
 async def _find_button_by_text(
@@ -384,9 +377,9 @@ _CLICK_CONFIRM_BY_PROMPT_POSITION_JS = r"""
 """
 
 
-_BOSS_RESUME_CONSENT_CLICK_JS = r"""
+_BOSS_RESUME_CONSENT_RECT_JS = r"""
 () => {
-  const marker = "boss_resume_consent_click";
+  const marker = "boss_resume_consent_rect";
   const visible = (el) => {
     if (!el) return false;
     const style = getComputedStyle(el);
@@ -395,25 +388,6 @@ _BOSS_RESUME_CONSENT_CLICK_JS = r"""
       rect.width > 0 && rect.height > 0;
   };
   const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
-  const fireClick = (el) => {
-    const rect = el.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    for (const eventName of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-      const EventClass = eventName.startsWith("pointer") ? PointerEvent : MouseEvent;
-      el.dispatchEvent(new EventClass(eventName, {
-        bubbles: true,
-        cancelable: true,
-        clientX: x,
-        clientY: y,
-        button: 0,
-        pointerId: 1,
-        pointerType: "mouse",
-        isPrimary: true,
-      }));
-    }
-    if (typeof el.click === "function") el.click();
-  };
   const containers = Array.from(document.querySelectorAll(
     ".message-item, .conversation-message, .chat-message-list, .custom-card, " +
     ".card-wrap, .card-wrapper, .dialog-wrap.active, body"
@@ -432,13 +406,17 @@ _BOSS_RESUME_CONSENT_CLICK_JS = r"""
       return priority(a) - priority(b);
     });
   if (!matches.length) {
-    return { clicked: false, reason: "resume_consent_button_not_found", source: marker };
+    return { found: false, reason: "resume_consent_button_not_found", source: marker };
   }
   const target = matches[0];
-  fireClick(target);
+  const rect = target.getBoundingClientRect();
   return {
-    clicked: true,
+    found: true,
     source: marker,
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
     tag: target.tagName.toLowerCase(),
     className: String(target.className || ""),
     text: text(target),

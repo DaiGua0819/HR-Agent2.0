@@ -76,4 +76,6 @@ description: Use when operating BOSS recruiter automation for unread message han
 - 回复尽量简短，不要编造知识库没有的信息。
 - 不要绕过登录、验证码、权限限制或平台风控。
 - 有业务 function call 时不要临场猜按钮 selector。
-- 点击、滚动、输入的拟人化轨迹由后端执行层负责。
+- BOSS 消息处理中的未读筛选、联系人、输入框、发送、求简历、同意和确认按钮，统一由后端 BOSS 专属 CDP 鼠标轨迹执行，禁止用 DOM `click()` 或派发 MouseEvent 代替真实副作用点击。
+- 聊天文字必须逐字或按极小分段输入；只有输入框全文与待发消息完全一致、当前联系人身份未变化后，才允许移动鼠标点击发送按钮。
+- 51job 和智联继续使用各自既有动作层，不复用 BOSS 专属拟人化入口。

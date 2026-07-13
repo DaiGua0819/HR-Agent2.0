@@ -19,19 +19,19 @@ from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.cloak import cdp_url_for
 from app.browser.manager import BrowserManager
-from app.browser.reliable_actions import reliable_click_element
 from app.browser.selector_validation import detect_login_page
 from app.core.constants import Platform
 from app.platforms.boss import actions as boss_actions
 from app.platforms.boss import selectors
 from app.platforms.boss.adapter import BossAdapter
+from app.platforms.boss.interaction import boss_click_element
 from app.platforms.boss.row_click import click_row_state
 from app.settings import load_settings
 
 from boss_once_support import print_summary, reliable_actions_since
 from boss_targeting import process_boss_targets, select_all_filter
 
-BOSS_CANDIDATE_TIMEOUT_SECONDS = 45
+BOSS_CANDIDATE_TIMEOUT_SECONDS = 120
 
 
 def parse_args() -> argparse.Namespace:
@@ -204,7 +204,7 @@ async def _dismiss_overlays(page: Any) -> None:
         element = await page.query(selector)
         if element is None:
             continue
-        await reliable_click_element(page, element, label="BOSS关闭遮挡层")
+        await boss_click_element(page, element, label="BOSS关闭遮挡层")
         break
     await asyncio.sleep(1)
 
@@ -268,22 +268,15 @@ async def _process_boss(
             continue
         print(f"[BOSS] 准备处理候选人: {label[:120]}", flush=True)
         before_actions = len(getattr(adapter.page, "reliable_actions", []))
-        click = await reliable_click_element(
+        click = await click_row_state(
             adapter.page,
-            row,
-            label="BOSS处理候选人会话",
-            verify=lambda state=unread_state: _verify_boss_thread_opened(adapter.page, state),
-        )
-        if not click.get("ok"):
-            click = await click_row_state(
+            unread_state,
+            label="BOSS候选人会话",
+            verify=lambda state=unread_state: _verify_boss_thread_opened(
                 adapter.page,
-                unread_state,
-                label="BOSS候选人会话",
-                verify=lambda state=unread_state: _verify_boss_thread_opened(
-                    adapter.page,
-                    state,
-                ),
-            )
+                state,
+            ),
+        )
         if not click.get("ok"):
             summaries.append(
                 {

@@ -151,6 +151,14 @@ class AppSettings(BaseSettings):
     dry_run: bool = Field(default=True, validation_alias="DRY_RUN")
     interaction_enabled: bool = Field(default=True, validation_alias="INTERACTION_ENABLED")
     interaction_profile: str = Field(default="normal", validation_alias="INTERACTION_PROFILE")
+    boss_humanized_interaction_enabled: bool = Field(
+        default=True,
+        validation_alias="BOSS_HUMANIZED_INTERACTION_ENABLED",
+    )
+    boss_humanized_profile: str = Field(
+        default="normal",
+        validation_alias="BOSS_HUMANIZED_PROFILE",
+    )
     database_path: Path = Field(
         default=Path("data/resumes.sqlite"),
         validation_alias="DATABASE_PATH",

@@ -12,7 +12,7 @@ from app.agent.graph import build_recruit_graph
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
 from app.agent.rules import find_knowledge_answer
 from app.agent.runner import ConversationRunner
-from app.browser.fake_page import FakePage
+from app.browser.fake_page import FakeElement, FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.boss import actions as boss_actions
@@ -85,6 +85,8 @@ class DelayedBossChatPage(FakePage):
             or ".geek-item" in selector
         ):
             return []
+        if self.chat_ready and "chat-message-filter" in selector:
+            return [FakeElement(self, selector, "未读")]
         return await super().query_all(selector)
 
     async def eval_js(self, script: str, arg: object | None = None) -> object:
@@ -104,6 +106,12 @@ class DelayedBossChatPage(FakePage):
         self.waited_selectors.append(selector)
         self.chat_ready = True
         return True
+
+    async def handle_element_click(self, element) -> None:
+        if "chat-message-filter" in element.selector:
+            self.unread_selected = True
+            return
+        await super().handle_element_click(element)
 
 
 class BossHardResumeActionPage(FakePage):
@@ -126,6 +134,7 @@ class BossHardResumeActionPage(FakePage):
         self.resume_button_clicked = False
         self.resume_confirm_clicked = False
         self.resume_consent_clicked = False
+        self.dom_click_scripts_called: list[str] = []
 
     async def query_all(self, selector: str):
         if (
@@ -147,17 +156,70 @@ class BossHardResumeActionPage(FakePage):
                 and not self.resume_consent_clicked,
                 "summary": "",
             }
+        if "boss_resume_consent_rect" in script:
+            return {
+                "found": self.pending_resume_consent and not self.resume_consent_clicked,
+                "source": "boss_resume_consent_rect",
+                "x": 100,
+                "y": 100,
+                "width": 80,
+                "height": 32,
+            }
+        if "boss_request_resume_button_rect" in script:
+            return {
+                "found": True,
+                "source": "boss_request_resume_button_rect",
+                "x": 200,
+                "y": 100,
+                "width": 80,
+                "height": 32,
+            }
+        if "boss_request_resume_confirm_rect" in script:
+            return {
+                "found": self.resume_button_clicked,
+                "source": "boss_request_resume_confirm_rect",
+                "x": 300,
+                "y": 100,
+                "width": 80,
+                "height": 32,
+            }
         if "boss_resume_consent_click" in script:
+            self.dom_click_scripts_called.append("resume_consent")
             self.resume_consent_clicked = True
             return {"clicked": True, "source": "boss_resume_consent_click"}
         if "boss_request_resume_button_click" in script:
+            self.dom_click_scripts_called.append("request_resume")
             self.resume_button_clicked = True
             return {"clicked": True, "source": "boss_request_resume_button_click"}
         if "boss_request_resume_confirm_click" in script:
+            self.dom_click_scripts_called.append("confirm_resume")
             self.resume_confirm_clicked = True
             return {"clicked": True, "source": "boss_request_resume_confirm_click"}
         if "boss_confirm_prompt_visible" in script:
             return {"verified": self.resume_button_clicked, "source": "fake_hard_dom"}
+        return await super().eval_js(script, arg)
+
+
+class BossFilterHierarchyPage(FakePage):
+    """Real BOSS exposes the filter container before its exact option spans."""
+
+    async def query_all(self, selector: str):
+        if selector == boss_actions.selectors.MESSAGE_FILTER_OPTION:
+            return [
+                FakeElement(self, "filter-parent", "全部 未读\n批量"),
+                FakeElement(self, "filter-unread", "未读"),
+            ]
+        return await super().query_all(selector)
+
+    async def handle_element_click(self, element) -> None:
+        if element.selector == "filter-unread":
+            self.unread_selected = True
+            return
+        await super().handle_element_click(element)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if ".chat-message-filter-left span.active" in script:
+            return "未读" if self.unread_selected else "全部"
         return await super().eval_js(script, arg)
 
 
@@ -524,10 +586,20 @@ def test_boss_existing_attachment_does_not_open_preview_download() -> None:
     assert "preview_opened" not in page.current_conversation()
 
 
-def test_boss_request_resume_uses_hard_dom_function_call_for_button_and_confirm() -> None:
-    """BOSS 求简历按钮和确认按钮走硬 DOM function call，不依赖泛选择器。"""
+def test_boss_request_resume_uses_mouse_for_button_and_confirm(monkeypatch) -> None:
+    """DOM 只定位求简历按钮，按钮和确认必须由模拟鼠标点击。"""
 
     page = BossHardResumeActionPage()
+
+    async def fake_mouse_click(target_page, rect, **kwargs):
+        _ = kwargs
+        if rect.get("source") == "boss_request_resume_button_rect":
+            target_page.resume_button_clicked = True
+        if rect.get("source") == "boss_request_resume_confirm_rect":
+            target_page.resume_confirm_clicked = True
+        return {"ok": True, "method": "humanized_mouse"}
+
+    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
 
     result = asyncio.run(boss_actions.request_resume(page))
 
@@ -535,12 +607,21 @@ def test_boss_request_resume_uses_hard_dom_function_call_for_button_and_confirm(
     assert result["confirmed"] is True
     assert page.resume_button_clicked is True
     assert page.resume_confirm_clicked is True
+    assert page.dom_click_scripts_called == []
 
 
-def test_boss_request_resume_uses_hard_dom_function_call_for_resume_consent() -> None:
+def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     """候选人主动发附件简历时，recruiter_request_resume 应点击授权卡片的“同意”。"""
 
     page = BossHardResumeActionPage(pending_resume_consent=True)
+
+    async def fake_mouse_click(target_page, rect, **kwargs):
+        _ = kwargs
+        if rect.get("source") == "boss_resume_consent_rect":
+            target_page.resume_consent_clicked = True
+        return {"ok": True, "method": "humanized_mouse"}
+
+    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
 
     result = asyncio.run(boss_actions.request_resume(page))
 
@@ -548,6 +629,7 @@ def test_boss_request_resume_uses_hard_dom_function_call_for_resume_consent() ->
     assert result["acceptedResumeConsent"] is True
     assert page.resume_consent_clicked is True
     assert page.resume_button_clicked is False
+    assert page.dom_click_scripts_called == []
 
 
 def test_boss_skill_documents_request_resume_function_call_contract() -> None:
@@ -615,6 +697,54 @@ def test_boss_open_chat_page_waits_for_chat_filter_before_unread_scan() -> None:
     assert result["selected"] is True
     assert [item.conversation_id for item in refs] == ["delayed-unread"]
     assert page.waited_selectors
+
+
+def test_boss_unread_filter_clicks_exact_option_not_parent_container() -> None:
+    page = BossFilterHierarchyPage()
+
+    result = asyncio.run(boss_actions.select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert "filter-unread" in page.clicks
+    assert "filter-parent" not in page.clicks
+
+
+def test_boss_send_message_uses_atomic_humanized_type_and_send(monkeypatch) -> None:
+    """BOSS 发送必须委托给不可拆分的逐字输入与鼠标发送序列。"""
+
+    page = FakePage(
+        conversations=[
+            {
+                "id": "humanized-send",
+                "name": "测试候选人",
+                "position": "AI产品经理",
+                "label": "测试候选人 AI产品经理",
+                "messages": [{"sender": "other", "text": "你好"}],
+            }
+        ]
+    )
+    calls: list[str] = []
+
+    async def fake_type_and_send(
+        target_page,
+        text: str,
+        *,
+        verify_sent,
+        profile=None,
+        expected_conversation=None,
+    ) -> dict[str, object]:
+        _ = profile, expected_conversation
+        calls.append(text)
+        target_page.append_sent_message(text)
+        verified = await verify_sent()
+        return {"ok": bool(verified.get("verified")), "verified": True}
+
+    monkeypatch.setattr(boss_actions, "boss_type_and_send", fake_type_and_send)
+
+    result = asyncio.run(boss_actions.send_message(page, "逐字输入后发送"))
+
+    assert result.sent is True
+    assert calls == ["逐字输入后发送"]
 
 
 def test_boss_screening_ask_accept_and_reject() -> None:
