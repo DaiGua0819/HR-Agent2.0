@@ -608,6 +608,38 @@ function renderResumeConversationMessages(messages, payload) {
   }).join("");
 }
 
+function showResumeConversationModalLoading(resumeId) {
+  const modal = $("resumeConversationModal");
+  const resume = selectedResume() || {};
+  state.resumeConversationResumeId = resumeId;
+  state.resumeConversationPreviousFocus = document.activeElement;
+  modal.hidden = false;
+  modal.dataset.state = "open";
+  $("resumeConversationAvatar").textContent = (resumeName(resume) || "候").slice(0, 2);
+  $("resumeConversationTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
+  $("resumeConversationSubtitle").textContent = "正在读取平台聊天记录";
+  $("resumeConversationMeta").innerHTML = '<span class="resume-conversation-chip">读取中</span>';
+  $("resumeConversationMessages").innerHTML = '<div class="resume-conversation-loading">正在读取聊天记录...</div>';
+  $("resumeConversationCloseBtn").focus({ preventScroll: true });
+}
+
+function closeResumeConversation() {
+  const modal = $("resumeConversationModal");
+  if (!modal || modal.hidden) return;
+  state.resumeConversationRequestSequence += 1;
+  state.resumeConversationResumeId = "";
+  if (state.resumeConversationAbortController) {
+    state.resumeConversationAbortController.abort();
+    state.resumeConversationAbortController = null;
+  }
+  modal.hidden = true;
+  modal.dataset.state = "closed";
+  $("resumeConversationMessages").innerHTML = "";
+  const previousFocus = state.resumeConversationPreviousFocus;
+  state.resumeConversationPreviousFocus = null;
+  if (previousFocus?.focus) previousFocus.focus({ preventScroll: true });
+}
+
 function handleResumePreviewContextMenu(event) {
   if (!isAdminUser() || !state.selectedId) return;
   if (!event.target.closest("#resumePreview")) return;
@@ -638,7 +670,7 @@ async function openResumeConversation() {
 }
 ```
 
-`showResumeConversationModalLoading()` and closing lifecycle are completed in Task 4 so this task remains focused on request identity and payload rendering.
+Task 3 deliberately uses an immediate, non-animated lifecycle so the feature is independently usable and testable. Task 4 replaces these two functions with the approved opening/open/closing transition lifecycle without changing their call sites.
 
 - [ ] **Step 5: Bind the right-click and close controls**
 
