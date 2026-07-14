@@ -16,6 +16,7 @@
 - 关闭：右上角关闭按钮、点击遮罩或按 `Escape`；关闭后焦点回到简历预览。
 - 状态：提供加载中、无明确关联、没有已保存消息、读取失败四种状态。
 - 尺寸：桌面端宽度不超过 `820px`，高度不超过视口；窄屏使用接近全屏的安全边距，消息区单独滚动。
+- 候选人卡片：聊天功能完成后，在姓名右侧增加评分胶囊；姓名列、评分列和判断状态列使用稳定网格宽度，保证所有卡片的评分在同一纵线上。
 
 设计参考：
 
@@ -234,6 +235,7 @@ GET /api/resumes/{resume_id}/conversation
 - `frontend/index.html`：增加顶层弹窗容器并更新 cache-bust。
 - `frontend/app.js`：增加右键入口、请求取消、防串候选人和弹窗渲染。
 - `frontend/styles.css`：增加方案 A 的弹窗、消息气泡和响应式样式。
+- `frontend/app.js` 与 `frontend/styles.css`：候选人卡片标题行增加固定评分列；无评分时显示 `--`，不因姓名长度改变位置。
 - `tests/domain/test_resume_conversation_history.py`：后端服务与接口测试。
 - `tests/domain/test_frontend_resume_member_view.py`：前端权限和交互契约测试。
 - 后续同步阶段新增 `scripts/sync_conversation_history.py` 及对应测试。
@@ -251,6 +253,7 @@ GET /api/resumes/{resume_id}/conversation
 - 快速切换候选人时旧响应不能覆盖新弹窗。
 - 关闭、Escape、遮罩点击和 401 状态行为正确。
 - 进入动画、关闭动画、快速重复打开和 `prefers-reduced-motion` 行为正确。
+- 不同姓名长度、不同判断徽标和无评分候选人的评分胶囊保持纵向对齐。
 - `node --check frontend/app.js`、相关 pytest 和 `ruff check app tests` 通过。
 
 ### Local Real-data Verification
@@ -277,6 +280,7 @@ GET /api/resumes/{resume_id}/conversation
 
 - 只有 admin 在简历预览上右键时出现聊天弹窗。
 - 弹窗符合方案 A，简约、只读、可滚动且不会遮挡后留下页面状态变化。
+- 每张候选人卡片的姓名右侧显示评分胶囊，评分列上下对齐且不挤压右侧判断状态。
 - member 看不到入口，也不能直接调用接口。
 - 只展示明确关联会话，歧义匹配绝不自动放行。
 - 本地 BOSS、智联、51job 真实会话均可正确展示。
