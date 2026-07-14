@@ -241,25 +241,40 @@ class ConversationRepository:
             connection.commit()
         return records
 
+    def count_messages(self, session_id: str) -> int:
+        """Return the number of persisted messages for one session."""
+
+        with connect(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM conversation_messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
     def list_messages(
         self,
         session_id: str,
         *,
-        limit: int = 3,
+        limit: int = 200,
     ) -> list[ConversationMessageRecord]:
-        """Read recent persisted messages for a session in chronological order."""
+        """Read the latest bounded message window in chronological order."""
 
+        bounded_limit = max(1, min(int(limit), 200))
         with connect(self.database_path) as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM conversation_messages
-                WHERE session_id = ?
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT ?
+                SELECT * FROM (
+                  SELECT rowid AS message_rowid, *
+                  FROM conversation_messages
+                  WHERE session_id = ?
+                  ORDER BY created_at DESC, rowid DESC
+                  LIMIT ?
+                )
+                ORDER BY created_at ASC, message_rowid ASC
                 """,
-                (session_id, max(1, limit)),
+                (session_id, bounded_limit),
             ).fetchall()
-        return [_message_from_row(row) for row in reversed(rows)]
+        return [_message_from_row(row) for row in rows]
 
     def get_status(self, session_id: str) -> CandidateStatus:
         """读取候选人状态；不存在时返回空状态。"""
