@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.auto_sync import router as auto_sync_router
 from app.api.routes.automation import router as automation_router
 from app.api.routes.batch import router as batch_router
 from app.api.routes.dashboard import router as dashboard_router
@@ -22,6 +23,7 @@ from app.api.routes.resume_review import router as resume_review_router
 from app.api.routes.resumes import router as resumes_router
 from app.api.routes.scoring import router as scoring_router
 from app.control_plane.dispatcher import Dispatcher
+from app.domain.auto_sync.service import AutoSyncService
 from app.domain.batch.service import BatchService
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.conversation.service import ResumeConversationService
@@ -62,6 +64,11 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     app.state.scoring_service = scoring_service
     app.state.resume_service = ResumeService(repository, scoring_service=scoring_service)
     app.state.resume_conversation_service = ResumeConversationService(conversation_repository)
+    app.state.auto_sync_secret = settings.auto_sync_secret
+    app.state.auto_sync_service = AutoSyncService(
+        settings.resolved_database_path,
+        files_root=PROJECT_ROOT / "data" / "downloads" / "synced",
+    )
     app.state.resume_review_service = ResumeReviewService(
         review_repository,
         resume_repository=repository,
@@ -75,6 +82,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     )
 
     app.include_router(auth_router)
+    app.include_router(auto_sync_router)
     app.include_router(health_router)
     app.include_router(dashboard_router)
     app.include_router(automation_router)

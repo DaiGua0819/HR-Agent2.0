@@ -163,6 +163,25 @@ class AppSettings(BaseSettings):
         default=Path("data/resumes.sqlite"),
         validation_alias="DATABASE_PATH",
     )
+    auto_sync_enabled: bool = Field(default=False, validation_alias="AUTO_SYNC_ENABLED")
+    auto_sync_server_url: str = Field(default="", validation_alias="AUTO_SYNC_SERVER_URL")
+    auto_sync_secret: str = Field(default="", validation_alias="AUTO_SYNC_SECRET")
+    auto_sync_source: str = Field(
+        default="local-collector",
+        validation_alias="AUTO_SYNC_SOURCE",
+    )
+    auto_sync_interval_seconds: int = Field(
+        default=60,
+        validation_alias="AUTO_SYNC_INTERVAL_SECONDS",
+    )
+    auto_sync_state_path: Path = Field(
+        default=Path("data/sync/auto_sync_state.json"),
+        validation_alias="AUTO_SYNC_STATE_PATH",
+    )
+    auto_sync_pending_dir: Path = Field(
+        default=Path("data/sync/pending"),
+        validation_alias="AUTO_SYNC_PENDING_DIR",
+    )
     legacy_resume_db_path: Path = Field(
         default=Path("../patchwork-recruit-gpt/data/resumes.sqlite"),
         validation_alias="LEGACY_RESUME_DB_PATH",
@@ -186,6 +205,14 @@ class AppSettings(BaseSettings):
     @property
     def resolved_legacy_resume_db_path(self) -> Path:
         return self.resolve_path(self.legacy_resume_db_path)
+
+    @property
+    def resolved_auto_sync_state_path(self) -> Path:
+        return self.resolve_path(self.auto_sync_state_path)
+
+    @property
+    def resolved_auto_sync_pending_dir(self) -> Path:
+        return self.resolve_path(self.auto_sync_pending_dir)
 
     def worker_for_owner(self, owner: str) -> WorkerConfig:
         """按负责人查找 worker 配置。"""

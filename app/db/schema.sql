@@ -28,6 +28,8 @@ CREATE INDEX IF NOT EXISTS idx_resumes_linked_session
   ON resumes(linked_session_id);
 CREATE INDEX IF NOT EXISTS idx_resumes_source_artifact
   ON resumes(source_artifact_id);
+CREATE INDEX IF NOT EXISTS idx_resumes_updated
+  ON resumes(updated_at, id);
 
 CREATE TABLE IF NOT EXISTS conversation_sessions (
   id TEXT PRIMARY KEY,
@@ -73,6 +75,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_hash
   ON conversation_messages(session_id, message_hash);
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_session
   ON conversation_messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_created
+  ON conversation_messages(created_at, id);
+
+CREATE TABLE IF NOT EXISTS sync_receipts (
+  batch_id TEXT PRIMARY KEY,
+  body_hash TEXT NOT NULL,
+  source TEXT NOT NULL,
+  result TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_receipts_applied
+  ON sync_receipts(applied_at DESC);
 
 CREATE TABLE IF NOT EXISTS candidate_status (
   session_id TEXT PRIMARY KEY,
