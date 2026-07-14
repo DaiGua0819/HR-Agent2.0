@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260711-queue-live-counts" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260714-resume-conversation" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260701-green-feishu-login" />
   </head>
   <body>
@@ -353,8 +353,29 @@
         </section>
       </main>
     </div>
+    <div id="resumeConversationModal" class="resume-conversation-root" data-state="closed" hidden>
+      <div id="resumeConversationBackdrop" class="resume-conversation-backdrop"></div>
+      <section
+        class="resume-conversation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resumeConversationTitle"
+      >
+        <header class="resume-conversation-head">
+          <span id="resumeConversationAvatar" class="resume-conversation-avatar"></span>
+          <div class="resume-conversation-identity">
+            <strong id="resumeConversationTitle">聊天记录</strong>
+            <span id="resumeConversationSubtitle"></span>
+          </div>
+          <button id="resumeConversationCloseBtn" class="resume-conversation-close" type="button" title="关闭聊天记录" aria-label="关闭聊天记录">x</button>
+        </header>
+        <div id="resumeConversationMeta" class="resume-conversation-meta"></div>
+        <div id="resumeConversationMessages" class="resume-conversation-messages" aria-live="polite"></div>
+        <footer class="resume-conversation-readonly">只读历史记录 · 不会向招聘平台发送消息</footer>
+      </section>
+    </div>
     <div id="reviewerDecisionPopoverRoot" class="reviewer-decision-popover-root" role="tooltip" hidden></div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260711-queue-live-counts"></script>
+    <script src="/assets/app.js?v=20260714-resume-conversation"></script>
   </body>
 </html>

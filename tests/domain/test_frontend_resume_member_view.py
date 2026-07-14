@@ -7,6 +7,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_admin_resume_preview_has_right_click_conversation_modal_contract() -> None:
+    """Admins can open a guarded read-only conversation modal from the preview."""
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="resumeConversationModal"' in html
+    assert 'role="dialog"' in html
+    assert 'aria-modal="true"' in html
+    assert "function handleResumePreviewContextMenu(event)" in script
+    assert "if (!isAdminUser() || !state.selectedId) return" in script
+    assert "event.preventDefault()" in script
+    assert 'api(`/api/resumes/${resumeId}/conversation`' in script
+    assert "resumeConversationAbortController" in script
+    assert "resumeConversationRequestSequence" in script
+    assert "resume-conversation-date" in script
+    assert "if (requestSequence !== state.resumeConversationRequestSequence) return" in script
+    assert "if (state.selectedId !== resumeId) return" in script
+
+
+def test_member_right_click_keeps_browser_default_menu() -> None:
+    """Member context menus must not be intercepted by the conversation affordance."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    block = script.split("function handleResumePreviewContextMenu(event)", 1)[1].split(
+        "async function openResumeConversation", 1
+    )[0]
+
+    assert block.index("if (!isAdminUser() || !state.selectedId) return") < block.index(
+        "event.preventDefault()"
+    )
+
+
 def test_resume_library_uses_ten_items_per_page() -> None:
     """The resume library should request ten resumes per page by default."""
 
@@ -84,7 +117,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260711-queue-live-counts" in html
+    assert "/assets/app.js?v=20260714-resume-conversation" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -118,7 +151,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260711-queue-live-counts" in html
+    assert "20260714-resume-conversation" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -242,7 +275,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260711-queue-live-counts" in html
+    assert "20260714-resume-conversation" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -392,7 +425,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-queue-live-counts" in html
+    assert "20260714-resume-conversation" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -715,7 +748,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260711-queue-live-counts" in html
+    assert "/assets/app.js?v=20260714-resume-conversation" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1305,7 +1338,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260711-queue-live-counts" in html
+    assert "20260714-resume-conversation" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1621,7 +1654,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260711-queue-live-counts" in html
+    assert "/assets/styles.css?v=20260714-resume-conversation" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

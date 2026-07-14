@@ -38,6 +38,11 @@ const state = {
   resumeListRequestSequence: 0,
   resumeContextAbortController: null,
   resumeContextRequestSequence: 0,
+  resumeConversationAbortController: null,
+  resumeConversationRequestSequence: 0,
+  resumeConversationResumeId: "",
+  resumeConversationCloseTimer: null,
+  resumeConversationPreviousFocus: null,
   resumePreviewPagesAbortController: null,
   resumePreviewPagesRequestSequence: 0,
   resumePreviewPagesRequestKey: "",
@@ -540,6 +545,107 @@ function setResumeMemberMode() {
 }
 function selectedResume() {
   return state.context?.resume || state.resumes.find((resume) => resume.id === state.selectedId) || null;
+}
+function conversationDateLabel(value) {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+function renderResumeConversationMessages(messages, payload) {
+  if (!payload?.matched) return '<div class="resume-conversation-empty">暂未找到明确关联的聊天记录。</div>';
+  if (!messages.length) return '<div class="resume-conversation-empty">当前会话还没有已保存消息。</div>';
+  let previousDate = "";
+  return messages.map((message) => {
+    const sender = ["me", "other", "system"].includes(message.sender) ? message.sender : "other";
+    const date = conversationDateLabel(message.sentAt);
+    const separator = date && date !== previousDate
+      ? `<div class="resume-conversation-date">${escapeHtml(date)}</div>`
+      : "";
+    if (date) previousDate = date;
+    if (sender === "system") {
+      return `${separator}<div class="resume-conversation-system">${escapeHtml(message.text || "")}</div>`;
+    }
+    return `${separator}
+      <article class="resume-conversation-message resume-conversation-message--${sender}">
+        <div class="resume-conversation-bubble">
+          <span>${escapeHtml(message.text || "")}</span>
+          <time>${escapeHtml(message.sentAt || "")}</time>
+        </div>
+      </article>`;
+  }).join("");
+}
+function renderResumeConversationPayload(payload) {
+  const resume = selectedResume() || {};
+  const candidate = payload?.candidate || {};
+  const conversation = payload?.conversation || {};
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const name = candidate.name || resumeName(resume) || "候选人";
+  const job = candidate.jobType || resumeJob(resume) || "未标注岗位";
+  $("resumeConversationAvatar").textContent = name.slice(0, 2);
+  $("resumeConversationTitle").textContent = `${name} · ${job}`;
+  $("resumeConversationSubtitle").textContent = payload?.matched
+    ? `${platformName(conversation.platform)} · ${conversation.owner || "未知账号"} · 最近更新 ${conversation.updatedAt || "待同步"}`
+    : "暂未找到明确关联的聊天记录";
+  $("resumeConversationMeta").innerHTML = payload?.matched
+    ? `<span class="resume-conversation-chip resume-conversation-chip--success">身份已关联</span><span class="resume-conversation-chip">历史消息 ${Number(conversation.messageCount || 0)} 条</span><span class="resume-conversation-chip">只读</span>`
+    : '<span class="resume-conversation-chip">未关联</span>';
+  $("resumeConversationMessages").innerHTML = renderResumeConversationMessages(messages, payload);
+}
+function showResumeConversationModalLoading(resumeId) {
+  const modal = $("resumeConversationModal");
+  const resume = selectedResume() || {};
+  state.resumeConversationResumeId = resumeId;
+  state.resumeConversationPreviousFocus = document.activeElement;
+  modal.hidden = false;
+  modal.dataset.state = "open";
+  $("resumeConversationAvatar").textContent = (resumeName(resume) || "候选人").slice(0, 2);
+  $("resumeConversationTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
+  $("resumeConversationSubtitle").textContent = "正在读取平台聊天记录";
+  $("resumeConversationMeta").innerHTML = '<span class="resume-conversation-chip">读取中</span>';
+  $("resumeConversationMessages").innerHTML = '<div class="resume-conversation-loading">正在读取聊天记录...</div>';
+  $("resumeConversationCloseBtn").focus({ preventScroll: true });
+}
+function closeResumeConversation() {
+  const modal = $("resumeConversationModal");
+  if (!modal || modal.hidden) return;
+  state.resumeConversationRequestSequence += 1;
+  state.resumeConversationResumeId = "";
+  if (state.resumeConversationAbortController) {
+    state.resumeConversationAbortController.abort();
+    state.resumeConversationAbortController = null;
+  }
+  modal.hidden = true;
+  modal.dataset.state = "closed";
+  $("resumeConversationMessages").innerHTML = "";
+  const previousFocus = state.resumeConversationPreviousFocus;
+  state.resumeConversationPreviousFocus = null;
+  if (previousFocus?.focus) previousFocus.focus({ preventScroll: true });
+}
+function handleResumePreviewContextMenu(event) {
+  if (!isAdminUser() || !state.selectedId) return;
+  if (!event.target.closest("#resumePreview")) return;
+  event.preventDefault();
+  openResumeConversation();
+}
+async function openResumeConversation() {
+  if (!isAdminUser() || !state.selectedId) return;
+  const resumeId = state.selectedId;
+  const requestSequence = (state.resumeConversationRequestSequence += 1);
+  if (state.resumeConversationAbortController) state.resumeConversationAbortController.abort();
+  const controller = new AbortController();
+  state.resumeConversationAbortController = controller;
+  showResumeConversationModalLoading(resumeId);
+  try {
+    const payload = await api(`/api/resumes/${resumeId}/conversation`, { signal: controller.signal });
+    if (requestSequence !== state.resumeConversationRequestSequence) return;
+    if (state.selectedId !== resumeId) return;
+    renderResumeConversationPayload(payload);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    if (requestSequence !== state.resumeConversationRequestSequence) return;
+    $("resumeConversationMessages").innerHTML = '<div class="resume-conversation-empty">聊天记录读取失败，请关闭后重试。</div>';
+  } finally {
+    if (state.resumeConversationAbortController === controller) state.resumeConversationAbortController = null;
+  }
 }
 function selectedReviewState() {
   return state.context?.reviewState || selectedResume()?.reviewState || {};
@@ -1500,6 +1606,7 @@ function renderOptimisticResumeContext(resume) {
 }
 async function openResume(id) {
   if (!id) return;
+  closeResumeConversation({ immediate: true });
   const previousId = state.selectedId;
   state.selectedId = id;
   updateResumeSelectionDom(previousId, id);
@@ -3100,6 +3207,9 @@ function bindPageActions() {
   bindAutoApplyResumeFilters();
   bindSummaryPanelResize();
   bindSummaryPanelCollapse();
+  $("resumePreview").addEventListener("contextmenu", handleResumePreviewContextMenu);
+  $("resumeConversationCloseBtn").onclick = closeResumeConversation;
+  $("resumeConversationBackdrop").onclick = closeResumeConversation;
   const reviewerDecisionPopoverRoot = $("reviewerDecisionPopoverRoot");
   reviewerDecisionPopoverRoot?.addEventListener("mouseenter", () => {
     if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
@@ -3123,6 +3233,7 @@ function bindPageActions() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideReviewerDecisionPopover();
+    if (event.key === "Escape" && !$("resumeConversationModal").hidden) closeResumeConversation();
   });
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
