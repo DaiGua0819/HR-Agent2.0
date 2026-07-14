@@ -81,6 +81,25 @@ def test_resume_conversation_failure_and_selection_clears_cannot_leave_stale_mod
     assert all(advance_block.rfind(close_call, 0, index) != -1 for index in clear_positions)
 
 
+def test_resume_conversation_modal_has_smooth_open_close_states() -> None:
+    """The conversation modal should expose a complete animated lifecycle."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'modal.dataset.state = "opening"' in script
+    assert 'modal.dataset.state = "open"' in script
+    assert 'modal.dataset.state = "closing"' in script
+    assert "requestAnimationFrame" in script
+    assert "transitionend" in script
+    assert "resumeConversationCloseTimer" in script
+    assert '.resume-conversation-root[data-state="open"] .resume-conversation-dialog' in styles
+    assert 'translateY(12px) scale(0.985)' in styles
+    assert '240ms cubic-bezier(0.22, 1, 0.36, 1)' in styles
+    assert '160ms cubic-bezier(0.4, 0, 1, 1)' in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+
+
 def test_resume_library_uses_ten_items_per_page() -> None:
     """The resume library should request ten resumes per page by default."""
 
@@ -158,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260714-resume-conversation" in html
+    assert "/assets/app.js?v=20260714-resume-conversation-score" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -192,7 +211,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260714-resume-conversation" in html
+    assert "20260714-resume-conversation-score" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -316,7 +335,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260714-resume-conversation" in html
+    assert "20260714-resume-conversation-score" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -466,7 +485,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260714-resume-conversation" in html
+    assert "20260714-resume-conversation-score" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -789,7 +808,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260714-resume-conversation" in html
+    assert "/assets/app.js?v=20260714-resume-conversation-score" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1379,7 +1398,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260714-resume-conversation" in html
+    assert "20260714-resume-conversation-score" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1387,6 +1406,25 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     assert 'class="school-tier-badge"' in script
     assert ".candidate-card__heading" in styles
     assert ".school-tier-badge" in styles
+
+
+def test_candidate_score_capsule_is_aligned_in_fixed_heading_column() -> None:
+    """Candidate scores should occupy the same fixed column on every card."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function resumeScoreLabel(resume)" in script
+    assert 'if (rawValue === "" || rawValue == null) return "--"' in script
+    assert 'class="candidate-card__score' in script
+    assert 'class="candidate-card__heading-status"' in script
+    assert 'title="简历评分"' in script
+    heading_block = styles.split(".candidate-card__heading {", 1)[1].split("}", 1)[0]
+    score_block = styles.split(".candidate-card__score {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in heading_block
+    assert "grid-template-columns: minmax(0, 1fr) 46px 112px" in heading_block
+    assert "min-width: 36px" in score_block
+    assert "justify-self: center" in score_block
 
 
 def test_candidate_card_metadata_uses_aligned_columns() -> None:
@@ -1695,7 +1733,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260714-resume-conversation" in html
+    assert "/assets/styles.css?v=20260714-resume-conversation-score" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]

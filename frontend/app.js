@@ -401,6 +401,12 @@ function resumePlatformAccountLabel(resume) {
   const account = resumeCollectorAccountLabel(resume);
   return account ? `${platform} ' ${account}` : platform;
 }
+function resumeScoreLabel(resume) {
+  const rawValue = resume?.match_score ?? resume?.matchScore;
+  if (rawValue === "" || rawValue == null) return "--";
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? String(Math.round(value)) : "--";
+}
 function dateKey(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -591,21 +597,40 @@ function renderResumeConversationPayload(payload) {
     : '<span class="resume-conversation-chip">未关联</span>';
   $("resumeConversationMessages").innerHTML = renderResumeConversationMessages(messages, payload);
 }
+function finishResumeConversationClose() {
+  const modal = $("resumeConversationModal");
+  if (!modal) return;
+  if (state.resumeConversationCloseTimer) clearTimeout(state.resumeConversationCloseTimer);
+  state.resumeConversationCloseTimer = null;
+  modal.hidden = true;
+  modal.dataset.state = "closed";
+  $("resumeConversationMessages").innerHTML = "";
+  const previousFocus = state.resumeConversationPreviousFocus;
+  state.resumeConversationPreviousFocus = null;
+  if (previousFocus?.focus) previousFocus.focus({ preventScroll: true });
+}
 function showResumeConversationModalLoading(resumeId) {
   const modal = $("resumeConversationModal");
   const resume = selectedResume() || {};
+  if (state.resumeConversationCloseTimer) clearTimeout(state.resumeConversationCloseTimer);
+  state.resumeConversationCloseTimer = null;
   state.resumeConversationResumeId = resumeId;
-  state.resumeConversationPreviousFocus = document.activeElement;
+  if (modal.hidden) state.resumeConversationPreviousFocus = document.activeElement;
   modal.hidden = false;
-  modal.dataset.state = "open";
+  modal.dataset.state = "opening";
   $("resumeConversationAvatar").textContent = (resumeName(resume) || "候选人").slice(0, 2);
   $("resumeConversationTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
   $("resumeConversationSubtitle").textContent = "正在读取平台聊天记录";
   $("resumeConversationMeta").innerHTML = '<span class="resume-conversation-chip">读取中</span>';
   $("resumeConversationMessages").innerHTML = '<div class="resume-conversation-loading">正在读取聊天记录...</div>';
-  $("resumeConversationCloseBtn").focus({ preventScroll: true });
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!modal.hidden && state.resumeConversationResumeId === resumeId) {
+      modal.dataset.state = "open";
+      $("resumeConversationCloseBtn").focus({ preventScroll: true });
+    }
+  }));
 }
-function closeResumeConversation() {
+function closeResumeConversation({ immediate = false } = {}) {
   const modal = $("resumeConversationModal");
   if (!modal || modal.hidden) return;
   state.resumeConversationRequestSequence += 1;
@@ -614,12 +639,20 @@ function closeResumeConversation() {
     state.resumeConversationAbortController.abort();
     state.resumeConversationAbortController = null;
   }
-  modal.hidden = true;
-  modal.dataset.state = "closed";
-  $("resumeConversationMessages").innerHTML = "";
-  const previousFocus = state.resumeConversationPreviousFocus;
-  state.resumeConversationPreviousFocus = null;
-  if (previousFocus?.focus) previousFocus.focus({ preventScroll: true });
+  if (state.resumeConversationCloseTimer) clearTimeout(state.resumeConversationCloseTimer);
+  state.resumeConversationCloseTimer = null;
+  if (immediate) {
+    finishResumeConversationClose();
+    return;
+  }
+  modal.dataset.state = "closing";
+  const dialog = modal.querySelector(".resume-conversation-dialog");
+  const finish = () => {
+    if (modal.hidden || modal.dataset.state !== "closing") return;
+    finishResumeConversationClose();
+  };
+  dialog.addEventListener("transitionend", finish, { once: true });
+  state.resumeConversationCloseTimer = setTimeout(finish, 240);
 }
 function handleResumePreviewContextMenu(event) {
   if (!isAdminUser() || !state.selectedId) return;
@@ -1324,12 +1357,16 @@ function renderMiniList() {
       const imported = resumeListCompactImportDate(resume);
       const major = resumeListMajor(resume) || "暂未提取到";
       const memberDecisionBadge = memberDecisionBadgeMarkup(resume);
+      const scoreLabel = resumeScoreLabel(resume);
       return `
         <button class="candidate-card ${resume.id === state.selectedId ? "active candidate-card--focus-pop" : ""}" data-open="${resume.id}" style="z-index: 1; margin: 0px;">
           <span class="candidate-card__heading">
             <strong>${escapeHtml(resumeName(resume))}</strong>
-            <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
-            ${memberDecisionBadge}
+            <span class="candidate-card__score ${scoreLabel === "--" ? "candidate-card__score--empty" : ""}" title="简历评分">${escapeHtml(scoreLabel)}</span>
+            <span class="candidate-card__heading-status">
+              <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
+              ${memberDecisionBadge}
+            </span>
           </span>
           <span class="candidate-card__job">
             <span class="candidate-card__job-main">${escapeHtml(resumeJob(resume))}</span>
