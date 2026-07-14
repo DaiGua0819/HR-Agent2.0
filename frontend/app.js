@@ -157,6 +157,7 @@ function handleAuthExpired(error) {
   const message = "登录已失效，请重新使用飞书授权登录";
   state.user = null;
   state.resumes = [];
+  closeResumeConversation({ immediate: true });
   state.selectedId = "";
   state.context = null;
   state.total = 0;
@@ -642,6 +643,7 @@ async function openResumeConversation() {
   } catch (error) {
     if (error?.name === "AbortError") return;
     if (requestSequence !== state.resumeConversationRequestSequence) return;
+    if (state.selectedId !== resumeId) return;
     $("resumeConversationMessages").innerHTML = '<div class="resume-conversation-empty">聊天记录读取失败，请关闭后重试。</div>';
   } finally {
     if (state.resumeConversationAbortController === controller) state.resumeConversationAbortController = null;
@@ -1273,6 +1275,7 @@ function applySharedQueueData(data, { preserveSelection = false } = {}) {
   state.queueVersion = data.version || state.queueVersion;
   state.queueSummaryLoaded = Boolean(data.version || state.queueSummaryLoaded);
   if (!preserveSelection && state.selectedId && !state.resumes.some((resume) => resume.id === state.selectedId)) {
+    closeResumeConversation({ immediate: true });
     state.selectedId = "";
     state.context = null;
   }
@@ -2325,6 +2328,7 @@ async function advanceAfterReviewAction(id) {
       await openResume(next.id);
       return;
     }
+    closeResumeConversation({ immediate: true });
     state.selectedId = "";
     state.context = null;
     $("previewTitle").textContent = "当前没有待你处理的简历";
@@ -2355,6 +2359,7 @@ async function advanceAfterReviewAction(id) {
     return;
   }
   if (!state.resumes.length) {
+    closeResumeConversation({ immediate: true });
     state.selectedId = "";
     state.context = null;
     renderRows();
@@ -3303,6 +3308,7 @@ async function logout() {
   stopQueueSummaryPolling();
   await api("/api/auth/logout", { method: "POST" });
   state.user = null;
+  closeResumeConversation({ immediate: true });
   state.selectedId = "";
   state.context = null;
   state.jobType = "";

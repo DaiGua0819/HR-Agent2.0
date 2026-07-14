@@ -40,6 +40,47 @@ def test_member_right_click_keeps_browser_default_menu() -> None:
     )
 
 
+def test_resume_conversation_failure_and_selection_clears_cannot_leave_stale_modal() -> None:
+    """Conversation errors and every selection reset must cancel the visible conversation."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    close_call = "closeResumeConversation({ immediate: true })"
+    selected_clear = 'state.selectedId = ""'
+
+    conversation_block = script.split("async function openResumeConversation()", 1)[1].split(
+        "function selectedReviewState()", 1
+    )[0]
+    failure_block = conversation_block.split("} catch (error) {", 1)[1].split(
+        "} finally {", 1
+    )[0]
+    assert "if (state.selectedId !== resumeId) return" in failure_block
+    assert failure_block.index("if (state.selectedId !== resumeId) return") < failure_block.index(
+        '$("resumeConversationMessages").innerHTML'
+    )
+
+    auth_block = script.split("function handleAuthExpired(error)", 1)[1].split(
+        "function escapeHtml", 1
+    )[0]
+    queue_block = script.split("function applySharedQueueData", 1)[1].split(
+        "function renderRows", 1
+    )[0]
+    advance_block = script.split("async function advanceAfterReviewAction(id)", 1)[1].split(
+        "async function requestInterview", 1
+    )[0]
+    logout_block = script.split("async function logout()", 1)[1].split("async function init", 1)[0]
+
+    for block in (auth_block, queue_block, logout_block):
+        assert block.index(close_call) < block.index(selected_clear)
+
+    clear_positions = [
+        index
+        for index in range(len(advance_block))
+        if advance_block.startswith(selected_clear, index)
+    ]
+    assert len(clear_positions) == 2
+    assert all(advance_block.rfind(close_call, 0, index) != -1 for index in clear_positions)
+
+
 def test_resume_library_uses_ten_items_per_page() -> None:
     """The resume library should request ten resumes per page by default."""
 
