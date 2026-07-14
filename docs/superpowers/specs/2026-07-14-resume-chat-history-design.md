@@ -156,6 +156,46 @@ GET /api/resumes/{resume_id}/conversation
 
 消息文本一律使用转义后的文本节点，不把聊天内容作为 HTML 注入。
 
+### Transition Animation
+
+动画参考高星开源项目的进入/离开状态管理：
+
+- [Motion](https://github.com/motiondivision/motion)：面板使用轻微位移、缩放和透明度组合，不做突兀弹跳。
+- [Headless UI](https://github.com/tailwindlabs/headlessui)：进入和离开使用独立状态，关闭动画结束后才移除弹窗。
+- [AutoAnimate](https://github.com/formkit/auto-animate)：保持动画参数克制，让内容变化不影响阅读。
+
+当前页面使用原生 JavaScript/CSS，因此不新增动画框架依赖。实现参数：
+
+- 打开遮罩：`opacity: 0 -> 1`，`180ms ease-out`。
+- 打开面板：`opacity: 0 -> 1`、`translateY(12px) -> 0`、`scale(0.985) -> 1`，`240ms cubic-bezier(0.22, 1, 0.36, 1)`。
+- 关闭遮罩：`opacity: 1 -> 0`，`140ms ease-in`。
+- 关闭面板：`opacity: 1 -> 0`、`translateY(0) -> 6px`、`scale(1) -> 0.99`，`160ms cubic-bezier(0.4, 0, 1, 1)`。
+- 消息内容加载完成后只做一次短透明度淡入，不让每条历史消息逐条飞入。
+- 不使用弹簧、旋转、背景模糊放大等强调性动画，保持招聘工作台的安静感。
+
+状态流程：
+
+1. 插入弹窗并设置 `data-state="opening"`。
+2. 下一帧切换为 `data-state="open"`，触发进入动画。
+3. 关闭时切换为 `data-state="closing"`，同时取消未完成请求。
+4. 等待面板 `transitionend` 后设置 `hidden` 并清空内容。
+5. 增加约 `240ms` 的兜底计时器，避免浏览器未触发 `transitionend` 时弹窗残留。
+6. 连续右键、快速关闭或切换简历时，只允许最新 generation 操作当前弹窗。
+
+适配系统辅助设置：
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  .resume-conversation-backdrop,
+  .resume-conversation-dialog {
+    transition-duration: 1ms;
+    transform: none;
+  }
+}
+```
+
+这样既保留丝滑过渡，也不会让对动态效果敏感的用户被强制观看动画。
+
 ### Accessibility
 
 - 面板使用 `role="dialog"`、`aria-modal="true"` 和明确标题。
@@ -210,6 +250,7 @@ GET /api/resumes/{resume_id}/conversation
 - 前端仅 admin 右键拦截默认菜单。
 - 快速切换候选人时旧响应不能覆盖新弹窗。
 - 关闭、Escape、遮罩点击和 401 状态行为正确。
+- 进入动画、关闭动画、快速重复打开和 `prefers-reduced-motion` 行为正确。
 - `node --check frontend/app.js`、相关 pytest 和 `ruff check app tests` 通过。
 
 ### Local Real-data Verification
