@@ -14,6 +14,7 @@ from app.domain.auto_sync.service import AutoSyncService
 from app.domain.auto_sync.worker import AutoSyncWorker, AutoSyncWorkerConfig
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from scripts.run_auto_sync import build_worker
 
 
 def test_single_instance_lock_prevents_overlapping_workers(tmp_path: Path) -> None:
@@ -28,6 +29,18 @@ def test_single_instance_lock_prevents_overlapping_workers(tmp_path: Path) -> No
 
     with SingleInstanceLock(lock_path):
         assert lock_path.is_file()
+
+
+def test_worker_requires_explicit_enable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.settings import load_settings
+
+    monkeypatch.setenv("AUTO_SYNC_ENABLED", "false")
+    load_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="AUTO_SYNC_ENABLED must be true"):
+            build_worker()
+    finally:
+        load_settings.cache_clear()
 
 
 def test_internal_sync_requires_valid_hmac_and_rejects_stale_request(tmp_path: Path) -> None:

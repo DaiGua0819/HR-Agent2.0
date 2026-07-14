@@ -18,6 +18,8 @@ from app.settings import load_settings  # noqa: E402
 
 def build_worker() -> AutoSyncWorker:
     settings = load_settings()
+    if not settings.auto_sync_enabled:
+        raise RuntimeError("AUTO_SYNC_ENABLED must be true")
     if not settings.auto_sync_server_url:
         raise RuntimeError("AUTO_SYNC_SERVER_URL is required")
     if len(settings.auto_sync_secret) < 32:
