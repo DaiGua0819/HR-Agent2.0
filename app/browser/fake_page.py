@@ -72,6 +72,11 @@ class FakePage:
         return items[0] if items else None
 
     async def query_all(self, selector: str) -> list[FakeElement]:
+        if ".chat-message-filter-left span" in selector:
+            return [
+                FakeElement(self, "boss-filter-all", "全部"),
+                FakeElement(self, "boss-filter-unread", "未读"),
+            ]
         if (
             ".im-session-item__box" in selector
             or ".user-list-item" in selector
@@ -229,6 +234,8 @@ class FakePage:
             return {
                 "rows": self._fake_unread_rows()
             }
+        if ".chat-message-filter-left span.active" in script:
+            return "未读" if self.unread_selected else "全部"
         if script == "boss.read_chat_context":
             return self.current_conversation()
         if script == "job51.read_chat_context":

@@ -240,7 +240,14 @@ class WorkerRuntime:
 
     async def _prepare_message_adapter(self, adapter: Any) -> None:
         await adapter.open_chat_page()
-        await adapter.select_unread_filter()
+        unread_state = await adapter.select_unread_filter()
+        if (
+            isinstance(unread_state, dict)
+            and "ready" in unread_state
+            and not bool(unread_state.get("ready"))
+        ):
+            reason = str(unread_state.get("reason") or "unread_list_not_ready")
+            raise RuntimeError(reason)
         await adapter.select_positions(None)
 
     async def _find_next_unread_thread(

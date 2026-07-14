@@ -223,6 +223,62 @@ class BossFilterHierarchyPage(FakePage):
         return await super().eval_js(script, arg)
 
 
+class BossUnreadHydrationPage(FakePage):
+    """BOSS rows render before unread badge data finishes hydrating."""
+
+    def __init__(self, *, eventually_ready: bool = True) -> None:
+        super().__init__(
+            conversations=[
+                {
+                    "id": "hydrated-unread",
+                    "name": "延迟徽标候选人",
+                    "position": "AI应用开发实习生",
+                    "label": "延迟徽标候选人 AI应用开发实习生",
+                    "unread_count": 2,
+                }
+            ],
+            url=boss_actions.selectors.CHAT_URL,
+        )
+        self.eventually_ready = eventually_ready
+        self.state_reads = 0
+        self.goto_calls = 0
+
+    async def goto(self, url: str) -> None:
+        self.goto_calls += 1
+        await super().goto(url)
+
+    async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
+        _ = selector, timeout_ms
+        return True
+
+    async def query_all(self, selector: str):
+        if selector == boss_actions.selectors.MESSAGE_FILTER_OPTION:
+            return [FakeElement(self, "hydration-filter-unread", "未读")]
+        return await super().query_all(selector)
+
+    async def handle_element_click(self, element) -> None:
+        if element.selector == "hydration-filter-unread":
+            self.unread_selected = True
+            return
+        await super().handle_element_click(element)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "boss_unread_list_state" in script:
+            self.state_reads += 1
+            badges_ready = self.eventually_ready and self.state_reads >= 3
+            return {
+                "activeFilter": "未读" if self.unread_selected else "全部",
+                "rowCount": 40,
+                "badgeRowCount": 35 if badges_ready else 0,
+                "menuUnreadCount": 53,
+                "loading": not badges_ready,
+                "emptyState": False,
+            }
+        if ".chat-message-filter-left span.active" in script:
+            return "未读" if self.unread_selected else "全部"
+        return await super().eval_js(script, arg)
+
+
 def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
     """同一张图和同一个 runner 类可分别注入智联/BOSS adapter。"""
 
@@ -865,6 +921,53 @@ def test_boss_unread_filter_clicks_exact_option_not_parent_container() -> None:
     assert result["selected"] is True
     assert "filter-unread" in page.clicks
     assert "filter-parent" not in page.clicks
+
+
+def test_boss_open_chat_page_reuses_ready_page_without_reload() -> None:
+    page = BossUnreadHydrationPage()
+
+    asyncio.run(boss_actions.open_chat_page(page))
+
+    assert page.goto_calls == 0
+
+
+def test_boss_unread_filter_waits_until_delayed_badges_are_ready(monkeypatch) -> None:
+    page = BossUnreadHydrationPage()
+    monkeypatch.setattr(boss_actions, "BOSS_UNREAD_READY_POLL_MS", 0)
+
+    result = asyncio.run(boss_actions.select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert result["ready"] is True
+    assert result["status"] == "ready_with_unread"
+    assert page.state_reads >= 3
+
+
+def test_boss_unread_filter_reuses_already_active_state(monkeypatch) -> None:
+    page = BossUnreadHydrationPage()
+    page.unread_selected = True
+    monkeypatch.setattr(boss_actions, "BOSS_UNREAD_READY_POLL_MS", 0)
+
+    result = asyncio.run(boss_actions.select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert result["ready"] is True
+    assert result["click"]["method"] == "already_active"
+    assert page.clicks == []
+
+
+def test_boss_unread_state_with_menu_count_does_not_false_drain(monkeypatch) -> None:
+    page = BossUnreadHydrationPage(eventually_ready=False)
+    page.unread_selected = True
+    monkeypatch.setattr(boss_actions, "BOSS_UNREAD_READY_POLL_MS", 0)
+
+    result = asyncio.run(
+        boss_actions.wait_for_unread_list_ready(page, timeout_ms=1)
+    )
+
+    assert result["ready"] is False
+    assert result["reason"] == "boss_unread_list_not_ready"
+    assert result["state"]["menuUnreadCount"] == 53
 
 
 def test_boss_send_message_uses_atomic_humanized_type_and_send(monkeypatch) -> None:

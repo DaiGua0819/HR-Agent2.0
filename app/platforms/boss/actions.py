@@ -6,6 +6,8 @@ Phase 2 测试通过 FakePage 验证顺序、选择器和业务分支。
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from app.browser.base import BrowserElement, BrowserPage
@@ -13,6 +15,7 @@ from app.core.constants import Platform
 from app.platforms.boss import actions_recommend, actions_resume, selectors
 from app.platforms.boss.dom_scripts import (
     READ_CHAT_CONTEXT_JS,
+    READ_UNREAD_LIST_STATE_JS,
     READ_UNREAD_ROWS_JS,
 )
 from app.platforms.boss.interaction import (
@@ -32,22 +35,39 @@ from app.platforms.types import (
 )
 
 SYSTEM_SKIP_TERMS = ("平台推荐", "系统消息", "BOSS直聘", "职位助手")
+BOSS_UNREAD_READY_TIMEOUT_MS = 8000
+BOSS_UNREAD_READY_POLL_MS = 200
+_CHAT_READY_SELECTOR = (
+    ".chat-message-filter, .chat-message-filter-left, .chat-user, "
+    f"{selectors.SESSION_ITEM}"
+)
 
 
 async def open_chat_page(page: BrowserPage) -> None:
     """打开 BOSS 招聘端聊天页。"""
 
+    current_url = str(getattr(page, "url", "") or "")
+    if "zhipin.com/web/chat" in current_url:
+        if await page.wait_for(_CHAT_READY_SELECTOR, timeout_ms=1500):
+            return
     await page.goto(selectors.CHAT_URL)
-    await page.wait_for(
-        ".chat-message-filter, .chat-message-filter-left, .chat-user, "
-        f"{selectors.SESSION_ITEM}",
-        timeout_ms=12000,
-    )
+    if not await page.wait_for(_CHAT_READY_SELECTOR, timeout_ms=12000):
+        raise RuntimeError("boss_chat_page_not_ready")
 
 
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """点击 BOSS 未读筛选。"""
 
+    active_before = await _active_message_filter_label(page)
+    if active_before == "未读":
+        readiness = await wait_for_unread_list_ready(page)
+        return {
+            "selected": True,
+            "label": "未读",
+            "active": active_before,
+            "click": {"ok": True, "method": "already_active"},
+            **readiness,
+        }
     candidates = await page.query_all(selectors.MESSAGE_FILTER_OPTION)
     if not candidates:
         candidates = await page.query_all(selectors.UNREAD_FILTER)
@@ -61,13 +81,101 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
                 verify=lambda: _verify_filter_label(page, "未读"),
             )
             active = await _active_message_filter_label(page)
+            selected = bool(result.get("ok")) and active == "未读"
+            readiness = (
+                await wait_for_unread_list_ready(page)
+                if selected
+                else {
+                    "ready": False,
+                    "status": "filter_not_active",
+                    "reason": "boss_unread_filter_not_active",
+                    "state": {"activeFilter": active},
+                }
+            )
             return {
-                "selected": bool(result.get("ok")) and active == "未读",
+                "selected": selected,
                 "label": label,
                 "active": active,
                 "click": result,
+                **readiness,
             }
-    return {"selected": False, "reason": "unread_filter_not_found"}
+    return {
+        "selected": False,
+        "ready": False,
+        "status": "filter_not_found",
+        "reason": "unread_filter_not_found",
+    }
+
+
+async def wait_for_unread_list_ready(
+    page: BrowserPage,
+    *,
+    timeout_ms: int = BOSS_UNREAD_READY_TIMEOUT_MS,
+) -> dict[str, object]:
+    """Wait until BOSS unread data is hydrated or an empty list is confirmed."""
+
+    deadline = time.monotonic() + max(timeout_ms, 0) / 1000
+    stable_empty_reads = 0
+    last_state: dict[str, object] = {}
+    while True:
+        state = await inspect_unread_list_state(page)
+        last_state = state
+        active = _compact(str(state.get("activeFilter") or "")) == "未读"
+        badge_rows = _safe_int(state.get("badgeRowCount"))
+        row_count = _safe_int(state.get("rowCount"))
+        menu_unread = _safe_int(state.get("menuUnreadCount"))
+        loading = bool(state.get("loading"))
+        if active and badge_rows > 0:
+            return {
+                "ready": True,
+                "status": "ready_with_unread",
+                "reason": "",
+                "state": state,
+            }
+        empty_candidate = bool(
+            active
+            and not loading
+            and (
+                bool(state.get("emptyState"))
+                or (row_count == 0 and menu_unread == 0)
+            )
+        )
+        stable_empty_reads = stable_empty_reads + 1 if empty_candidate else 0
+        if stable_empty_reads >= 2:
+            return {
+                "ready": True,
+                "status": "confirmed_empty",
+                "reason": "",
+                "state": state,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "ready": False,
+                "status": "not_ready",
+                "reason": "boss_unread_list_not_ready",
+                "state": last_state,
+            }
+        await asyncio.sleep(max(BOSS_UNREAD_READY_POLL_MS, 0) / 1000)
+
+
+async def inspect_unread_list_state(page: BrowserPage) -> dict[str, object]:
+    """Read BOSS filter/list hydration evidence without changing page state."""
+
+    raw = await _safe_eval_dict(page, READ_UNREAD_LIST_STATE_JS)
+    if raw:
+        return raw
+    rows = await read_unread_row_states(page)
+    active = await _active_message_filter_label(page)
+    if not active and bool(getattr(page, "unread_selected", False)):
+        active = "未读"
+    return {
+        "activeFilter": active,
+        "rowCount": len(rows),
+        "badgeRowCount": len(rows),
+        "menuUnreadCount": sum(_safe_int(item.get("unread_count")) for item in rows),
+        "loading": False,
+        "emptyState": not rows,
+    }
 
 
 async def select_positions(

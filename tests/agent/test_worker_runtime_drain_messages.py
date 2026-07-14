@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from app.core.constants import Platform
 from app.platforms.types import ConversationRef
 from app.worker.runtime import WorkerRuntime
@@ -38,6 +39,25 @@ def test_worker_drain_messages_stops_at_max_contacts(monkeypatch) -> None:
     assert payload["stopReason"] == "max_contacts_reached"
     assert [item["conversationId"] for item in payload["contacts"]] == ["conv-1", "conv-2"]
     assert adapter.find_excludes == [set(), {"conv-1"}]
+
+
+def test_worker_drain_messages_rejects_unready_unread_filter(monkeypatch) -> None:
+    adapter = DrainAdapter(
+        ["conv-1"],
+        unread_result={
+            "selected": True,
+            "ready": False,
+            "reason": "boss_unread_list_not_ready",
+        },
+    )
+    runtime = WorkerRuntime(owner="owner-a", port=8801)
+
+    _install_runtime_fakes(monkeypatch, runtime, adapter)
+
+    with pytest.raises(RuntimeError, match="boss_unread_list_not_ready"):
+        asyncio.run(runtime.drain_messages(Platform.BOSS, max_contacts=5))
+
+    assert adapter.find_excludes == []
 
 
 def _install_runtime_fakes(
@@ -77,8 +97,14 @@ class FakeRunner:
 
 
 class DrainAdapter:
-    def __init__(self, conversation_ids: list[str]) -> None:
+    def __init__(
+        self,
+        conversation_ids: list[str],
+        *,
+        unread_result: dict[str, object] | None = None,
+    ) -> None:
         self.conversation_ids = conversation_ids
+        self.unread_result = unread_result or {"selected": True}
         self.current_conversation_id = ""
         self.events: list[str] = []
         self.find_excludes: list[set[str]] = []
@@ -88,7 +114,7 @@ class DrainAdapter:
 
     async def select_unread_filter(self) -> dict[str, object]:
         self.events.append("select_unread_filter")
-        return {"selected": True}
+        return dict(self.unread_result)
 
     async def select_positions(self, target_position: str | None = None) -> dict[str, object]:
         _ = target_position

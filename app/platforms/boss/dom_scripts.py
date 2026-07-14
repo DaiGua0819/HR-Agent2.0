@@ -100,6 +100,61 @@ READ_UNREAD_ROWS_JS = r"""
 }
 """
 
+READ_UNREAD_LIST_STATE_JS = r"""
+() => {
+  // boss_unread_list_state
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const visibleText = (node) => (node && node.innerText ? node.innerText.trim() : "");
+  const parseCount = (node) => {
+    const match = visibleText(node).match(/\d+/);
+    return match ? Number.parseInt(match[0], 10) : 0;
+  };
+  const activeFilter = Array.from(
+    document.querySelectorAll(".chat-message-filter-left span.active")
+  ).find(visible);
+  const rows = Array.from(document.querySelectorAll(
+    ".user-list .geek-item, .chat-user-list .user-list-item, " +
+    ".chat-list .user-item, .user-list-item"
+  )).filter(visible);
+  const badgeRowCount = rows.filter((row) => {
+    const badges = Array.from(row.querySelectorAll(
+      ".badge-count, [class*='badge-count'], [class*='unread-count']"
+    )).filter(visible);
+    return badges.some((badge) => parseCount(badge) > 0);
+  }).length;
+  const menuBadges = Array.from(document.querySelectorAll(
+    ".menu-chat-badge, .menu-chat .badge, [class*='menu-chat-badge']"
+  )).filter(visible);
+  const menuUnreadCount = menuBadges.reduce(
+    (maximum, badge) => Math.max(maximum, parseCount(badge)),
+    0
+  );
+  const loading = Array.from(document.querySelectorAll(
+    ".user-list .loading, .user-list [class*='loading'], " +
+    ".chat-user-list [class*='loading'], .boss-loading, .ui-loading"
+  )).some(visible);
+  const listText = visibleText(
+    document.querySelector(".user-list, .chat-user-list, .chat-list")
+  );
+  const emptyState = /暂无(?:未读|消息|沟通)|没有(?:未读|消息)|无未读/.test(listText);
+  return {
+    activeFilter: visibleText(activeFilter),
+    rowCount: rows.length,
+    badgeRowCount,
+    menuUnreadCount,
+    loading,
+    emptyState,
+    listText: listText.slice(0, 300),
+  };
+}
+"""
+
 READ_CHAT_CONTEXT_JS = r"""
 () => {
   const visibleText = (node) => (node && node.innerText ? node.innerText.trim() : "");
