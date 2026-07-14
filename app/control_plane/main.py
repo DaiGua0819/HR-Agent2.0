@@ -23,6 +23,8 @@ from app.api.routes.resumes import router as resumes_router
 from app.api.routes.scoring import router as scoring_router
 from app.control_plane.dispatcher import Dispatcher
 from app.domain.batch.service import BatchService
+from app.domain.conversation.repository import ConversationRepository
+from app.domain.conversation.service import ResumeConversationService
 from app.domain.email_import.service import GLOBAL_EMAIL_IMPORT_SERVICE
 from app.domain.resume.repository import ResumeRepository
 from app.domain.resume.service import ResumeService
@@ -50,13 +52,16 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     app = FastAPI(title="HR Agent Control Plane", lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     repository = ResumeRepository.from_settings()
+    conversation_repository = ConversationRepository(settings.resolved_database_path)
     scoring_service = ScoringService(repository)
     review_repository = ResumeReviewRepository(settings.resolved_database_path)
 
     app.state.dispatcher = dispatcher or Dispatcher()
     app.state.resume_repository = repository
+    app.state.conversation_repository = conversation_repository
     app.state.scoring_service = scoring_service
     app.state.resume_service = ResumeService(repository, scoring_service=scoring_service)
+    app.state.resume_conversation_service = ResumeConversationService(conversation_repository)
     app.state.resume_review_service = ResumeReviewService(
         review_repository,
         resume_repository=repository,
@@ -64,7 +69,10 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     )
     app.state.batch_service = BatchService()
     app.state.email_import_service = GLOBAL_EMAIL_IMPORT_SERVICE
-    app.state.interview_center_service = InterviewCenterService(repository=repository)
+    app.state.interview_center_service = InterviewCenterService(
+        repository=repository,
+        conversation_repository=conversation_repository,
+    )
 
     app.include_router(auth_router)
     app.include_router(health_router)

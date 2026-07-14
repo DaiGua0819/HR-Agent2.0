@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from app.api.routes.auth import current_user_id, require_session_payload
 from app.auth.resume_scope import allowed_job_types, resume_visible_to_payload
 from app.core.text import clean_text
+from app.domain.conversation.service import ResumeConversationService
 from app.domain.resume.files import (
     preview_file_path,
     preview_media_type,
@@ -51,6 +52,21 @@ def _service(request: Request) -> ResumeService:
 
 def _review_service(request: Request) -> ResumeReviewService | None:
     return getattr(request.app.state, "resume_review_service", None)
+
+
+def _conversation_service(request: Request) -> ResumeConversationService:
+    service = getattr(request.app.state, "resume_conversation_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="conversation_service_unavailable")
+    return service
+
+
+def _assert_admin_conversation_access(request: Request) -> None:
+    payload = require_session_payload(request)
+    roles = payload.get("roles")
+    allowed = isinstance(roles, list) and any(role in {"admin", "super_admin"} for role in roles)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="admin_conversation_forbidden")
 
 
 @router.get("")
@@ -133,6 +149,16 @@ async def get_resume(resume_id: str, request: Request) -> dict[str, object]:
     resume = _service(request).get_resume(resume_id)
     _assert_resume_visible(request, resume)
     return _resume_payload(resume)
+
+
+@router.get("/{resume_id}/conversation")
+async def get_resume_conversation(resume_id: str, request: Request) -> dict[str, object]:
+    """Return one resume's persisted platform conversation to administrators."""
+
+    _assert_admin_conversation_access(request)
+    resume = _service(request).get_resume(resume_id)
+    _assert_resume_visible(request, resume)
+    return _conversation_service(request).get_for_resume(resume)
 
 
 @router.get("/{resume_id}/file")

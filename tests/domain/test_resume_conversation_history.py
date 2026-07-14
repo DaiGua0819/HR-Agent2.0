@@ -1,10 +1,14 @@
 from pathlib import Path
 
+from app.control_plane.main import create_app
 from app.domain.conversation.models import ConversationSession
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.conversation.service import MAX_CONVERSATION_MESSAGES, ResumeConversationService
 from app.domain.resume.models import Resume
+from app.domain.resume.repository import ResumeRepository
+from app.domain.resume.service import ResumeService
 from app.platforms.types import ChatMessage, MessageSender
+from fastapi.testclient import TestClient
 
 
 def _session(session_id: str = "session-1") -> ConversationSession:
@@ -105,3 +109,53 @@ def test_conversation_history_is_limited_to_latest_200_messages(tmp_path: Path) 
     assert len(payload["messages"]) == MAX_CONVERSATION_MESSAGES
     assert payload["messages"][0]["text"] == "message-005"
     assert payload["messages"][-1]["text"] == "message-204"
+
+
+def _conversation_app(tmp_path: Path):
+    conversation_repository = ConversationRepository(tmp_path / "conversation.sqlite")
+    conversation_repository.save_session(_session())
+    conversation_repository.upsert_messages(
+        "session-1",
+        [ChatMessage(sender=MessageSender.CANDIDATE, text="hello", time="20:31")],
+    )
+    resume_repository = ResumeRepository.in_memory([_linked_resume().to_record()])
+    app = create_app()
+    app.state.auth_session_store_path = tmp_path / "auth.sqlite"
+    app.state.resume_repository = resume_repository
+    app.state.resume_service = ResumeService(resume_repository)
+    app.state.resume_conversation_service = ResumeConversationService(conversation_repository)
+    return app
+
+
+def test_admin_can_read_linked_resume_conversation(tmp_path: Path) -> None:
+    app = _conversation_app(tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        response = client.get("/api/resumes/resume-1/conversation")
+
+    assert response.status_code == 200
+    assert response.json()["matched"] is True
+    assert response.json()["messages"][0]["text"] == "hello"
+
+
+def test_member_cannot_read_resume_conversation(tmp_path: Path) -> None:
+    app = _conversation_app(tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "member", "password": "member"})
+        response = client.get("/api/resumes/resume-1/conversation")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "admin_conversation_forbidden"
+
+
+def test_missing_resume_returns_not_found_after_admin_check(tmp_path: Path) -> None:
+    app = _conversation_app(tmp_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        response = client.get("/api/resumes/missing/conversation")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "resume_not_found"
