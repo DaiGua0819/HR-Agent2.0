@@ -18,6 +18,7 @@ from app.platforms.zhilian import selectors
 from app.platforms.zhilian.actions import (
     _normalize_unread_rows,
     _state_matches_context,
+    _unread_row_identity,
     find_next_unread_thread,
     inspect_resume_request_state,
     read_unread_conversations,
@@ -473,6 +474,143 @@ def test_zhilian_unread_badge_without_visible_count_counts_as_one() -> None:
     assert rows[0]["unread_count"] == 1
 
 
+def test_zhilian_unread_rows_keep_stable_identity_fields() -> None:
+    """Virtual rows retain the fields needed for a stable contact identity."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "index": 0,
+                "id": "",
+                "label": "赵乙\nAI产品经理\n请问还在招聘吗\n07-14\n不合适",
+                "name": "赵乙",
+                "position": "AI产品经理",
+                "latestMessage": "请问还在招聘吗",
+                "unreadCount": 1,
+            }
+        ]
+    )
+
+    assert rows[0]["name"] == "赵乙"
+    assert rows[0]["latest_message"] == "请问还在招聘吗"
+
+
+def test_zhilian_unread_identity_distinguishes_same_name_and_position_by_avatar() -> None:
+    """Two same-name rows remain distinct when Zhilian exposes different avatar URLs."""
+
+    rows = _normalize_unread_rows(
+        [
+            {
+                "id": "",
+                "label": "王女士\nAI产品经理\n你好",
+                "name": "王女士",
+                "position": "AI产品经理",
+                "avatarKey": "https://mypics.zhaopin.cn/avatar/candidate-a.jpg",
+                "unreadCount": 1,
+            },
+            {
+                "id": "",
+                "label": "王女士\nAI产品经理\n请问还招吗",
+                "name": "王女士",
+                "position": "AI产品经理",
+                "avatarKey": "https://mypics.zhaopin.cn/avatar/candidate-b.jpg",
+                "unreadCount": 1,
+            },
+        ]
+    )
+
+    identities = {_unread_row_identity(row) for row in rows}
+
+    assert len(identities) == 2
+
+
+def test_zhilian_find_next_unread_scrolls_virtual_list_until_new_contact() -> None:
+    """A quiet first window must not hide unread contacts further down the virtual list."""
+
+    first = {
+        **conversation(
+            "AI产品经理",
+            [{"sender": "me", "text": "你好，方便发一份简历过来吗"}],
+        ),
+        "id": "chat-first",
+        "name": "张甲",
+        "label": "张甲\nAI产品经理\n你好，方便发一份简历过来吗\n07-14\n不合适",
+    }
+    second = {
+        **conversation(
+            "AI产品经理",
+            [{"sender": "other", "text": "请问还在招聘吗"}],
+        ),
+        "id": "chat-second",
+        "name": "赵乙",
+        "label": "赵乙\nAI产品经理\n请问还在招聘吗\n07-14\n不合适",
+    }
+    page = VirtualizedZhilianPage(
+        conversations=[first, second],
+        windows=[
+            [virtual_row(first)],
+            [virtual_row(second)],
+        ],
+    )
+
+    ref = asyncio.run(find_next_unread_thread(page, owner="和新红"))
+
+    assert ref is not None
+    assert ref.conversation_id == "zhilian-row:赵乙|AI产品经理"
+    assert page.scroll_calls == 1
+    assert page.selected_index == 1
+
+
+def test_zhilian_find_next_unread_confirms_virtual_bottom_before_drained() -> None:
+    """The bottom of a virtual list must be stable before no next contact is reported."""
+
+    item = {
+        **conversation(
+            "AI产品经理",
+            [{"sender": "me", "text": "你好，方便发一份简历过来吗"}],
+        ),
+        "id": "chat-only",
+        "name": "张甲",
+        "label": "张甲\nAI产品经理\n你好，方便发一份简历过来吗\n07-14\n不合适",
+    }
+    page = VirtualizedZhilianPage(
+        conversations=[item],
+        windows=[[virtual_row(item)]],
+    )
+
+    ref = asyncio.run(find_next_unread_thread(page, owner="和新红"))
+
+    assert ref is None
+    assert page.read_calls >= 3
+    assert page.scroll_calls == 0
+
+
+def test_zhilian_select_unread_filter_resets_virtual_list_to_top() -> None:
+    """Every fresh unread run starts from the top rather than a stale scroll position."""
+
+    first = {
+        **conversation("AI产品经理", [{"sender": "other", "text": "第一条"}]),
+        "name": "张甲",
+        "label": "张甲\nAI产品经理\n第一条\n07-14\n不合适",
+    }
+    second = {
+        **conversation("AI产品经理", [{"sender": "other", "text": "第二条"}]),
+        "name": "赵乙",
+        "label": "赵乙\nAI产品经理\n第二条\n07-14\n不合适",
+    }
+    page = VirtualizedZhilianPage(
+        conversations=[first, second],
+        windows=[[virtual_row(first)], [virtual_row(second)]],
+        window_index=1,
+    )
+
+    result = asyncio.run(select_unread_filter(page))
+
+    assert result["selected"] is True
+    assert page.window_index == 0
+    assert page.reset_calls == 1
+
+
 def test_zhilian_find_next_unread_skips_rows_without_candidate_reply() -> None:
     """Rows left in the unread tab after our reply should not block later candidates."""
 
@@ -838,6 +976,76 @@ class FailedTrustedZhilianUnreadClickPage(UntrustedZhilianUnreadClickPage):
             self.trusted_unread_clicks += 1
             raise RuntimeError("trusted unread click failed")
         await super().handle_element_click(element)
+
+
+class VirtualizedZhilianPage(FakePage):
+    """Expose one rendered conversation window at a time like the live Zhilian list."""
+
+    def __init__(
+        self,
+        *,
+        conversations: list[dict[str, object]],
+        windows: list[list[dict[str, object]]],
+        window_index: int = 0,
+    ) -> None:
+        super().__init__(conversations=conversations)
+        self.windows = windows
+        self.window_index = window_index
+        self.read_calls = 0
+        self.scroll_calls = 0
+        self.reset_calls = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "zhilian.read_unread_rows":
+            self.read_calls += 1
+            viewport = 453
+            step = 360
+            return {
+                "rows": list(self.windows[self.window_index]) if self.windows else [],
+                "rowCount": len(self.windows[self.window_index]) if self.windows else 0,
+                "scrollTop": self.window_index * step,
+                "scrollHeight": max(viewport, viewport + max(len(self.windows) - 1, 0) * step),
+                "clientHeight": viewport,
+                "listFound": True,
+                "atBottom": not self.windows or self.window_index >= len(self.windows) - 1,
+                "emptyState": not any(self.windows),
+                "hasScrollableList": len(self.windows) > 1,
+            }
+        if script == "zhilian.scroll_unread_list":
+            self.scroll_calls += 1
+            before = self.window_index
+            if self.windows and self.window_index < len(self.windows) - 1:
+                self.window_index += 1
+            return {
+                "changed": self.window_index != before,
+                "scrollTop": self.window_index * 360,
+                "atBottom": not self.windows or self.window_index >= len(self.windows) - 1,
+            }
+        if script == "zhilian.reset_unread_list_scroll":
+            self.reset_calls += 1
+            before = self.window_index
+            self.window_index = 0
+            return {
+                "changed": before != 0,
+                "scrollTop": 0,
+                "atBottom": len(self.windows) <= 1,
+            }
+        return await super().eval_js(script, arg)
+
+
+def virtual_row(item: dict[str, object]) -> dict[str, object]:
+    """Build the read-only row payload returned by a virtualized Zhilian window."""
+
+    return {
+        "index": 0,
+        "id": "",
+        "label": str(item.get("label") or ""),
+        "name": str(item.get("name") or ""),
+        "position": str(item.get("position") or ""),
+        "latestMessage": str(item.get("latest_message") or ""),
+        "unreadCount": int(item.get("unread_count") or 0),
+        "hasUnreadBadge": True,
+    }
 
 
 def conversation(position: str, messages: list[dict[str, str]]) -> dict[str, object]:

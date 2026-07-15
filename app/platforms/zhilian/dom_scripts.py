@@ -74,6 +74,12 @@ READ_UNREAD_ROWS_JS = r"""
   };
   const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
   const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) : "");
+  const listCandidates = Array.from(document.querySelectorAll(
+    ".im-session-list__virtual, .im-session-list, [class*='im-session-list']"
+  )).filter(visible);
+  const scrollRoot = listCandidates.find(
+    (el) => el.scrollHeight > el.clientHeight + 4
+  ) || listCandidates[0] || null;
   let rows = Array.from(document.querySelectorAll(".im-session-item__box")).filter(visible);
   if (!rows.length) {
     rows = Array.from(document.querySelectorAll(".im-session-item")).filter(visible);
@@ -112,24 +118,118 @@ READ_UNREAD_ROWS_JS = r"""
       hasUnreadBadge: maxCount > 0 || hasDot,
     };
   };
+  const scrollTop = scrollRoot ? Number(scrollRoot.scrollTop || 0) : 0;
+  const scrollHeight = scrollRoot ? Number(scrollRoot.scrollHeight || 0) : 0;
+  const clientHeight = scrollRoot ? Number(scrollRoot.clientHeight || 0) : 0;
+  const listText = text(scrollRoot);
+  const emptyState = (
+    /暂无(?:未读|消息|沟通|会话)|没有(?:未读|消息|沟通|会话)|无未读/
+  ).test(listText);
   return {
     unreadActive,
+    listFound: Boolean(scrollRoot),
+    hasScrollableList: Boolean(scrollRoot && scrollHeight > clientHeight + 4),
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+    atBottom: !scrollRoot || scrollHeight <= clientHeight + 4 ||
+      scrollTop + clientHeight >= scrollHeight - 4,
+    emptyState,
+    rowCount: rows.length,
     rows: rows.map((row, index) => {
       const label = text(row);
       const lines = label.split(/\n+/).map((line) => line.trim()).filter(Boolean);
       const offset = /^\d+$/.test(lines[0] || "") ? 1 : 0;
+      const nameNode = row.querySelector(".im-session-item__name-title");
       const parsedPosition = lines[offset + 1] || "";
       const positionNode = row.querySelector(".im-session-item-subtitle__suffix");
+      const messageNode = row.querySelector(".im-session-item__msg");
+      const avatarNode = row.querySelector(".km-image__inner, img");
       const badge = parseBadge(row);
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
         label,
+        name: text(nameNode) || lines[offset] || "",
         position: text(positionNode) || parsedPosition,
+        latestMessage: text(messageNode) || lines[offset + 2] || "",
+        avatarKey: attr(avatarNode, "src") || "",
         unreadCount: badge.count,
         hasUnreadBadge: badge.hasUnreadBadge,
       };
     }),
+  };
+}
+"""
+
+RESET_UNREAD_LIST_SCROLL_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const candidates = Array.from(document.querySelectorAll(
+    ".im-session-list__virtual, .im-session-list, [class*='im-session-list']"
+  )).filter(visible);
+  const root = candidates.find((el) => el.scrollHeight > el.clientHeight + 4) ||
+    candidates[0] || null;
+  if (!root) {
+    return { changed: false, listFound: false, reason: "unread_list_not_found" };
+  }
+  const before = Number(root.scrollTop || 0);
+  root.scrollTop = 0;
+  root.dispatchEvent(new Event("scroll", { bubbles: true }));
+  return {
+    changed: before !== Number(root.scrollTop || 0),
+    listFound: true,
+    scrollTop: Number(root.scrollTop || 0),
+    scrollHeight: Number(root.scrollHeight || 0),
+    clientHeight: Number(root.clientHeight || 0),
+    atBottom: root.scrollHeight <= root.clientHeight + 4,
+  };
+}
+"""
+
+SCROLL_UNREAD_LIST_JS = r"""
+(options) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const candidates = Array.from(document.querySelectorAll(
+    ".im-session-list__virtual, .im-session-list, [class*='im-session-list']"
+  )).filter(visible);
+  const root = candidates.find((el) => el.scrollHeight > el.clientHeight + 4) ||
+    candidates[0] || null;
+  if (!root) {
+    return { changed: false, listFound: false, reason: "unread_list_not_found" };
+  }
+  const ratio = Math.min(Math.max(Number(options && options.ratio) || 0.8, 0.5), 0.95);
+  const before = Number(root.scrollTop || 0);
+  const maxTop = Math.max(Number(root.scrollHeight || 0) - Number(root.clientHeight || 0), 0);
+  const distance = Math.max(Math.floor(Number(root.clientHeight || 0) * ratio), 180);
+  const target = Math.min(before + distance, maxTop);
+  if (typeof root.scrollTo === "function") {
+    root.scrollTo({ top: target, behavior: "auto" });
+  } else {
+    root.scrollTop = target;
+  }
+  root.dispatchEvent(new Event("scroll", { bubbles: true }));
+  const after = Number(root.scrollTop || 0);
+  return {
+    changed: Math.abs(after - before) >= 1,
+    listFound: true,
+    before,
+    scrollTop: after,
+    scrollHeight: Number(root.scrollHeight || 0),
+    clientHeight: Number(root.clientHeight || 0),
+    atBottom: after + Number(root.clientHeight || 0) >= Number(root.scrollHeight || 0) - 4,
   };
 }
 """

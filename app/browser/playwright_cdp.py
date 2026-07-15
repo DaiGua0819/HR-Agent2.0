@@ -181,11 +181,17 @@ class PlaywrightCDPPage:
                 return
 
     async def _click_zhilian_attachment_resume_download(self, timeout_ms: int) -> dict[str, Any]:
-        """Click Zhilian attachment card and capture opened PDF bytes."""
+        """Capture Zhilian attachments from a stable PDF tab or a transient download."""
 
         clicked: dict[str, Any] = {}
         target_page = self.page
         opened_new_page = False
+        page_task: asyncio.Task[Any] | None = None
+        download_task: asyncio.Task[Any] | None = None
+        source_page_url = self._safe_page_url(self.page)
+        behavior = await self._setup_zhilian_uuid_download_behavior()
+        download_dir = Path(str(behavior.get("downloadPath") or "")) if behavior.get("ok") else None
+        before_files = self._download_directory_snapshot(download_dir)
         try:
             view = self.page.get_by_text("查看附件简历").last
             if not await view.count():
@@ -197,40 +203,131 @@ class PlaywrightCDPPage:
             page_task = asyncio.create_task(
                 self.page.context.wait_for_event("page", timeout=5000)
             )
+            page_waiter = getattr(self.page, "wait_for_event", None)
+            if callable(page_waiter):
+                download_task = asyncio.create_task(
+                    page_waiter("download", timeout=max(min(timeout_ms, 5000), 1))
+                )
             await view.click(timeout=5000)
-            clicked = {"clicked": True, "source": "zhilian_view_attachment_click"}
-            try:
-                target_page = await page_task
+            clicked = {
+                "clicked": True,
+                "source": "zhilian_view_attachment_click",
+                "downloadBehavior": behavior,
+            }
+            event_tasks = {task for task in (page_task, download_task) if task is not None}
+            if event_tasks:
+                await asyncio.wait(
+                    event_tasks,
+                    timeout=max(min(timeout_ms, 5000), 1) / 1000,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            popup = await self._attachment_task_result(page_task)
+            if popup is not None:
+                target_page = popup
                 opened_new_page = target_page is not self.page
                 clicked["openedPage"] = True
-            except Exception:
+                clicked["popupInitialUrl"] = self._safe_page_url(target_page)
+            else:
                 clicked["openedPage"] = False
-            try:
-                await target_page.wait_for_load_state("domcontentloaded", timeout=10000)
-            except Exception:
-                pass
-            await target_page.wait_for_timeout(1000)
-            fetched = await self._fetch_current_page_bytes(target_page)
-            if fetched.get("ok") and fetched.get("bytes"):
+
+            direct_download = await self._attachment_task_result(download_task)
+            if direct_download is not None:
+                direct = await self._download_event_payload(
+                    direct_download,
+                    download_dir=download_dir,
+                    source="direct_attachment_download",
+                )
+                if direct.get("ok"):
+                    return {"clicked": clicked, **direct}
+
+            if opened_new_page and self._page_is_closed(target_page):
+                clicked["popupClosedBeforeCapture"] = True
+                direct_download = await self._attachment_task_result(
+                    download_task,
+                    timeout_seconds=max(min(timeout_ms, 5000), 1) / 1000,
+                )
+                if direct_download is not None:
+                    direct = await self._download_event_payload(
+                        direct_download,
+                        download_dir=download_dir,
+                        source="direct_attachment_download",
+                    )
+                    if direct.get("ok"):
+                        return {"clicked": clicked, **direct}
+                uuid_download = await self._wait_for_new_download_file(
+                    download_dir,
+                    before_files,
+                    timeout_ms=timeout_ms,
+                )
+                if uuid_download.get("ok"):
+                    return {"clicked": clicked, **uuid_download}
                 return {
-                    "ok": True,
+                    "ok": False,
                     "clicked": clicked,
-                    "filename": fetched.get("filename") or "zhilian_resume.pdf",
-                    "bytes": fetched["bytes"],
-                    "path": "",
-                    "source": "opened_pdf_url",
+                    "reason": "popup_closed_before_capture",
+                    "download": uuid_download,
                 }
-            download = await self._click_pdf_viewer_download(target_page, timeout_ms)
-            if download.get("ok"):
-                return {"clicked": clicked, **download}
+            target_page_url = self._safe_page_url(target_page)
+            target_can_hold_attachment = opened_new_page or bool(
+                target_page_url and target_page_url != source_page_url
+            )
+            if target_can_hold_attachment:
+                try:
+                    await target_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
+                if self._page_is_closed(target_page):
+                    clicked["popupClosedBeforeCapture"] = opened_new_page
+                else:
+                    fetched = await self._fetch_current_page_bytes(target_page)
+                    if fetched.get("ok") and fetched.get("bytes"):
+                        return {
+                            "ok": True,
+                            "clicked": clicked,
+                            "filename": fetched.get("filename") or "zhilian_resume.pdf",
+                            "bytes": fetched["bytes"],
+                            "path": "",
+                            "source": "opened_pdf_url",
+                        }
+                    if not self._page_is_closed(target_page):
+                        viewer_download = await self._click_pdf_viewer_download(
+                            target_page,
+                            timeout_ms,
+                        )
+                        if viewer_download.get("ok"):
+                            return {"clicked": clicked, **viewer_download}
+
+            direct_download = await self._attachment_task_result(
+                download_task,
+                timeout_seconds=max(min(timeout_ms, 5000), 1) / 1000,
+            )
+            if direct_download is not None:
+                direct = await self._download_event_payload(
+                    direct_download,
+                    download_dir=download_dir,
+                    source="direct_attachment_download",
+                )
+                if direct.get("ok"):
+                    return {"clicked": clicked, **direct}
+            uuid_download = await self._wait_for_new_download_file(
+                download_dir,
+                before_files,
+                timeout_ms=timeout_ms,
+            )
+            if uuid_download.get("ok"):
+                return {"clicked": clicked, **uuid_download}
+            if clicked.get("popupClosedBeforeCapture"):
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "popup_closed_before_capture",
+                    "download": uuid_download,
+                }
             return {
                 "ok": False,
                 "clicked": clicked,
-                "reason": download.get("reason")
-                or fetched.get("reason")
-                or "download_not_captured",
-                "fetch": fetched,
-                "download": download,
+                "reason": "download_not_captured",
+                "download": uuid_download,
             }
         except Exception as error:
             return {
@@ -240,13 +337,187 @@ class PlaywrightCDPPage:
                 "error": str(error),
             }
         finally:
-            if opened_new_page and target_page is not self.page:
+            await self._cancel_attachment_tasks(page_task, download_task)
+            if (
+                opened_new_page
+                and target_page is not self.page
+                and not self._page_is_closed(target_page)
+            ):
                 try:
                     await target_page.close()
                     clicked["closedPage"] = True
                 except Exception as close_error:
                     clicked["closedPage"] = False
                     clicked["closeError"] = str(close_error)
+
+    async def _setup_zhilian_uuid_download_behavior(self) -> dict[str, Any]:
+        download_dir = PROJECT_ROOT / "data" / "downloads" / "_browser_uuid" / "zhilian"
+        try:
+            download_dir.mkdir(parents=True, exist_ok=True)
+            session = await self.page.context.new_cdp_session(self.page)
+            await session.send(
+                "Browser.setDownloadBehavior",
+                {
+                    "behavior": "allowAndName",
+                    "downloadPath": str(download_dir),
+                    "eventsEnabled": True,
+                },
+            )
+        except Exception as error:
+            return {
+                "ok": False,
+                "reason": "download_behavior_setup_failed",
+                "error": str(error),
+                "downloadPath": str(download_dir),
+            }
+        return {"ok": True, "downloadPath": str(download_dir)}
+
+    @staticmethod
+    def _download_directory_snapshot(download_dir: Path | None) -> dict[str, tuple[int, int]]:
+        if download_dir is None or not download_dir.exists():
+            return {}
+        snapshot: dict[str, tuple[int, int]] = {}
+        for item in download_dir.iterdir():
+            try:
+                if item.is_file():
+                    stat = item.stat()
+                    snapshot[item.name] = (stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                continue
+        return snapshot
+
+    async def _wait_for_new_download_file(
+        self,
+        download_dir: Path | None,
+        before: dict[str, tuple[int, int]],
+        *,
+        timeout_ms: int,
+    ) -> dict[str, Any]:
+        if download_dir is None:
+            return {"ok": False, "reason": "download_behavior_setup_failed"}
+        deadline = asyncio.get_running_loop().time() + max(timeout_ms, 0) / 1000
+        stable_sizes: dict[str, int] = {}
+        while True:
+            candidates: list[Path] = []
+            try:
+                candidates = sorted(
+                    (item for item in download_dir.iterdir() if item.is_file()),
+                    key=lambda item: item.stat().st_mtime_ns,
+                    reverse=True,
+                )
+            except OSError:
+                candidates = []
+            for item in candidates:
+                if item.name.endswith(".crdownload"):
+                    continue
+                try:
+                    stat = item.stat()
+                except OSError:
+                    continue
+                current = (stat.st_size, stat.st_mtime_ns)
+                if before.get(item.name) == current or stat.st_size <= 0:
+                    continue
+                previous_size = stable_sizes.get(item.name)
+                stable_sizes[item.name] = stat.st_size
+                if previous_size != stat.st_size:
+                    continue
+                try:
+                    return {
+                        "ok": True,
+                        "filename": item.name,
+                        "bytes": item.read_bytes(),
+                        "path": str(item),
+                        "source": "zhilian_uuid_download",
+                    }
+                except OSError:
+                    continue
+            if asyncio.get_running_loop().time() >= deadline:
+                return {"ok": False, "reason": "download_file_not_found"}
+            await asyncio.sleep(0.2)
+
+    async def _download_event_payload(
+        self,
+        download: Any,
+        *,
+        download_dir: Path | None,
+        source: str,
+    ) -> dict[str, Any]:
+        filename = str(getattr(download, "suggested_filename", "") or "")
+        try:
+            path = await download.path()
+        except Exception:
+            path = None
+        if path:
+            artifact = Path(path)
+            if not artifact.exists() and download_dir is not None:
+                uuid_path = download_dir / artifact.name
+                if uuid_path.exists():
+                    artifact = uuid_path
+            if artifact.exists():
+                return {
+                    "ok": True,
+                    "filename": filename or artifact.name,
+                    "bytes": artifact.read_bytes(),
+                    "path": str(artifact),
+                    "source": source,
+                }
+        try:
+            target = Path(gettempdir()) / (filename or "zhilian_resume_download")
+            await download.save_as(str(target))
+            return {
+                "ok": True,
+                "filename": filename or target.name,
+                "bytes": target.read_bytes(),
+                "path": str(target),
+                "source": source,
+            }
+        except Exception as error:
+            return {"ok": False, "reason": "download_event_file_missing", "error": str(error)}
+
+    @staticmethod
+    async def _attachment_task_result(
+        task: asyncio.Task[Any] | None,
+        *,
+        timeout_seconds: float = 0,
+    ) -> Any | None:
+        if task is None:
+            return None
+        if not task.done() and timeout_seconds > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+            except Exception:
+                return None
+        if not task.done():
+            return None
+        try:
+            return task.result()
+        except Exception:
+            return None
+
+    @staticmethod
+    async def _cancel_attachment_tasks(*tasks: asyncio.Task[Any] | None) -> None:
+        pending = [task for task in tasks if task is not None and not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    @staticmethod
+    def _page_is_closed(page: Any) -> bool:
+        checker = getattr(page, "is_closed", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
+        except Exception:
+            return True
+
+    @staticmethod
+    def _safe_page_url(page: Any) -> str:
+        try:
+            return str(page.url or "")
+        except Exception:
+            return ""
 
     async def _fetch_current_page_bytes(self, page: Any) -> dict[str, Any]:
         try:

@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import time
 
 from app.browser.base import BrowserElement, BrowserPage
 from app.browser.reliable_actions import (
@@ -30,12 +32,19 @@ from app.platforms.zhilian.dom_scripts import (
     CLICK_SESSION_ROW_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
+    RESET_UNREAD_LIST_SCROLL_JS,
+    SCROLL_UNREAD_LIST_JS,
     UNREAD_FILTER_STATE_JS,
     ZHILIAN_RESUME_STATE_JS,
 )
 from app.platforms.zhilian.resume_files import save_zhilian_resume_bytes
 
 SYSTEM_SKIP_TERMS = ("平台推荐", "系统提示", "广告", "职位助手", "智联小助手")
+ZHILIAN_UNREAD_SCROLL_RATIO = 0.8
+ZHILIAN_UNREAD_SCROLL_WAIT_MS = 1600
+ZHILIAN_UNREAD_SCROLL_POLL_MS = 200
+ZHILIAN_UNREAD_STABLE_BOTTOM_READS = 2
+ZHILIAN_UNREAD_MAX_SCROLL_STEPS = 100
 
 
 async def open_chat_page(page: BrowserPage) -> None:
@@ -87,34 +96,85 @@ async def find_next_unread_thread(
     allowed_positions: list[str] | None = None,
     exclude_ids: set[str] | None = None,
 ) -> ConversationRef | None:
-    """从顶部寻找下一个真实候选人的未读会话。"""
+    """遍历智联虚拟列表，寻找下一个真实候选人的未读会话。"""
 
     allowed = [item.strip() for item in allowed_positions or [] if item.strip()]
     excluded = {str(item) for item in exclude_ids or set() if str(item)}
-    for state in await read_unread_row_states(page):
-        label = str(state.get("label") or "")
-        if _should_skip_label(label):
+    inspected: set[str] = set()
+    discovered: set[str] = set()
+    stable_bottom_reads = 0
+    scroll_steps = 0
+    snapshot = await _read_unread_snapshot(page)
+
+    while True:
+        rows = snapshot.get("rows")
+        states = rows if isinstance(rows, list) else []
+        visible_identities = {
+            identity
+            for state in states
+            if isinstance(state, dict) and (identity := _unread_row_identity(state))
+        }
+        new_identities = visible_identities - discovered
+        discovered.update(visible_identities)
+
+        for state in states:
+            if not isinstance(state, dict):
+                continue
+            label = str(state.get("label") or "")
+            row_identity = _unread_row_identity(state)
+            if not row_identity or row_identity in excluded or row_identity in inspected:
+                continue
+            inspected.add(row_identity)
+            if _should_skip_label(label):
+                continue
+            if _safe_int(state.get("unread_count")) <= 0:
+                continue
+            position = str(state.get("position") or "").strip()
+            if allowed and not any(_position_matches(position, item) for item in allowed):
+                continue
+            click = await _open_session_from_state(page, state)
+            if not click.get("ok"):
+                continue
+            conversation = await read_chat_context(page, owner=owner)
+            if not conversation.should_reply:
+                continue
+            context_id = str(conversation.id or "")
+            if context_id and context_id in excluded:
+                continue
+            return ConversationRef(Platform.ZHILIAN, owner, row_identity or context_id)
+
+        if bool(snapshot.get("emptyState")) and not states:
+            return None
+        if not bool(snapshot.get("listFound")):
+            return None
+        if bool(snapshot.get("atBottom")):
+            stable_bottom_reads = 0 if new_identities else stable_bottom_reads + 1
+            if stable_bottom_reads >= ZHILIAN_UNREAD_STABLE_BOTTOM_READS:
+                return None
+            await asyncio.sleep(ZHILIAN_UNREAD_SCROLL_POLL_MS / 1000)
+            snapshot = await _read_unread_snapshot(page)
             continue
-        row_conversation_id = str(state.get("id") or label)
-        if row_conversation_id in excluded:
-            continue
-        unread_count = _safe_int(state.get("unread_count"))
-        if unread_count <= 0:
-            continue
-        position = str(state.get("position") or "").strip()
-        if allowed and not any(_position_matches(position, item) for item in allowed):
-            continue
-        click = await _open_session_from_state(page, state)
-        if not click.get("ok"):
-            continue
-        conversation = await read_chat_context(page, owner=owner)
-        if not conversation.should_reply:
-            continue
-        conversation_id = str(conversation.id or state.get("id") or label)
-        if conversation_id in excluded:
-            continue
-        return ConversationRef(Platform.ZHILIAN, owner, conversation_id)
-    return None
+
+        stable_bottom_reads = 0
+        if scroll_steps >= ZHILIAN_UNREAD_MAX_SCROLL_STEPS:
+            raise RuntimeError(
+                "zhilian_unread_list_traversal_incomplete: "
+                f"{_unread_snapshot_diagnostics(snapshot)}"
+            )
+        previous_signature = _unread_snapshot_signature(snapshot)
+        scroll = await _scroll_unread_list(page)
+        scroll_steps += 1
+        next_snapshot = await _wait_for_unread_window_change(page, previous_signature)
+        if (
+            not bool(scroll.get("changed"))
+            and _unread_snapshot_signature(next_snapshot) == previous_signature
+            and not bool(next_snapshot.get("atBottom"))
+        ):
+            raise RuntimeError(
+                "zhilian_unread_list_scroll_failed: "
+                f"scroll={scroll}, snapshot={_unread_snapshot_diagnostics(next_snapshot)}"
+            )
+        snapshot = next_snapshot
 
 
 async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[ConversationRef]:
@@ -129,7 +189,7 @@ async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[Co
             ConversationRef(
                 platform=Platform.ZHILIAN,
                 owner=owner,
-                conversation_id=str(state.get("id") or label),
+                conversation_id=_unread_row_identity(state),
             )
         )
     return refs
@@ -138,12 +198,19 @@ async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[Co
 async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
     """读取智联当前列表中可处理的未读会话行状态。"""
 
+    snapshot = await _read_unread_snapshot(page)
+    states = snapshot.get("rows")
+    if isinstance(states, list):
+        return [item for item in states if isinstance(item, dict)]
+    return []
+
+
+async def _read_unread_snapshot(page: BrowserPage) -> dict[str, object]:
     raw = await _safe_eval_dict(page, "zhilian.read_unread_rows")
     if not raw:
         raw = await _safe_eval_dict(page, READ_UNREAD_ROWS_JS)
-    states = _normalize_unread_rows(raw.get("rows"))
-    if states:
-        return states
+    if raw:
+        return {**raw, "rows": _normalize_unread_rows(raw.get("rows"))}
 
     fallback: list[dict[str, object]] = []
     for index, row in enumerate(await page.query_all(selectors.SESSION_ITEM)):
@@ -158,11 +225,74 @@ async def read_unread_row_states(page: BrowserPage) -> list[dict[str, object]]:
                 "index": index,
                 "id": await row.attr("id") or "",
                 "label": label,
+                "name": await row.attr("name") or "",
                 "position": await row.attr("position") or "",
+                "latest_message": await row.attr("latest") or "",
+                "avatar_key": await row.attr("avatar") or "",
                 "unread_count": unread_count,
             }
         )
-    return fallback
+    return {
+        "rows": fallback,
+        "rowCount": len(fallback),
+        "listFound": False,
+        "emptyState": not fallback,
+    }
+
+
+async def _reset_unread_list_scroll(page: BrowserPage) -> dict[str, object]:
+    result = await _safe_eval_dict(page, "zhilian.reset_unread_list_scroll")
+    if not result:
+        result = await _safe_eval_dict(page, RESET_UNREAD_LIST_SCROLL_JS)
+    return result
+
+
+async def _scroll_unread_list(page: BrowserPage) -> dict[str, object]:
+    payload = {"ratio": ZHILIAN_UNREAD_SCROLL_RATIO}
+    result = await _safe_eval_dict(page, "zhilian.scroll_unread_list", payload)
+    if not result:
+        result = await _safe_eval_dict(page, SCROLL_UNREAD_LIST_JS, payload)
+    return result
+
+
+async def _wait_for_unread_window_change(
+    page: BrowserPage,
+    previous_signature: str,
+) -> dict[str, object]:
+    deadline = time.monotonic() + ZHILIAN_UNREAD_SCROLL_WAIT_MS / 1000
+    last_snapshot: dict[str, object] = {}
+    while True:
+        await asyncio.sleep(ZHILIAN_UNREAD_SCROLL_POLL_MS / 1000)
+        last_snapshot = await _read_unread_snapshot(page)
+        if _unread_snapshot_signature(last_snapshot) != previous_signature:
+            return last_snapshot
+        if time.monotonic() >= deadline:
+            return last_snapshot
+
+
+def _unread_snapshot_signature(snapshot: dict[str, object]) -> str:
+    rows = snapshot.get("rows")
+    if not isinstance(rows, list):
+        return ""
+    identities = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        latest = "".join(str(item.get("latest_message") or "").split())
+        identities.append(f"{_unread_row_identity(item)}#{latest}")
+    return "||".join(identities)
+
+
+def _unread_snapshot_diagnostics(snapshot: dict[str, object]) -> dict[str, object]:
+    rows = snapshot.get("rows")
+    return {
+        "scrollTop": snapshot.get("scrollTop"),
+        "scrollHeight": snapshot.get("scrollHeight"),
+        "clientHeight": snapshot.get("clientHeight"),
+        "atBottom": snapshot.get("atBottom"),
+        "rowCount": snapshot.get("rowCount"),
+        "unreadRowCount": len(rows) if isinstance(rows, list) else 0,
+    }
 
 
 async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
@@ -575,16 +705,22 @@ async def _trusted_click_unread_filter(
         if not click.get("ok"):
             break
     state = await _unread_filter_state(page)
+    clicks_ok = len(attempts) >= max(1, click_count) and all(
+        bool(item.get("ok")) for item in attempts
+    )
+    reset = await _reset_unread_list_scroll(page) if clicks_ok else {}
+    if reset.get("changed"):
+        await asyncio.sleep(ZHILIAN_UNREAD_SCROLL_POLL_MS / 1000)
     rows = await read_unread_row_states(page)
     return {
         "attempted": True,
-        "ok": len(attempts) >= max(1, click_count)
-        and all(bool(item.get("ok")) for item in attempts),
+        "ok": clicks_ok,
         "label": label,
         "click": attempts[-1] if attempts else {},
         "clicks": attempts,
         "clicksRequired": max(1, click_count),
         "state": state,
+        "reset": reset,
         "rows": rows,
     }
 
@@ -785,6 +921,30 @@ def _safe_int(value: object) -> int:
         return 0
 
 
+def _unread_row_identity(state: dict[str, object]) -> str:
+    row_id = str(state.get("id") or "").strip().lstrip("_")
+    if row_id:
+        return row_id
+    name = "".join(str(state.get("name") or "").split())
+    position = "".join(str(state.get("position") or "").split())
+    avatar_key = str(state.get("avatar_key") or "").strip()
+    avatar_suffix = ""
+    if avatar_key:
+        digest = hashlib.blake2s(avatar_key.encode("utf-8"), digest_size=8).hexdigest()
+        avatar_suffix = f"|{digest}"
+    if name or position:
+        return f"zhilian-row:{name}|{position}{avatar_suffix}"
+    if avatar_suffix:
+        return f"zhilian-row:avatar{avatar_suffix}"
+    label = str(state.get("label") or "")
+    lines = ["".join(item.split()) for item in label.splitlines() if item.strip()]
+    if lines:
+        fallback_name = lines[0]
+        fallback_position = lines[1] if len(lines) > 1 else ""
+        return f"zhilian-row:{fallback_name}|{fallback_position}"
+    return ""
+
+
 def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
@@ -805,7 +965,12 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
                 "index": _safe_int(item.get("index")),
                 "id": str(item.get("id") or ""),
                 "label": label,
+                "name": str(item.get("name") or ""),
                 "position": str(item.get("position") or ""),
+                "latest_message": str(
+                    item.get("latest_message") or item.get("latestMessage") or ""
+                ),
+                "avatar_key": str(item.get("avatar_key") or item.get("avatarKey") or ""),
                 "unread_count": unread_count,
             }
         )

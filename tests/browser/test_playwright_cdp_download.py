@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from app.browser import playwright_cdp
 from app.browser.playwright_cdp import PlaywrightCDPPage
 
 
@@ -25,9 +26,14 @@ def test_zhilian_attachment_download_closes_opened_page() -> None:
 
 
 def test_zhilian_attachment_download_does_not_close_original_page_without_popup() -> None:
-    """If no new tab appears, the chat page is the target and must stay open."""
+    """A same-tab PDF navigation is readable, but the original page must stay open."""
 
-    original = _RawPage(opened_page=None)
+    original = _ZhilianRawPage(opened_page=None)
+
+    def navigate_same_page() -> None:
+        original.url = "https://rd6.zhaopin.com/resume/attachment.pdf"
+
+    original.on_click = navigate_same_page
     page = _FetchingCDPPage(original)
 
     result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=15000))
@@ -35,6 +41,138 @@ def test_zhilian_attachment_download_does_not_close_original_page_without_popup(
     assert result["ok"] is True
     assert page.fetched_from is original
     assert original.closed is False
+
+
+def test_zhilian_attachment_download_does_not_fetch_unchanged_chat_page(
+    tmp_path: Path,
+) -> None:
+    """Without popup or navigation, wait for the delayed download instead of reading HTML."""
+
+    artifact_dir = tmp_path / "playwright-artifacts"
+    artifact_dir.mkdir()
+    download_file = artifact_dir / "same-page-direct.docx"
+    download_file.write_bytes(b"PK\x03\x04direct-docx")
+    original = _DelayedZhilianRawPage(
+        opened_page=None,
+        download=_Download(path=str(download_file), suggested_filename="same-page-direct.docx"),
+        download_delay=0.05,
+    )
+    page = _FetchingCDPPage(original)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=500))
+
+    assert result["ok"] is True
+    assert result["source"] == "direct_attachment_download"
+    assert result["bytes"] == b"PK\x03\x04direct-docx"
+    assert page.fetched_from is None
+
+
+def test_zhilian_attachment_download_captures_direct_download_when_popup_closes(
+    tmp_path: Path,
+) -> None:
+    """A transient popup may close after handing the attachment to Chromium download."""
+
+    download_file = tmp_path / "direct-resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\ndirect\n%%EOF")
+    popup = _AutoClosingRawPage()
+    original = _ZhilianRawPage(
+        opened_page=popup,
+        download=_Download(path=str(download_file), suggested_filename="direct-resume.pdf"),
+    )
+    page = _ZhilianUUIDDownloadPage(original, tmp_path)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["source"] == "direct_attachment_download"
+    assert result["bytes"] == b"%PDF-1.7\ndirect\n%%EOF"
+    assert popup.wait_timeout_calls == 0
+    assert original.closed is False
+
+
+def test_zhilian_attachment_download_waits_for_delayed_direct_download(
+    tmp_path: Path,
+) -> None:
+    """The download event may arrive shortly after the transient popup closes."""
+
+    artifact_dir = tmp_path / "playwright-artifacts"
+    artifact_dir.mkdir()
+    download_file = artifact_dir / "delayed-resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\ndelayed\n%%EOF")
+    popup = _AutoClosingRawPage()
+    original = _DelayedZhilianRawPage(
+        opened_page=popup,
+        download=_Download(path=str(download_file), suggested_filename="delayed-resume.pdf"),
+        download_delay=0.05,
+    )
+    page = _ZhilianUUIDDownloadPage(original, tmp_path)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=500))
+
+    assert result["ok"] is True
+    assert result["source"] == "direct_attachment_download"
+    assert result["bytes"] == b"%PDF-1.7\ndelayed\n%%EOF"
+
+
+def test_zhilian_attachment_download_reads_uuid_file_when_popup_closes(
+    tmp_path: Path,
+) -> None:
+    """CDP download behavior preserves a file even when no Playwright event survives."""
+
+    popup = _AutoClosingRawPage()
+    uuid_file = tmp_path / "6b1e4e6c-attachment"
+
+    def write_uuid_file() -> None:
+        uuid_file.write_bytes(b"%PDF-1.7\nuuid\n%%EOF")
+
+    original = _ZhilianRawPage(opened_page=popup, on_click=write_uuid_file)
+    page = _ZhilianUUIDDownloadPage(original, tmp_path)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["source"] == "zhilian_uuid_download"
+    assert result["bytes"] == b"%PDF-1.7\nuuid\n%%EOF"
+    assert popup.wait_timeout_calls == 0
+
+
+def test_zhilian_attachment_download_reports_popup_closed_before_capture(
+    tmp_path: Path,
+) -> None:
+    """A closed popup without any captured file gets a specific diagnostic reason."""
+
+    popup = _AutoClosingRawPage()
+    original = _ZhilianRawPage(opened_page=popup)
+    page = _ZhilianUUIDDownloadPage(original, tmp_path)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=200))
+
+    assert result["ok"] is False
+    assert result["reason"] == "popup_closed_before_capture"
+    assert result["clicked"]["popupClosedBeforeCapture"] is True
+    assert popup.wait_timeout_calls == 0
+
+
+def test_zhilian_download_sets_uuid_download_behavior(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Zhilian direct downloads are routed into an isolated UUID directory."""
+
+    monkeypatch.setattr(playwright_cdp, "PROJECT_ROOT", tmp_path)
+    raw = _Job51DownloadRawPage(cdp_should_fail=False)
+    page = PlaywrightCDPPage(raw)
+
+    result = asyncio.run(page._setup_zhilian_uuid_download_behavior())
+
+    assert result["ok"] is True
+    command, params = raw.context.cdp_session.commands[0]
+    assert command == "Browser.setDownloadBehavior"
+    assert params["behavior"] == "allowAndName"
+    assert params["eventsEnabled"] is True
+    assert str(params["downloadPath"]).replace("\\", "/").endswith(
+        "data/downloads/_browser_uuid/zhilian"
+    )
 
 
 def test_job51_download_sets_uuid_download_behavior_before_clicking_save() -> None:
@@ -135,6 +273,9 @@ class _FetchingCDPPage(PlaywrightCDPPage):
         self.fetched_from = page
         return {"ok": True, "bytes": b"%PDF-1.4", "filename": "resume.pdf"}
 
+    async def _setup_zhilian_uuid_download_behavior(self) -> dict[str, Any]:
+        return {"ok": False, "reason": "not_needed_for_stable_popup_test"}
+
 
 class _RawPage:
     def __init__(self, opened_page: Any | None = None) -> None:
@@ -154,6 +295,75 @@ class _RawPage:
 
     async def close(self) -> None:
         self.closed = True
+
+    def is_closed(self) -> bool:
+        return self.closed
+
+
+class _AutoClosingRawPage(_RawPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = True
+        self.wait_timeout_calls = 0
+
+    async def wait_for_load_state(self, state: str, timeout: int) -> None:
+        _ = state, timeout
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    async def wait_for_timeout(self, timeout: int) -> None:
+        _ = timeout
+        self.wait_timeout_calls += 1
+        raise AssertionError("closed popup must not be awaited")
+
+
+class _ZhilianUUIDDownloadPage(PlaywrightCDPPage):
+    def __init__(self, page: Any, download_dir: Path) -> None:
+        super().__init__(page)
+        self.download_dir = download_dir
+
+    async def _setup_zhilian_uuid_download_behavior(self) -> dict[str, Any]:
+        return {"ok": True, "downloadPath": str(self.download_dir)}
+
+
+class _ZhilianRawPage(_RawPage):
+    def __init__(
+        self,
+        *,
+        opened_page: Any | None,
+        download: _Download | None = None,
+        on_click: Any | None = None,
+    ) -> None:
+        super().__init__(opened_page=opened_page)
+        self.download = download
+        self.on_click = on_click
+        self.view_clicks = 0
+
+    def get_by_text(self, text: str) -> _ZhilianLocator:
+        _ = text
+        return _ZhilianLocator(self)
+
+    async def wait_for_event(self, event: str, timeout: int) -> Any:
+        _ = timeout
+        if event == "download" and self.download is not None:
+            return self.download
+        raise TimeoutError(f"no {event}")
+
+
+class _DelayedZhilianRawPage(_ZhilianRawPage):
+    def __init__(
+        self,
+        *,
+        opened_page: Any | None,
+        download: _Download,
+        download_delay: float,
+    ) -> None:
+        super().__init__(opened_page=opened_page, download=download)
+        self.download_delay = download_delay
+
+    async def wait_for_event(self, event: str, timeout: int) -> Any:
+        if event == "download":
+            await asyncio.sleep(self.download_delay)
+        return await super().wait_for_event(event, timeout)
 
 
 class _Job51UUIDDownloadPage(PlaywrightCDPPage):
@@ -316,3 +526,14 @@ class _Locator:
 
     async def click(self, timeout: int) -> None:
         _ = timeout
+
+
+class _ZhilianLocator(_Locator):
+    def __init__(self, page: _ZhilianRawPage) -> None:
+        self.page = page
+
+    async def click(self, timeout: int) -> None:
+        _ = timeout
+        self.page.view_clicks += 1
+        if callable(self.page.on_click):
+            self.page.on_click()
