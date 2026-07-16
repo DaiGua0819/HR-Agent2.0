@@ -122,6 +122,7 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
     assert argv[:2] == ["codex", "exec"]
     assert "--ephemeral" in argv
     assert "--ignore-user-config" in argv
+    assert "--ignore-rules" in argv
     assert "--skip-git-repo-check" in argv
     assert "--strict-config" in argv
     assert "--json" in argv
@@ -130,6 +131,18 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
     assert 'approval_policy="never"' in argv
     assert 'web_search="disabled"' in argv
     assert 'shell_environment_policy.inherit="none"' in argv
+    assert "features.shell_tool=false" in argv
+    assert "features.browser_use=false" in argv
+    assert "features.browser_use_external=false" in argv
+    assert "features.browser_use_full_cdp_access=false" in argv
+    assert "features.computer_use=false" in argv
+    assert "features.in_app_browser=false" in argv
+    assert "features.apps=false" in argv
+    assert "features.image_generation=false" in argv
+    assert "features.multi_agent=false" in argv
+    assert "features.goals=false" in argv
+    assert "features.workspace_dependencies=false" in argv
+    assert "features.tool_suggest=false" in argv
     assert "--sandbox" not in argv
     assert calls[0]["cwd"] == tmp_path / "sandbox"
     assert "完整简历" not in str(calls[0]["stdin"])
@@ -159,6 +172,26 @@ def test_codex_planner_rejects_any_tool_event(tmp_path: Path, item_type: str) ->
 
     with pytest.raises(CodexPolicyViolation, match=item_type):
         asyncio.run(planner.plan(_member(), "帮助"))
+
+
+def test_codex_planner_rejects_tool_event_even_when_process_fails(tmp_path: Path) -> None:
+    async def runner(*_args: object, **_kwargs: object) -> CodexRunResult:
+        return CodexRunResult(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {"id": "item-tool", "type": "command_execution"},
+                }
+            ),
+            stderr="sandbox rejected command",
+            elapsed_seconds=0.1,
+        )
+
+    planner = CodexQueryPlanner(runtime_dir=tmp_path, runner=runner)
+
+    with pytest.raises(CodexPolicyViolation, match="command_execution"):
+        asyncio.run(planner.plan(_member(), "help"))
 
 
 def test_codex_plan_cannot_escalate_member_or_request_other_jobs(tmp_path: Path) -> None:

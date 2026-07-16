@@ -291,7 +291,9 @@ def build_runtime(settings: AppSettings | None = None) -> FeishuBotRuntime:
 
 
 def _build_bot(settings: AppSettings) -> FeishuRecruitmentBot:
-    repository = FeishuBotRepository(settings.resolved_database_path)
+    repository = FeishuBotRepository(
+        settings.resolved_feishu_bot_runtime_dir / "feishu-bot.sqlite"
+    )
     access_policy = FeishuBotAccessPolicy(settings.resolved_feishu_bot_access_config_path)
     dispatcher = Dispatcher()
     planner = CodexQueryPlanner(

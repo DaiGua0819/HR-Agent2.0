@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import pytest
 from app.core.constants import Platform
 from app.platforms.types import ConversationRef
 from app.worker.runtime import WorkerRuntime
@@ -54,9 +53,15 @@ def test_worker_drain_messages_rejects_unready_unread_filter(monkeypatch) -> Non
 
     _install_runtime_fakes(monkeypatch, runtime, adapter)
 
-    with pytest.raises(RuntimeError, match="boss_unread_list_not_ready"):
-        asyncio.run(runtime.drain_messages(Platform.BOSS, max_contacts=5))
+    result = asyncio.run(runtime.drain_messages(Platform.BOSS, max_contacts=5))
 
+    assert result["accepted"] is False
+    assert result["processed"] == 0
+    assert result["contacts"] == []
+    assert result["drained"] is False
+    assert result["stopReason"] == "boss_unread_list_not_ready"
+    assert result["nextAction"] == "blocked"
+    assert result["decision"]["failureReason"] == "boss_unread_list_not_ready"
     assert adapter.find_excludes == []
 
 

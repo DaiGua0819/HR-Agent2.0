@@ -239,6 +239,19 @@ def test_member_query_is_scoped_rendered_and_audited(tmp_path: Path) -> None:
     assert turns[0]["intent"] == "resume_counts"
 
 
+def test_long_event_id_uses_bounded_stable_reply_idempotency_key(tmp_path: Path) -> None:
+    bot, _planner, _queries, replies, _repository = _bot(tmp_path)
+    event = _event(event_id="event-" + "x" * 100)
+
+    status = asyncio.run(bot.handle_event(event))
+
+    assert status == "completed"
+    key = replies.calls[0]["idempotency_key"]
+    assert key.startswith("feishu-bot:")
+    assert len(key) <= 50
+    assert key != f"feishu-bot:{event.event_id}"
+
+
 def test_admin_worker_query_uses_deterministic_renderer(tmp_path: Path) -> None:
     result = BotQueryResult(
         intent="worker_status",
@@ -346,6 +359,23 @@ def test_reply_failure_is_audited_without_reprocessing(tmp_path: Path) -> None:
     assert stored["status"] == "reply_failed"
     assert "send failed" in stored["error"]
     assert repository.recent_turns(event.chat_id, event.sender_open_id) == []
+
+
+def test_reply_failure_can_retry_the_same_event(tmp_path: Path) -> None:
+    replies = _Replies(failure=RuntimeError("temporary reply failure"))
+    bot, planner, queries, _replies, repository = _bot(tmp_path, replies=replies)
+    event = _event()
+
+    first = asyncio.run(bot.handle_event(event))
+    replies.failure = None
+    second = asyncio.run(bot.handle_event(event))
+
+    assert first == "reply_failed"
+    assert second == "completed"
+    assert len(planner.calls) == 2
+    assert len(queries.calls) == 2
+    assert len(replies.calls) == 2
+    assert repository.get_event(event.event_id)["status"] == "completed"
 
 
 def test_serve_consumes_event_and_closes_source(tmp_path: Path) -> None:

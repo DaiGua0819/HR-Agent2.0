@@ -39,6 +39,23 @@ def test_event_repository_claims_event_and_message_only_once(tmp_path: Path) -> 
         assert connection.execute("SELECT COUNT(*) FROM feishu_bot_events").fetchone()[0] == 1
 
 
+def test_event_repository_reclaims_stale_processing_event(tmp_path: Path) -> None:
+    database = tmp_path / "bot.sqlite"
+    repository = FeishuBotRepository(database)
+    event = _event()
+    assert repository.claim_event(event) is True
+    repository.mark_processing(event.event_id)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE feishu_bot_events SET started_at = ? WHERE event_id = ?",
+            ("2000-01-01T00:00:00+00:00", event.event_id),
+        )
+        connection.commit()
+
+    assert repository.claim_event(event) is True
+    assert repository.claim_event(event) is False
+
+
 def test_event_repository_tracks_lifecycle_and_redacts_turn_text(tmp_path: Path) -> None:
     repository = FeishuBotRepository(tmp_path / "bot.sqlite")
     event = _event()
@@ -150,3 +167,20 @@ users:
 
     with pytest.raises(ValueError, match="duplicate_feishu_bot_open_id"):
         FeishuBotAccessPolicy(config)
+
+
+def test_production_access_policy_uses_only_dedicated_app_open_ids() -> None:
+    config = Path(__file__).resolve().parents[2] / "config" / "feishu_bot_access.yaml"
+
+    policy = FeishuBotAccessPolicy(config)
+    actors = {actor.display_name: actor for actor in policy.actors()}
+
+    assert set(actors) == {"王鑫力"}
+    assert actors["王鑫力"].open_id == "ou_0ae40de4ac0e63d584c9644e84b62d26"
+    assert actors["王鑫力"].role == "admin"
+    assert actors["王鑫力"].job_types == ("*",)
+    assert actors["王鑫力"].review_user_id == (
+        "feishu:ou_5707b9cf314d1aeb8dee5f1115dc1120"
+    )
+    assert policy.resolve("ou_5707b9cf314d1aeb8dee5f1115dc1120") is None
+    assert policy.resolve("ou_acadfb85356a318fb1fc168be8fbfb75") is None

@@ -106,6 +106,7 @@ class CodexQueryPlanner:
             cwd=self.runtime_dir,
             timeout_seconds=self.timeout_seconds,
         )
+        _raise_on_tool_events(result.stdout)
         if result.returncode != 0:
             return self.fallback_plan(
                 actor,
@@ -152,6 +153,7 @@ class CodexQueryPlanner:
             "exec",
             "--ephemeral",
             "--ignore-user-config",
+            "--ignore-rules",
             "--skip-git-repo-check",
             "--strict-config",
             "--json",
@@ -169,6 +171,30 @@ class CodexQueryPlanner:
             'shell_environment_policy.inherit="none"',
             "-c",
             "shell_environment_policy.ignore_default_excludes=false",
+            "-c",
+            "features.shell_tool=false",
+            "-c",
+            "features.browser_use=false",
+            "-c",
+            "features.browser_use_external=false",
+            "-c",
+            "features.browser_use_full_cdp_access=false",
+            "-c",
+            "features.computer_use=false",
+            "-c",
+            "features.in_app_browser=false",
+            "-c",
+            "features.apps=false",
+            "-c",
+            "features.image_generation=false",
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.goals=false",
+            "-c",
+            "features.workspace_dependencies=false",
+            "-c",
+            "features.tool_suggest=false",
             "-c",
             "features.hooks=false",
             "-c",
@@ -283,6 +309,20 @@ def _extract_plan(stdout: str) -> str:
     if final_text.startswith("```"):
         final_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", final_text, flags=re.I)
     return final_text
+
+
+def _raise_on_tool_events(stdout: str) -> None:
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        item_type = clean_text(item.get("type"))
+        if item_type in _TOOL_ITEM_TYPES:
+            raise CodexPolicyViolation(f"codex_policy_violation:{item_type}")
 
 
 def _validate_plan(actor: BotActor, plan: BotQueryPlan) -> BotQueryPlan:

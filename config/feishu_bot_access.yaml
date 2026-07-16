@@ -1,2 +1,11 @@
-# Dedicated-app open IDs are populated only after the bot app is created.
-users: []
+# Exact user open IDs for the dedicated read-only recruitment bot.
+users:
+  - openId: ou_0ae40de4ac0e63d584c9644e84b62d26
+    displayName: 王鑫力
+    role: admin
+    jobTypes:
+      - "*"
+    # Existing interview-center identity; this intentionally differs from the bot-app openId.
+    reviewUserId: feishu:ou_5707b9cf314d1aeb8dee5f1115dc1120
+
+# 菜花的 member 条目必须使用专用应用事件中的 sender_id；旧应用 open_id 不可复用。

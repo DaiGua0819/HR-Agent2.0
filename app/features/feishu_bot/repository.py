@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -56,14 +56,22 @@ CREATE INDEX IF NOT EXISTS idx_feishu_bot_turns_context
 class FeishuBotRepository:
     """Store bot-only events without modifying recruitment business rows."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        processing_lease_seconds: float = 300.0,
+    ) -> None:
         self.database_path = Path(database_path)
+        self.processing_lease_seconds = max(1.0, float(processing_lease_seconds))
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_BOT_SCHEMA)
 
     def claim_event(self, event: BotEvent) -> bool:
         event.validate_required()
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -79,8 +87,41 @@ class FeishuBotRepository:
                     event.chat_id,
                     event.chat_type,
                     event.message_type,
-                    _now_iso(),
+                    now_iso,
                 ),
+            )
+            if cursor.rowcount == 1:
+                connection.commit()
+                return True
+            stored = connection.execute(
+                """
+                SELECT event_id, message_id, status, received_at, started_at
+                FROM feishu_bot_events
+                WHERE event_id = ? OR message_id = ?
+                LIMIT 1
+                """,
+                (event.event_id, event.message_id),
+            ).fetchone()
+            if (
+                stored is None
+                or stored["event_id"] != event.event_id
+                or stored["message_id"] != event.message_id
+                or not _event_is_retryable(
+                    stored,
+                    now=now,
+                    processing_lease_seconds=self.processing_lease_seconds,
+                )
+            ):
+                connection.commit()
+                return False
+            cursor = connection.execute(
+                """
+                UPDATE feishu_bot_events
+                SET status = 'received', received_at = ?, started_at = '',
+                    completed_at = '', response_message_id = '', error = ''
+                WHERE event_id = ? AND message_id = ?
+                """,
+                (now_iso, event.event_id, event.message_id),
             )
             connection.commit()
             return cursor.rowcount == 1
@@ -200,6 +241,31 @@ def redact_sensitive_text(value: object) -> str:
 
 def _bounded(value: object, limit: int) -> str:
     return str(value or "")[:limit]
+
+
+def _event_is_retryable(
+    row: sqlite3.Row,
+    *,
+    now: datetime,
+    processing_lease_seconds: float,
+) -> bool:
+    status = str(row["status"] or "")
+    if status == "reply_failed":
+        return True
+    if status not in {"received", "processing"}:
+        return False
+    timestamp_text = str(
+        row["started_at"] if status == "processing" else row["received_at"]
+    )
+    try:
+        timestamp = datetime.fromisoformat(timestamp_text)
+    except ValueError:
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return now - timestamp.astimezone(UTC) >= timedelta(
+        seconds=processing_lease_seconds
+    )
 
 
 def _now_iso() -> str:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
+from app.features.feishu_bot.repository import FeishuBotRepository
 from app.features.feishu_bot.runtime import (
     DEDICATED_LARK_PROFILE,
     FeishuBotInstanceLock,
@@ -45,6 +47,30 @@ def test_settings_default_to_disabled_dedicated_non_secret_profile(
     dumped = settings.model_dump()
     assert "feishu_bot_app_secret" not in dumped
     assert "feishu_bot_app_id" not in dumped
+
+
+def test_runtime_keeps_bot_audit_writes_out_of_recruitment_database(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    runtime = FeishuBotRuntime(settings=settings)
+
+    bot = runtime.bot_factory()
+
+    assert isinstance(bot.repository, FeishuBotRepository)
+    assert bot.repository.database_path == (
+        settings.resolved_feishu_bot_runtime_dir / "feishu-bot.sqlite"
+    )
+    assert bot.repository.database_path != settings.resolved_database_path
+    with sqlite3.connect(settings.resolved_database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert "feishu_bot_events" not in tables
+    assert "feishu_bot_turns" not in tables
 
 
 def test_preflight_requires_explicit_enable_before_any_external_probe(

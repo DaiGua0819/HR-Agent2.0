@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Any, Protocol
 
 from app.features.feishu_bot.codex_planner import CodexPolicyViolation
@@ -348,7 +349,7 @@ class FeishuRecruitmentBot:
         return await self.replies.reply(
             event.message_id,
             response,
-            idempotency_key=f"feishu-bot:{event.event_id}",
+            idempotency_key=_reply_idempotency_key(event.event_id),
         )
 
 
@@ -359,6 +360,15 @@ def _fatal_connection_error(error: LarkCliError) -> bool:
         "event_bus_already_connected",
         "subscription_already_exists",
     }
+
+
+def _reply_idempotency_key(event_id: str) -> str:
+    prefix = "feishu-bot:"
+    key = f"{prefix}{event_id}"
+    if len(key) <= 50:
+        return key
+    digest = sha256(event_id.encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}{digest}"
 
 
 async def _wait_for_stop(stop_event: asyncio.Event, timeout: float) -> bool:
