@@ -66,6 +66,8 @@ class CodexQueryPlanner:
         runtime_dir: str | Path,
         codex_command: str = "codex",
         model: str = "",
+        provider_base_url: str = "",
+        api_key_env: str = "",
         timeout_seconds: float = 45,
         schema_path: str | Path | None = None,
         runner: CodexRunner | None = None,
@@ -74,6 +76,8 @@ class CodexQueryPlanner:
         self.runtime_dir = Path(runtime_dir)
         self.codex_command = codex_command
         self.model = clean_text(model)
+        self.provider_base_url = clean_text(provider_base_url).rstrip("/")
+        self.api_key_env = clean_text(api_key_env)
         self.timeout_seconds = float(timeout_seconds)
         self.schema_path = (
             Path(schema_path)
@@ -92,6 +96,9 @@ class CodexQueryPlanner:
         available_job_types: list[str] | None = None,
     ) -> BotQueryPlan:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        codex_home = self.runtime_dir / "codex-home" if self.api_key_env else None
+        if codex_home is not None:
+            codex_home.mkdir(parents=True, exist_ok=True)
         available_jobs = _allowed_prompt_jobs(actor, available_job_types or [])
         prompt = _planner_prompt(
             actor,
@@ -105,6 +112,11 @@ class CodexQueryPlanner:
             stdin=prompt,
             cwd=self.runtime_dir,
             timeout_seconds=self.timeout_seconds,
+            env=_codex_parent_environment(
+                os.environ,
+                api_key_env=self.api_key_env,
+                codex_home=codex_home,
+            ),
         )
         _raise_on_tool_events(result.stdout)
         if result.returncode != 0:
@@ -200,8 +212,34 @@ class CodexQueryPlanner:
             "-c",
             "features.memories=false",
             "-c",
+            "features.remote_plugin=false",
+            "-c",
+            "features.shell_snapshot=false",
+            "-c",
+            "features.personality=false",
+            "-c",
             "mcp_servers={}",
         ]
+        if self.provider_base_url:
+            argv.extend(
+                [
+                    "-c",
+                    'model_provider="feishu_bot_gateway"',
+                    "-c",
+                    'model_providers.feishu_bot_gateway.name="HR Agent Codex Gateway"',
+                    "-c",
+                    (
+                        "model_providers.feishu_bot_gateway.base_url="
+                        f'"{self.provider_base_url}"'
+                    ),
+                    "-c",
+                    'model_providers.feishu_bot_gateway.env_key="CODEX_API_KEY"',
+                    "-c",
+                    'model_providers.feishu_bot_gateway.wire_api="responses"',
+                    "-c",
+                    "model_providers.feishu_bot_gateway.supports_websockets=false",
+                ]
+            )
         if self.model:
             argv.extend(["--model", self.model])
         argv.append("-")
@@ -214,6 +252,7 @@ async def _run_subprocess(
     stdin: str,
     cwd: Path,
     timeout_seconds: float,
+    env: dict[str, str],
 ) -> CodexRunResult:
     started = time.monotonic()
     resolved_argv = [*_resolve_command_prefix(argv[0]), *argv[1:]]
@@ -223,7 +262,7 @@ async def _run_subprocess(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=_codex_parent_environment(os.environ),
+        env=env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -279,14 +318,25 @@ def _resolve_command_prefix(
 
 def _codex_parent_environment(
     source: os._Environ[str] | dict[str, str],
+    *,
+    api_key_env: str = "",
+    codex_home: Path | None = None,
 ) -> dict[str, str]:
-    """Use saved Codex login rather than project/provider API credentials."""
+    """Expose only the explicitly selected bot credential to Codex itself."""
 
-    return {
+    denied = {*_CODEX_PARENT_ENV_DENY, clean_text(api_key_env).upper()}
+    sanitized = {
         key: value
         for key, value in source.items()
-        if key.upper() not in _CODEX_PARENT_ENV_DENY
+        if key.upper() not in denied
     }
+    if api_key_env:
+        api_key = source.get(api_key_env, "")
+        if api_key:
+            sanitized["CODEX_API_KEY"] = api_key
+        if codex_home is not None:
+            sanitized["CODEX_HOME"] = str(codex_home)
+    return sanitized
 
 
 def _extract_plan(stdout: str) -> str:

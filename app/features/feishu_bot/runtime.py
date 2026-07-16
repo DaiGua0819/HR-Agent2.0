@@ -153,7 +153,12 @@ class FeishuBotRuntime:
         if errors:
             return {"ok": False, "errors": errors, "checks": checks}
         lark = await self.lark_probe(self.settings.feishu_bot_profile)
-        codex = await self.codex_probe()
+        configured_codex = _check_configured_codex_auth(self.settings, os.environ)
+        codex = (
+            configured_codex
+            if configured_codex is not None
+            else await self.codex_probe()
+        )
         checks["lark"] = _safe_probe_result(lark)
         checks["codex"] = _safe_probe_result(codex)
         if not lark.get("ok"):
@@ -299,6 +304,8 @@ def _build_bot(settings: AppSettings) -> FeishuRecruitmentBot:
     planner = CodexQueryPlanner(
         runtime_dir=settings.resolved_feishu_bot_codex_runtime_dir,
         model=settings.feishu_bot_codex_model,
+        provider_base_url=settings.feishu_bot_codex_base_url,
+        api_key_env=settings.feishu_bot_codex_api_key_env,
     )
     queries = ReadOnlyRecruitmentQueries(
         settings.resolved_database_path,
@@ -367,8 +374,37 @@ async def _probe_codex_login() -> dict[str, object]:
     return (
         {"ok": True, "status": "logged_in"}
         if result["ok"]
-        else {"ok": False, "error": "codex_login_unavailable", "detail": result["detail"]}
+        else {
+            "ok": False,
+            "error": "codex_login_unavailable",
+            "detail": result["detail"],
+        }
     )
+
+
+def _check_configured_codex_auth(
+    settings: AppSettings,
+    environment: os._Environ[str] | dict[str, str],
+) -> dict[str, object] | None:
+    base_url = str(settings.feishu_bot_codex_base_url or "").strip()
+    api_key_env = str(settings.feishu_bot_codex_api_key_env or "").strip()
+    if not base_url and not api_key_env:
+        return None
+    if not api_key_env:
+        return {"ok": False, "error": "codex_api_key_env_missing"}
+    if not base_url:
+        return {
+            "ok": False,
+            "error": "codex_provider_base_url_missing",
+            "apiKeyEnv": api_key_env,
+        }
+    if not environment.get(api_key_env):
+        return {
+            "ok": False,
+            "error": "codex_api_key_unavailable",
+            "apiKeyEnv": api_key_env,
+        }
+    return {"ok": True, "auth": "api_key", "apiKeyEnv": api_key_env}
 
 
 async def _run_probe(argv: list[str], *, env: dict[str, str]) -> dict[str, object]:
@@ -421,7 +457,16 @@ def _safe_probe_result(value: dict[str, object]) -> dict[str, object]:
     return {
         key: item
         for key, item in value.items()
-        if key in {"ok", "error", "status", "profile", "detail"}
+        if key
+        in {
+            "ok",
+            "error",
+            "status",
+            "profile",
+            "detail",
+            "auth",
+            "apiKeyEnv",
+        }
     }
 
 

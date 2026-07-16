@@ -13,8 +13,22 @@ $stdoutPath = Join-Path $runtimeDir "bot.out.log"
 $stderrPath = Join-Path $runtimeDir "bot.err.log"
 
 if (-not $PythonPath) {
-    $candidate = Join-Path $resolvedRoot ".venv312\Scripts\python.exe"
-    $PythonPath = if (Test-Path -LiteralPath $candidate) { $candidate } else { "python" }
+    $candidates = @(
+        (Join-Path $resolvedRoot ".venv312\Scripts\python.exe"),
+        (Join-Path $resolvedRoot ".venv\Scripts\python.exe")
+    )
+    $worktreeContainer = Split-Path -Parent $resolvedRoot
+    if ((Split-Path -Leaf $worktreeContainer) -eq ".worktrees") {
+        $worktreeHostRoot = Split-Path -Parent $worktreeContainer
+        $candidates += Join-Path $worktreeHostRoot ".venv312\Scripts\python.exe"
+        $candidates += Join-Path $worktreeHostRoot ".venv\Scripts\python.exe"
+    }
+    $PythonPath = $candidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+    if (-not $PythonPath) {
+        $PythonPath = "python"
+    }
 }
 if (-not (Test-Path -LiteralPath $runner)) {
     throw "run_feishu_bot.py not found under $resolvedRoot"

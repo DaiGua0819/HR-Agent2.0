@@ -16,11 +16,22 @@ from app.settings import AppSettings
 from scripts.run_feishu_bot import build_parser
 
 
-def _settings(tmp_path: Path, *, enabled: bool = True, profile: str = "") -> AppSettings:
+def _settings(
+    tmp_path: Path,
+    *,
+    enabled: bool = True,
+    profile: str = "",
+    **overrides: object,
+) -> AppSettings:
     database = tmp_path / "resumes.sqlite"
     database.touch()
     access = tmp_path / "access.yaml"
     access.write_text("users: []\n", encoding="utf-8")
+    settings_overrides: dict[str, object] = {
+        "FEISHU_BOT_CODEX_BASE_URL": "",
+        "FEISHU_BOT_CODEX_API_KEY_ENV": "",
+    }
+    settings_overrides.update(overrides)
     return AppSettings(
         _env_file=None,
         DATABASE_PATH=database,
@@ -30,6 +41,7 @@ def _settings(tmp_path: Path, *, enabled: bool = True, profile: str = "") -> App
         FEISHU_BOT_RUNTIME_DIR=tmp_path / "runtime",
         FEISHU_BOT_CODEX_RUNTIME_DIR=tmp_path / "codex-runtime",
         FEISHU_BOT_MANAGER_RUNS_DIR=tmp_path / "manager-runs",
+        **settings_overrides,
     )
 
 
@@ -38,11 +50,15 @@ def test_settings_default_to_disabled_dedicated_non_secret_profile(
 ) -> None:
     monkeypatch.delenv("FEISHU_BOT_ENABLED", raising=False)
     monkeypatch.delenv("FEISHU_BOT_PROFILE", raising=False)
+    monkeypatch.delenv("FEISHU_BOT_CODEX_BASE_URL", raising=False)
+    monkeypatch.delenv("FEISHU_BOT_CODEX_API_KEY_ENV", raising=False)
 
     settings = AppSettings(_env_file=None)
 
     assert settings.feishu_bot_enabled is False
     assert settings.feishu_bot_profile == "hr-agent-readonly-bot"
+    assert settings.feishu_bot_codex_base_url == ""
+    assert settings.feishu_bot_codex_api_key_env == ""
     assert "secret" not in settings.feishu_bot_profile.lower()
     dumped = settings.model_dump()
     assert "feishu_bot_app_secret" not in dumped
@@ -148,6 +164,88 @@ users:
     assert calls == [f"lark:{DEDICATED_LARK_PROFILE}", "codex"]
     assert "secret" not in result["checks"]["lark"]
     assert "token" not in result["checks"]["codex"]
+
+
+def test_preflight_accepts_explicit_bot_api_key_without_saved_login(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        FEISHU_BOT_CODEX_BASE_URL="http://127.0.0.1:8097/v1",
+        FEISHU_BOT_CODEX_API_KEY_ENV="FEISHU_BOT_GATEWAY_KEY",
+    )
+    settings.resolved_feishu_bot_access_config_path.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 管理员
+    role: admin
+    jobTypes: ['*']
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FEISHU_BOT_GATEWAY_KEY", "bot-only-secret")
+    calls: list[str] = []
+
+    async def codex_probe() -> dict[str, object]:
+        calls.append("saved-login")
+        return {"ok": False, "error": "must-not-be-called"}
+
+    runtime = FeishuBotRuntime(
+        settings=settings,
+        lark_probe=lambda _profile: _async_result({"ok": True}),
+        codex_probe=codex_probe,
+    )
+
+    result = asyncio.run(runtime.preflight())
+
+    assert result["ok"] is True
+    assert result["checks"]["codex"] == {
+        "ok": True,
+        "auth": "api_key",
+        "apiKeyEnv": "FEISHU_BOT_GATEWAY_KEY",
+    }
+    assert calls == []
+
+
+def test_preflight_rejects_missing_explicit_bot_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        FEISHU_BOT_CODEX_BASE_URL="http://127.0.0.1:8097/v1",
+        FEISHU_BOT_CODEX_API_KEY_ENV="FEISHU_BOT_GATEWAY_KEY",
+    )
+    settings.resolved_feishu_bot_access_config_path.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 管理员
+    role: admin
+    jobTypes: ['*']
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("FEISHU_BOT_GATEWAY_KEY", raising=False)
+    runtime = FeishuBotRuntime(
+        settings=settings,
+        lark_probe=lambda _profile: _async_result({"ok": True}),
+        codex_probe=lambda: _async_result({"ok": True}),
+    )
+
+    result = asyncio.run(runtime.preflight())
+
+    assert result["ok"] is False
+    assert result["checks"]["codex"] == {
+        "ok": False,
+        "error": "codex_api_key_unavailable",
+        "apiKeyEnv": "FEISHU_BOT_GATEWAY_KEY",
+    }
+    assert "codex_api_key_unavailable" in result["errors"]
 
 
 def test_bot_single_instance_lock_rejects_overlap(tmp_path: Path) -> None:
@@ -288,6 +386,8 @@ def test_operational_cli_and_manager_are_bot_only_and_hidden() -> None:
     assert set(commands) == {"preflight", "handle-event", "serve", "status", "stop"}
     assert "Start-Process" in manager
     assert "-WindowStyle Hidden" in manager
+    assert "$worktreeHostRoot" in manager
+    assert 'Join-Path $worktreeHostRoot ".venv312\\Scripts\\python.exe"' in manager
     assert "run_feishu_bot.py" in manager
     assert "Stop-Process" not in manager
     assert "run_worker.py" not in manager

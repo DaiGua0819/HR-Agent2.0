@@ -210,6 +210,14 @@ class AppSettings(BaseSettings):
         default="",
         validation_alias="FEISHU_BOT_CODEX_MODEL",
     )
+    feishu_bot_codex_base_url: str = Field(
+        default="",
+        validation_alias="FEISHU_BOT_CODEX_BASE_URL",
+    )
+    feishu_bot_codex_api_key_env: str = Field(
+        default="",
+        validation_alias="FEISHU_BOT_CODEX_API_KEY_ENV",
+    )
     legacy_resume_db_path: Path = Field(
         default=Path("../patchwork-recruit-gpt/data/resumes.sqlite"),
         validation_alias="LEGACY_RESUME_DB_PATH",

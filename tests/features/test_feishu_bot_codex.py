@@ -72,6 +72,7 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
         stdin: str,
         cwd: Path,
         timeout_seconds: float,
+        env: dict[str, str],
     ) -> CodexRunResult:
         calls.append(
             {
@@ -79,6 +80,7 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
                 "stdin": stdin,
                 "cwd": cwd,
                 "timeout": timeout_seconds,
+                "env": env,
             }
         )
         return CodexRunResult(
@@ -143,10 +145,69 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
     assert "features.goals=false" in argv
     assert "features.workspace_dependencies=false" in argv
     assert "features.tool_suggest=false" in argv
+    assert "features.remote_plugin=false" in argv
+    assert "features.shell_snapshot=false" in argv
+    assert "features.personality=false" in argv
     assert "--sandbox" not in argv
     assert calls[0]["cwd"] == tmp_path / "sandbox"
     assert "完整简历" not in str(calls[0]["stdin"])
     assert "数据库" not in str(calls[0]["stdin"])
+
+
+def test_codex_planner_api_key_mode_uses_isolated_provider_and_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("FEISHU_BOT_GATEWAY_KEY", "bot-only-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-project-key")
+
+    async def runner(
+        argv: list[str],
+        *,
+        stdin: str,
+        cwd: Path,
+        timeout_seconds: float,
+        env: dict[str, str],
+    ) -> CodexRunResult:
+        calls.append({"argv": argv, "cwd": cwd, "env": env})
+        return CodexRunResult(
+            returncode=0,
+            stdout=_agent_message(_help_plan()),
+            stderr="",
+            elapsed_seconds=0.1,
+        )
+
+    runtime_dir = tmp_path / "isolated-runtime"
+    planner = CodexQueryPlanner(
+        runtime_dir=runtime_dir,
+        model="gpt-5.6-sol",
+        provider_base_url="http://127.0.0.1:8097/v1",
+        api_key_env="FEISHU_BOT_GATEWAY_KEY",
+        runner=runner,
+    )
+
+    asyncio.run(planner.plan(_admin(), "帮助"))
+
+    assert len(calls) == 1
+    argv = calls[0]["argv"]
+    env = calls[0]["env"]
+    assert isinstance(argv, list)
+    assert isinstance(env, dict)
+    assert 'model_provider="feishu_bot_gateway"' in argv
+    assert (
+        'model_providers.feishu_bot_gateway.base_url="http://127.0.0.1:8097/v1"'
+        in argv
+    )
+    assert (
+        'model_providers.feishu_bot_gateway.env_key="CODEX_API_KEY"' in argv
+    )
+    assert "model_providers.feishu_bot_gateway.supports_websockets=false" in argv
+    assert env["CODEX_API_KEY"] == "bot-only-secret"
+    assert env["CODEX_HOME"] == str(runtime_dir / "codex-home")
+    assert "FEISHU_BOT_GATEWAY_KEY" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert (runtime_dir / "codex-home").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -303,6 +364,26 @@ def test_codex_parent_environment_drops_project_model_credentials() -> None:
     assert "OPENAI_MODEL" not in sanitized
     assert "CODEX_API_KEY" not in sanitized
     assert "CODEX_ACCESS_TOKEN" not in sanitized
+
+
+def test_codex_parent_environment_maps_only_explicit_bot_api_key(
+    tmp_path: Path,
+) -> None:
+    sanitized = _codex_parent_environment(
+        {
+            "PATH": "C:/bin",
+            "OPENAI_API_KEY": "project-key",
+            "FEISHU_BOT_GATEWAY_KEY": "bot-key",
+        },
+        api_key_env="FEISHU_BOT_GATEWAY_KEY",
+        codex_home=tmp_path / "codex-home",
+    )
+
+    assert sanitized["PATH"] == "C:/bin"
+    assert sanitized["CODEX_API_KEY"] == "bot-key"
+    assert sanitized["CODEX_HOME"] == str(tmp_path / "codex-home")
+    assert "OPENAI_API_KEY" not in sanitized
+    assert "FEISHU_BOT_GATEWAY_KEY" not in sanitized
 
 
 def _help_plan() -> dict[str, object]:
