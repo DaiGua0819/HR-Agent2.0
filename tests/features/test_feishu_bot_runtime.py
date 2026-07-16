@@ -248,6 +248,57 @@ users:
     assert "codex_api_key_unavailable" in result["errors"]
 
 
+@pytest.mark.parametrize(
+    ("base_url", "api_key_env", "expected_error"),
+    [
+        ("http://127.0.0.1:8097/v1", "", "codex_api_key_env_missing"),
+        ("", "FEISHU_BOT_GATEWAY_KEY", "codex_provider_base_url_missing"),
+    ],
+)
+def test_preflight_rejects_partial_explicit_codex_configuration_without_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str,
+    api_key_env: str,
+    expected_error: str,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        FEISHU_BOT_CODEX_BASE_URL=base_url,
+        FEISHU_BOT_CODEX_API_KEY_ENV=api_key_env,
+    )
+    settings.resolved_feishu_bot_access_config_path.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 管理员
+    role: admin
+    jobTypes: ['*']
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FEISHU_BOT_GATEWAY_KEY", "bot-only-secret")
+    calls: list[str] = []
+
+    async def codex_probe() -> dict[str, object]:
+        calls.append("saved-login")
+        return {"ok": True}
+
+    runtime = FeishuBotRuntime(
+        settings=settings,
+        lark_probe=lambda _profile: _async_result({"ok": True}),
+        codex_probe=codex_probe,
+    )
+
+    result = asyncio.run(runtime.preflight())
+
+    assert result["ok"] is False
+    assert result["checks"]["codex"]["error"] == expected_error
+    assert expected_error in result["errors"]
+    assert calls == []
+
+
 def test_bot_single_instance_lock_rejects_overlap(tmp_path: Path) -> None:
     lock_path = tmp_path / "feishu-bot.lock"
 

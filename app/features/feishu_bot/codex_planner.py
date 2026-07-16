@@ -36,12 +36,40 @@ _INTENT_PERMISSIONS = {
     "recent_errors": "query:errors",
 }
 _DATE_RE = re.compile(r"\b(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\b")
-_CODEX_PARENT_ENV_DENY = {
-    "CODEX_ACCESS_TOKEN",
-    "CODEX_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENAI_MODEL",
+_CODEX_PARENT_ENV_ALLOW = {
+    "ALLUSERSPROFILE",
+    "APPDATA",
+    "CODEX_HOME",
+    "COLORTERM",
+    "COMSPEC",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOCALAPPDATA",
+    "NO_COLOR",
+    "OS",
+    "PATH",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+    "WINDIR",
 }
 
 
@@ -324,11 +352,11 @@ def _codex_parent_environment(
 ) -> dict[str, str]:
     """Expose only the explicitly selected bot credential to Codex itself."""
 
-    denied = {*_CODEX_PARENT_ENV_DENY, clean_text(api_key_env).upper()}
+    credential_key = clean_text(api_key_env).upper()
     sanitized = {
         key: value
         for key, value in source.items()
-        if key.upper() not in denied
+        if key.upper() in _CODEX_PARENT_ENV_ALLOW and key.upper() != credential_key
     }
     if api_key_env:
         api_key = source.get(api_key_env, "")

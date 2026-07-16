@@ -374,6 +374,9 @@ def test_codex_parent_environment_maps_only_explicit_bot_api_key(
             "PATH": "C:/bin",
             "OPENAI_API_KEY": "project-key",
             "FEISHU_BOT_GATEWAY_KEY": "bot-key",
+            "FEISHU_APP_SECRET": "feishu-secret",
+            "AUTO_SYNC_SECRET": "sync-secret",
+            "DATABASE_PASSWORD": "database-secret",
         },
         api_key_env="FEISHU_BOT_GATEWAY_KEY",
         codex_home=tmp_path / "codex-home",
@@ -384,6 +387,31 @@ def test_codex_parent_environment_maps_only_explicit_bot_api_key(
     assert sanitized["CODEX_HOME"] == str(tmp_path / "codex-home")
     assert "OPENAI_API_KEY" not in sanitized
     assert "FEISHU_BOT_GATEWAY_KEY" not in sanitized
+    assert "FEISHU_APP_SECRET" not in sanitized
+    assert "AUTO_SYNC_SECRET" not in sanitized
+    assert "DATABASE_PASSWORD" not in sanitized
+
+
+def test_codex_parent_environment_uses_minimal_system_allowlist() -> None:
+    sanitized = _codex_parent_environment(
+        {
+            "PATH": "C:/bin",
+            "SYSTEMROOT": "C:/Windows",
+            "TEMP": "C:/Temp",
+            "HOME": "C:/Users/test",
+            "FEISHU_APP_SECRET": "feishu-secret",
+            "AUTO_SYNC_SECRET": "sync-secret",
+            "HR_AGENT_BROWSER_PROFILE": "browser-profile",
+            "UNRELATED_TOKEN": "token",
+        }
+    )
+
+    assert sanitized == {
+        "PATH": "C:/bin",
+        "SYSTEMROOT": "C:/Windows",
+        "TEMP": "C:/Temp",
+        "HOME": "C:/Users/test",
+    }
 
 
 def _help_plan() -> dict[str, object]:
