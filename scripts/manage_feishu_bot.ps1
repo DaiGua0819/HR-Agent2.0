@@ -8,9 +8,6 @@ param(
 $ErrorActionPreference = "Stop"
 $resolvedRoot = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $runner = Join-Path $resolvedRoot "scripts\run_feishu_bot.py"
-$runtimeDir = Join-Path $resolvedRoot "data\feishu_bot"
-$stdoutPath = Join-Path $runtimeDir "bot.out.log"
-$stderrPath = Join-Path $runtimeDir "bot.err.log"
 
 if (-not $PythonPath) {
     $candidates = @(
@@ -33,6 +30,9 @@ if (-not $PythonPath) {
 if (-not (Test-Path -LiteralPath $runner)) {
     throw "run_feishu_bot.py not found under $resolvedRoot"
 }
+if ($Action -in @("start", "preflight")) {
+    $env:FEISHU_BOT_ENABLED = "true"
+}
 
 switch ($Action) {
     "preflight" {
@@ -48,24 +48,7 @@ switch ($Action) {
         exit $LASTEXITCODE
     }
     "start" {
-        & $PythonPath $runner preflight
-        if ($LASTEXITCODE -ne 0) {
-            throw "Feishu bot preflight failed."
-        }
-        New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-        $process = Start-Process `
-            -FilePath $PythonPath `
-            -ArgumentList @($runner, "serve") `
-            -WorkingDirectory $resolvedRoot `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -PassThru
-        [ordered]@{
-            started = $true
-            launcherPid = [int]$process.Id
-            runtimeDir = $runtimeDir
-        } | ConvertTo-Json -Compress
-        exit 0
+        & $PythonPath $runner start
+        exit $LASTEXITCODE
     }
 }

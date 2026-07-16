@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.features.feishu_bot.repository import FeishuBotRepository
@@ -13,7 +15,7 @@ from app.features.feishu_bot.runtime import (
     FeishuBotRuntime,
 )
 from app.settings import AppSettings
-from scripts.run_feishu_bot import build_parser
+from scripts.run_feishu_bot import build_parser, launch_detached_bot
 
 
 def _settings(
@@ -434,9 +436,12 @@ def test_operational_cli_and_manager_are_bot_only_and_hidden() -> None:
     commands = parser._subparsers._group_actions[0].choices  # type: ignore[attr-defined]
     manager = Path("scripts/manage_feishu_bot.ps1").read_text(encoding="utf-8")
 
-    assert set(commands) == {"preflight", "handle-event", "serve", "status", "stop"}
-    assert "Start-Process" in manager
-    assert "-WindowStyle Hidden" in manager
+    assert set(commands) == {"start", "preflight", "handle-event", "serve", "status", "stop"}
+    assert "Start-Process" not in manager
+    assert '$Action -in @("start", "preflight")' in manager
+    assert '$env:FEISHU_BOT_ENABLED = "true"' in manager
+    assert "SetEnvironmentVariable" not in manager
+    assert "OPENAI_API_KEY=" not in manager
     assert "$worktreeHostRoot" in manager
     assert 'Join-Path $worktreeHostRoot ".venv312\\Scripts\\python.exe"' in manager
     assert "run_feishu_bot.py" in manager
@@ -445,6 +450,61 @@ def test_operational_cli_and_manager_are_bot_only_and_hidden() -> None:
     assert "run_control_plane.py" not in manager
     assert "8080" not in manager
     assert "18080" not in manager
+
+
+def test_detached_launcher_does_not_inherit_the_calling_terminal(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Process:
+        pid = 4321
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    class _Runtime:
+        paths = SimpleNamespace(runtime_dir=tmp_path)
+        calls = 0
+
+        def status(self) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return {"running": False, "pid": 0, "status": "stopped"}
+            return {
+                "running": True,
+                "pid": 9876,
+                "status": "running",
+                "startedAt": "2026-07-16T13:00:00+00:00",
+            }
+
+    def _popen(argv: list[str], **kwargs: object) -> _Process:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return _Process()
+
+    result = launch_detached_bot(
+        _Runtime(),  # type: ignore[arg-type]
+        python_executable="python.exe",
+        popen_factory=_popen,  # type: ignore[arg-type]
+        sleep=lambda _seconds: None,
+        timeout_seconds=1,
+        platform_name="nt",
+    )
+
+    assert result["started"] is True
+    assert result["launcherPid"] == 4321
+    assert result["pid"] == 9876
+    assert captured["argv"][-1] == "serve"
+    assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["close_fds"] is True
+    assert captured["shell"] is False
+    assert int(captured["creationflags"]) & subprocess.CREATE_NO_WINDOW
+    assert int(captured["creationflags"]) & subprocess.DETACHED_PROCESS
+    assert captured["start_new_session"] is False
+    assert captured["stdout"].closed is True  # type: ignore[union-attr]
+    assert captured["stderr"].closed is True  # type: ignore[union-attr]
 
 
 async def _async_result(value: dict[str, object]) -> dict[str, object]:
