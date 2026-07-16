@@ -16,10 +16,10 @@ AI_V4_SCORING_VERSION_NAME = "历史评分 v4"
 AI_V4_SCORING_VERSION_DESCRIPTION = (
     "Agent项目深度评分：项目经历 65 分，技术栈 35 分，支持人工反馈补充规则。"
 )
-POSITION_SCORING_VERSION = "v5-position-must-bonus"
-POSITION_SCORING_VERSION_NAME = "岗位评分 v5"
+POSITION_SCORING_VERSION = "v6-b2b-ai-product-manager-gates"
+POSITION_SCORING_VERSION_NAME = "岗位评分 v6"
 POSITION_SCORING_VERSION_DESCRIPTION = (
-    "岗位评分规则改为必须项、加分项和风险项，不再依赖岗位描述标签匹配。"
+    "岗位评分支持必须项、加分项、风险项和分组硬门槛；AI 产品经理增加 B2B 销售与企业级产品门槛。"
 )
 SCORING_VERSION = AI_V4_SCORING_VERSION
 SCORING_VERSION_NAME = AI_V4_SCORING_VERSION_NAME

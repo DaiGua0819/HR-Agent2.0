@@ -333,6 +333,42 @@ CREATE TABLE IF NOT EXISTS resume_saved_views (
 CREATE INDEX IF NOT EXISTS idx_resume_saved_views_user
   ON resume_saved_views(user_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS feishu_bot_events (
+  event_id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE,
+  sender_open_id TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  chat_type TEXT NOT NULL DEFAULT '',
+  message_type TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'received',
+  response_message_id TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  received_at TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT '',
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_feishu_bot_events_sender
+  ON feishu_bot_events(sender_open_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feishu_bot_events_status
+  ON feishu_bot_events(status, received_at DESC);
+
+CREATE TABLE IF NOT EXISTS feishu_bot_turns (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  sender_open_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  intent TEXT NOT NULL DEFAULT '',
+  question TEXT NOT NULL DEFAULT '',
+  response TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(event_id) REFERENCES feishu_bot_events(event_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feishu_bot_turns_context
+  ON feishu_bot_turns(chat_id, sender_open_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
   thread_id TEXT NOT NULL,
   checkpoint_id TEXT NOT NULL,

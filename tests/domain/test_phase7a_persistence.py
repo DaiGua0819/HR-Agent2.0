@@ -128,9 +128,11 @@ def test_resume_repository_auto_scores_ai_product_manager_resume_on_save(
             payload={
                 "name": "Carol",
                 "rawText": (
-                    "4年产品经理 AI SaaS Agent Copilot Workflow 用户访谈 真实工作流拆解 "
-                    "PRD 用户故事 验收标准 上线复盘 Prompt RAG Tool Calling LLM "
-                    "质量指标 bad case golden set Cursor ChatGPT SQL Python 0到1 商业化"
+                    "4年产品经理 B2B销售 CRM 客户管理 商机管理 获客 线索 跟进 报价 "
+                    "签约 成交 交付 回款 续约 企业级产品 企业服务 SaaS 多角色 权限管理 "
+                    "审批流 工作流 数据安全 客户现场 用户访谈 产品路线图 MVP PRD "
+                    "验收标准 跨团队交付 AI能力边界 人机协作 人工确认 纠错机制 "
+                    "客户落地 使用反馈 迭代闭环 0到1 独立负责"
                 ),
             },
         )

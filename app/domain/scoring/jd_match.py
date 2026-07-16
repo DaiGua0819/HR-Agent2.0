@@ -11,7 +11,7 @@ from dataclasses import asdict
 from typing import Any
 
 from app.core.text import clean_text
-from app.domain.scoring.jd_profiles import JdProfile, JdRule, get_jd_profile
+from app.domain.scoring.jd_profiles import JdHardGate, JdProfile, JdRule, get_jd_profile
 
 
 def clean_jd_keyword(keyword: Any) -> str:
@@ -61,6 +61,49 @@ def match_jd_rule_items(text: str, rules: list[JdRule] | tuple[JdRule, ...]) -> 
     return {"items": items, "ratio": ratio, "count": len(items), "total": len(rules)}
 
 
+def match_jd_hard_gates(
+    text: str,
+    gates: list[JdHardGate] | tuple[JdHardGate, ...],
+) -> dict[str, Any]:
+    """匹配分组硬门槛；每个证据组命中任一关键词才算命中该组。"""
+
+    items: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for gate in gates:
+        groups: list[dict[str, Any]] = []
+        for index, keywords in enumerate(gate.keyword_groups, start=1):
+            match = match_jd_keywords(text, keywords)
+            groups.append(
+                {
+                    "index": index,
+                    "passed": bool(match["matched"]),
+                    "matched": match["matched"],
+                    "keywords": list(keywords),
+                }
+            )
+        required_groups = gate.minimum_groups or len(groups)
+        required_groups = min(len(groups), max(0, required_groups))
+        matched_groups = sum(1 for group in groups if group["passed"])
+        passed = matched_groups >= required_groups
+        if not passed:
+            missing.append(gate.label)
+        items.append(
+            {
+                "label": gate.label,
+                "passed": passed,
+                "matchedGroups": matched_groups,
+                "requiredGroups": required_groups,
+                "groups": groups,
+            }
+        )
+    return {
+        "items": items,
+        "passedCount": sum(1 for item in items if item["passed"]),
+        "total": len(items),
+        "missing": missing,
+    }
+
+
 def get_jd_level(score: int | float) -> str:
     """旧岗位分档：75/55/35 三档阈值。"""
 
@@ -85,6 +128,7 @@ def calculate_jd_match(
     must = match_jd_rule_items(text, selected.must_have)
     bonus = match_jd_rule_items(text, selected.bonus)
     risks = match_jd_rule_items(text, selected.risks)
+    hard_gates = match_jd_hard_gates(text, selected.hard_gates)
 
     role_boost = 15 if _matches_role(job_type or "", selected) else 0
     focus_boost = 5 if bonus["items"] or must["items"] else 0
@@ -98,6 +142,11 @@ def calculate_jd_match(
     if risks["count"] >= 2:
         raw_score = min(raw_score, 74)
 
+    missing_gate_count = len(hard_gates["missing"])
+    hard_gate_cap = 54 if missing_gate_count >= 2 else 74 if missing_gate_count == 1 else None
+    if hard_gate_cap is not None:
+        raw_score = min(raw_score, hard_gate_cap)
+
     score = int(max(0, min(100, round(raw_score))))
     return {
         "profile": selected.name,
@@ -106,6 +155,9 @@ def calculate_jd_match(
         "must": must,
         "bonus": bonus,
         "risks": risks,
+        "hardGates": hard_gates,
+        "missingHardGates": hard_gates["missing"],
+        "hardGateCap": hard_gate_cap,
         "roleBoost": role_boost,
         "focusBoost": focus_boost,
         "riskPenalty": risk_penalty,

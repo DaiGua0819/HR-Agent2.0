@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent",
+    "date",
+    "dateStart",
+    "dateEnd",
+    "jobTypes",
+    "owner",
+    "platform",
+    "limit",
+    "clarification"
+  ],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "help",
+        "daily_summary",
+        "resume_counts",
+        "recent_resumes",
+        "review_summary",
+        "worker_status",
+        "recent_errors",
+        "unsupported"
+      ]
+    },
+    "date": {
+      "type": "string"
+    },
+    "dateStart": {
+      "type": "string"
+    },
+    "dateEnd": {
+      "type": "string"
+    },
+    "jobTypes": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string"
+      }
+    },
+    "owner": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "clarification": {
+      "type": "string"
+    }
+  }
+}

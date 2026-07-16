@@ -57,7 +57,7 @@ def test_scoring_entrypoints_and_version_constants() -> None:
     contact_score = score_automation_contact_match("本科 电气 自动化 PLC 产线调试", "电气工程师")
     assert resume_score["level"] in {"A 优先", "B 复核"}
     assert contact_score["score"] == resume_score["score"]
-    assert POSITION_SCORING_VERSION == "v5-position-must-bonus"
+    assert POSITION_SCORING_VERSION == "v6-b2b-ai-product-manager-gates"
     assert SCORING_VERSION == "v4-agent-depth-human-feedback"
 
 
@@ -117,31 +117,153 @@ def test_operation_profiles_penalize_pure_execution_without_strategy() -> None:
     assert result["risks"]["count"] >= 2
 
 
-def test_ai_product_manager_scores_against_ai_native_product_jd() -> None:
-    """AI 产品经理按 PDF JD 识别工作流拆解、Agent 产品设计、Prompt/RAG 和 Eval 闭环。"""
+def test_ai_product_manager_scores_against_b2b_enterprise_product_jd() -> None:
+    """AI 产品经理必须同时具备 B2B 销售链路和企业级产品复杂度证据。"""
 
     result = calculate_jd_match(
         (
-            "AI产品经理 4年产品经理 B2B 企业服务 AI SaaS Agent Copilot Workflow "
-            "用户访谈 真实工作流拆解 痛点分析 付费动机 PRD 用户故事 验收标准 上线复盘 "
-            "Prompt RAG Tool Calling LLM 质量指标 任务完成率 采纳率 bad case golden set "
-            "Cursor Claude Code ChatGPT SQL Python 0到1 产品 商业化 定价 客户试点"
+            "AI产品经理 4年产品经理 B2B销售 大客户销售 CRM 客户管理 商机管理 "
+            "获客 线索 跟进 报价 签约 成交 交付 回款 续约 企业级产品 企业服务 SaaS "
+            "多角色 权限管理 审批流 工作流 数据安全 用户访谈 客户现场 真实场景洞察 "
+            "产品路线图 MVP 优先级 PRD 验收标准 跨团队交付 AI能力边界 人机协作 "
+            "人工确认 纠错机制 客户落地 使用反馈 迭代闭环 0到1 独立负责产品模块 "
+            "企业微信 企微API 工作手机 本地服务器 私有化部署 制造业 数据指标 创业团队"
         ),
         "AI产品经理",
     )
 
     assert result["profile"] == "AI产品经理"
     assert result["score"] >= 75
+    assert result["missingHardGates"] == []
+    assert result["hardGateCap"] is None
+    assert all(item["passed"] for item in result["hardGates"]["items"])
     assert {item["label"] for item in result["must"]["items"]} >= {
-        "2年以上产品/创业/咨询/解决方案/业务分析经验",
-        "用户访谈与真实工作流拆解",
-        "AI Agent/Copilot/Workflow 产品设计",
-        "Prompt/RAG/Tool Calling/LLM 基础理解",
-        "Eval/质量指标/Bad case 闭环",
-        "PRD/用户故事/验收标准/上线复盘能力",
+        "客户现场与真实场景洞察",
+        "产品路线图、MVP与优先级",
+        "PRD、验收标准与跨团队交付",
+        "AI能力边界、人机协作与纠错",
+        "客户落地与反馈迭代闭环",
+        "独立0到1产品模块交付",
     }
     assert result["bonus"]["count"] >= 4
     assert result["risks"]["count"] == 0
+
+
+def test_ai_product_manager_missing_enterprise_gate_is_capped_at_b() -> None:
+    """具备 B2B 销售链路但没有企业级复杂产品证据时最高只能 B。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 B2B销售 CRM 客户管理 商机管理 获客 跟进 报价 签约 交付 回款 "
+            "用户访谈 客户现场 产品路线图 MVP PRD 验收标准 AI能力边界 人工确认 "
+            "客户落地 反馈闭环 0到1 独立负责"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["missingHardGates"] == ["企业级产品经验"]
+    assert result["hardGateCap"] == 74
+    assert result["score"] <= 74
+    assert result["level"] != "A 优先"
+
+
+def test_ai_product_manager_missing_both_gates_is_capped_at_c() -> None:
+    """泛 AI 产品经历没有 B2B 销售和企业产品证据时最高只能 C。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 Agent Prompt RAG PRD 用户访谈 产品路线图 MVP "
+            "AI能力边界 人机协作 0到1"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["missingHardGates"] == ["B2B销售理解", "企业级产品经验"]
+    assert result["hardGateCap"] == 54
+    assert result["score"] <= 54
+    assert result["level"] in {"C 暂缓", "D 不优先"}
+
+
+def test_ai_product_manager_bare_b2b_and_crm_terms_do_not_pass_grouped_gates() -> None:
+    """只有宽泛的 B2B/CRM 名词，没有链路和复杂度证据时不能通过硬门槛。"""
+
+    result = calculate_jd_match("AI产品经理 B2B CRM SaaS", "AI产品经理")
+
+    assert result["missingHardGates"] == ["B2B销售理解", "企业级产品经验"]
+    assert result["hardGateCap"] == 54
+
+
+def test_ai_product_manager_customer_management_and_delivery_do_not_fake_sales_gate() -> None:
+    """泛客户管理和项目交付不能冒充 B2B 销售理解。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 客户管理 项目交付 企业级产品 ERP 多角色 权限体系 审批流 "
+            "客户现场 需求调研 需求全生命周期 PRD 测试验收 部署交付 RAG 人工审核 "
+            "客户反馈 版本迭代 0到1 独立负责"
+        ),
+        "AI产品经理",
+    )
+
+    assert "B2B销售理解" in result["missingHardGates"]
+    assert "企业级产品经验" not in result["missingHardGates"]
+
+
+def test_ai_product_manager_sales_automation_and_customer_development_pass_sales_gate() -> None:
+    """销售自动化、客户开发、产品定价和签约金额属于完整 B2B 销售证据。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 企业服务 ERP 销售自动化 客户开发 产品定价 售前方案 "
+            "跟进客户 签约金额 回款 续约 多角色 权限管理 审批流 工作流 "
+            "现场调研 产品规划 版本迭代 需求全生命周期 研发测试 上线部署 "
+            "项目实施 客户验收 智能体 人工兜底 从0到1"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["missingHardGates"] == []
+    assert result["hardGateCap"] is None
+    assert {item["label"] for item in result["must"]["items"]} >= {
+        "客户现场与真实场景洞察",
+        "产品路线图、MVP与优先级",
+        "PRD、验收标准与跨团队交付",
+        "AI能力边界、人机协作与纠错",
+        "客户落地与反馈迭代闭环",
+        "独立0到1产品模块交付",
+    }
+    assert result["score"] >= 75
+
+
+def test_ai_product_manager_tob_platform_and_system_integration_pass_enterprise_gate() -> None:
+    """ToB 平台及多系统集成、中后台和权限配置属于企业产品复杂度证据。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 B2B销售 售前 客户开发 报价 签约 回款 "
+            "ToB平台 政企产品 中后台 多系统集成 数据中台 权限配置 组织架构 "
+            "客户对接 版本推进 PRD UAT 交付验收 Agent 幻觉 人工审核 0→1"
+        ),
+        "AI产品经理",
+    )
+
+    assert result["missingHardGates"] == []
+    assert result["hardGateCap"] is None
+
+
+def test_ai_product_manager_bidding_and_poc_count_as_b2b_sales_cycle() -> None:
+    """企业售前中的招投标、POC 和中标属于 B2B 销售链路证据。"""
+
+    result = calculate_jd_match(
+        (
+            "AI产品经理 售前解决方案 客户拓展 招投标 POC测试 成功中标 "
+            "企业级产品 SaaS 多角色 权限管理 审批流"
+        ),
+        "AI产品经理",
+    )
+
+    assert "B2B销售理解" not in result["missingHardGates"]
+    assert "企业级产品经验" not in result["missingHardGates"]
 
 
 def test_ai_product_manager_penalizes_traditional_prd_only_profile() -> None:
