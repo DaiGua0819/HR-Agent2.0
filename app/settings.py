@@ -182,6 +182,34 @@ class AppSettings(BaseSettings):
         default=Path("data/sync/pending"),
         validation_alias="AUTO_SYNC_PENDING_DIR",
     )
+    feishu_bot_enabled: bool = Field(
+        default=False,
+        validation_alias="FEISHU_BOT_ENABLED",
+    )
+    feishu_bot_profile: str = Field(
+        default="hr-agent-readonly-bot",
+        validation_alias="FEISHU_BOT_PROFILE",
+    )
+    feishu_bot_access_config_path: Path = Field(
+        default=Path("config/feishu_bot_access.yaml"),
+        validation_alias="FEISHU_BOT_ACCESS_CONFIG_PATH",
+    )
+    feishu_bot_runtime_dir: Path = Field(
+        default=Path("data/feishu_bot"),
+        validation_alias="FEISHU_BOT_RUNTIME_DIR",
+    )
+    feishu_bot_codex_runtime_dir: Path = Field(
+        default=Path("data/feishu_bot/codex-runtime"),
+        validation_alias="FEISHU_BOT_CODEX_RUNTIME_DIR",
+    )
+    feishu_bot_manager_runs_dir: Path = Field(
+        default=Path("data/agent_manager/runs"),
+        validation_alias="FEISHU_BOT_MANAGER_RUNS_DIR",
+    )
+    feishu_bot_codex_model: str = Field(
+        default="",
+        validation_alias="FEISHU_BOT_CODEX_MODEL",
+    )
     legacy_resume_db_path: Path = Field(
         default=Path("../patchwork-recruit-gpt/data/resumes.sqlite"),
         validation_alias="LEGACY_RESUME_DB_PATH",
@@ -213,6 +241,22 @@ class AppSettings(BaseSettings):
     @property
     def resolved_auto_sync_pending_dir(self) -> Path:
         return self.resolve_path(self.auto_sync_pending_dir)
+
+    @property
+    def resolved_feishu_bot_access_config_path(self) -> Path:
+        return self.resolve_path(self.feishu_bot_access_config_path)
+
+    @property
+    def resolved_feishu_bot_runtime_dir(self) -> Path:
+        return self.resolve_path(self.feishu_bot_runtime_dir)
+
+    @property
+    def resolved_feishu_bot_codex_runtime_dir(self) -> Path:
+        return self.resolve_path(self.feishu_bot_codex_runtime_dir)
+
+    @property
+    def resolved_feishu_bot_manager_runs_dir(self) -> Path:
+        return self.resolve_path(self.feishu_bot_manager_runs_dir)
 
     def worker_for_owner(self, owner: str) -> WorkerConfig:
         """按负责人查找 worker 配置。"""
