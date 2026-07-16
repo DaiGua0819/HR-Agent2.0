@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import re
 import shutil
 import time
@@ -14,19 +15,12 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.text import clean_text
-from app.domain.resume.job_types import (
-    any_job_type_matches,
-    canonical_resume_job_type,
-)
+from app.domain.resume.job_types import canonical_resume_job_type
 from app.features.feishu_bot.models import BotActor, BotQueryPlan
+from app.features.feishu_bot.repository import redact_sensitive_text
 
 CodexRunner = Callable[..., Awaitable["CodexRunResult"]]
-_TOOL_ITEM_TYPES = {
-    "command_execution",
-    "file_change",
-    "mcp_tool_call",
-    "web_search",
-}
+_SAFE_ITEM_TYPES = {"agent_message", "reasoning"}
 _INTENT_PERMISSIONS = {
     "daily_summary": "query:summary",
     "resume_counts": "query:resumes",
@@ -36,6 +30,33 @@ _INTENT_PERMISSIONS = {
     "recent_errors": "query:errors",
 }
 _DATE_RE = re.compile(r"\b(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\b")
+_CHAT_TRANSCRIPT_LINE_RE = re.compile(
+    r"(?im)^\s*(?:\d{1,2}:\d{2}\s*)?"
+    r"(?:候选人|招聘者|面试官|HR|对方|我|candidate|recruiter|interviewer)\s*[:：]"
+)
+_RAW_RESUME_MARKERS = (
+    "个人信息",
+    "教育经历",
+    "工作经历",
+    "项目经历",
+    "专业技能",
+    "求职意向",
+    "自我评价",
+    "联系方式",
+    "期望薪资",
+)
+_RAW_RESUME_MARKERS_EN = (
+    "education:",
+    "work experience:",
+    "professional experience:",
+    "project experience:",
+    "skills:",
+    "summary:",
+    "career objective:",
+)
+_RAW_CONTENT_CLARIFICATION = (
+    "请只描述要查询的招聘统计或状态，不要粘贴简历正文或候选人聊天原文。"
+)
 _CODEX_PARENT_ENV_ALLOW = {
     "ALLUSERSPROFILE",
     "APPDATA",
@@ -123,6 +144,11 @@ class CodexQueryPlanner:
         context: list[dict[str, object]] | None = None,
         available_job_types: list[str] | None = None,
     ) -> BotQueryPlan:
+        if _looks_like_raw_recruitment_content(question):
+            return BotQueryPlan(
+                intent="unsupported",
+                clarification=_RAW_CONTENT_CLARIFICATION,
+            )
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         codex_home = self.runtime_dir / "codex-home" if self.api_key_env else None
         if codex_home is not None:
@@ -294,16 +320,14 @@ async def _run_subprocess(
     )
     try:
         stdout, stderr = await asyncio.wait_for(
-            process.communicate(stdin.encode("utf-8")),
+            _collect_codex_output(process, stdin),
             timeout=max(1.0, timeout_seconds),
         )
+    except CodexPolicyViolation:
+        await _stop_subprocess(process)
+        raise
     except TimeoutError:
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=5)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
+        await _stop_subprocess(process)
         return CodexRunResult(
             returncode=124,
             stdout="",
@@ -318,10 +342,58 @@ async def _run_subprocess(
     )
 
 
+async def _collect_codex_output(
+    process: asyncio.subprocess.Process,
+    stdin: str,
+) -> tuple[bytes, bytes]:
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        process.stdin.write(stdin.encode("utf-8"))
+        await process.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        process.stdin.close()
+
+    stderr_task = asyncio.create_task(process.stderr.read())
+    stdout_parts: list[bytes] = []
+    try:
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            _raise_on_tool_events(line.decode("utf-8", errors="replace"))
+            stdout_parts.append(line)
+        await process.wait()
+        stderr = await stderr_task
+    finally:
+        if not stderr_task.done():
+            stderr_task.cancel()
+            try:
+                await stderr_task
+            except asyncio.CancelledError:
+                pass
+    return b"".join(stdout_parts), stderr
+
+
+async def _stop_subprocess(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
 def _resolve_command_prefix(
     command: str,
     *,
     platform_name: str | None = None,
+    machine_name: str | None = None,
     which: Callable[[str], str | None] = shutil.which,
     exists: Callable[[Path], bool] | None = None,
 ) -> list[str]:
@@ -334,6 +406,46 @@ def _resolve_command_prefix(
     command_shim = which(f"{command}.cmd")
     if command_shim:
         root = Path(command_shim).parent
+        machine = clean_text(machine_name or platform.machine()).lower()
+        is_arm64 = machine in {"arm64", "aarch64"}
+        package = "codex-win32-arm64" if is_arm64 else "codex-win32-x64"
+        target = (
+            "aarch64-pc-windows-msvc"
+            if is_arm64
+            else "x86_64-pc-windows-msvc"
+        )
+        native_candidates = (
+            root
+            / "node_modules"
+            / "@openai"
+            / "codex"
+            / "node_modules"
+            / "@openai"
+            / package
+            / "vendor"
+            / target
+            / "bin"
+            / "codex.exe",
+            root
+            / "node_modules"
+            / "@openai"
+            / package
+            / "vendor"
+            / target
+            / "bin"
+            / "codex.exe",
+            root
+            / "node_modules"
+            / "@openai"
+            / "codex"
+            / "vendor"
+            / target
+            / "bin"
+            / "codex.exe",
+        )
+        for native in native_candidates:
+            if path_exists(native):
+                return [str(native)]
         node = root / "node.exe"
         script = root / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
         if path_exists(node) and path_exists(script):
@@ -378,8 +490,7 @@ def _extract_plan(stdout: str) -> str:
             continue
         item = event.get("item") if isinstance(event.get("item"), dict) else {}
         item_type = clean_text(item.get("type"))
-        if item_type in _TOOL_ITEM_TYPES:
-            raise CodexPolicyViolation(f"codex_policy_violation:{item_type}")
+        _reject_unsafe_item_type(item_type)
         if item_type == "agent_message":
             final_text = clean_text(item.get("text") or item.get("content"))
     if not final_text:
@@ -399,8 +510,12 @@ def _raise_on_tool_events(stdout: str) -> None:
             continue
         item = event.get("item") if isinstance(event.get("item"), dict) else {}
         item_type = clean_text(item.get("type"))
-        if item_type in _TOOL_ITEM_TYPES:
-            raise CodexPolicyViolation(f"codex_policy_violation:{item_type}")
+        _reject_unsafe_item_type(item_type)
+
+
+def _reject_unsafe_item_type(item_type: str) -> None:
+    if item_type and item_type not in _SAFE_ITEM_TYPES:
+        raise CodexPolicyViolation(f"codex_policy_violation:{item_type}")
 
 
 def _validate_plan(actor: BotActor, plan: BotQueryPlan) -> BotQueryPlan:
@@ -414,7 +529,7 @@ def _validate_plan(actor: BotActor, plan: BotQueryPlan) -> BotQueryPlan:
         job = canonical_resume_job_type(value)
         if not job:
             continue
-        if "*" not in actor.job_types and not any_job_type_matches(job, actor.job_types):
+        if "*" not in actor.job_types and job not in actor.job_types:
             raise PermissionError(f"feishu_bot_job_scope_denied:{job}")
         if job not in jobs:
             jobs.append(job)
@@ -440,10 +555,12 @@ def _planner_prompt(
     safe_context = [
         {
             "intent": clean_text(item.get("intent"))[:40],
-            "question": clean_text(item.get("question"))[:300],
-            "response": clean_text(item.get("response"))[:500],
+            "question": clean_text(
+                redact_sensitive_text(item.get("question"))
+            )[:300],
         }
         for item in context[-4:]
+        if not _looks_like_raw_recruitment_content(item.get("question"))
     ]
     payload = {
         "currentTime": now.astimezone(_shanghai_timezone()).isoformat(),
@@ -456,7 +573,7 @@ def _planner_prompt(
         + ["help", "unsupported"],
         "allowedJobTypes": available_job_types,
         "recentContext": safe_context,
-        "question": clean_text(question)[:1000],
+        "question": clean_text(redact_sensitive_text(question))[:1000],
     }
     return (
         "你是招聘只读查询规划器。禁止调用任何工具、命令、文件、网络或 MCP。"
@@ -474,6 +591,19 @@ def _allowed_prompt_jobs(actor: BotActor, available: list[str]) -> list[str]:
         if job and job != "*" and job not in result:
             result.append(job)
     return result
+
+
+def _looks_like_raw_recruitment_content(value: object) -> bool:
+    text = str(value or "").strip()
+    if len(text) > 500:
+        return True
+    lowered = text.lower()
+    marker_count = sum(marker in text for marker in _RAW_RESUME_MARKERS) + sum(
+        marker in lowered for marker in _RAW_RESUME_MARKERS_EN
+    )
+    if marker_count >= 3 and len(text) > 180:
+        return True
+    return len(_CHAT_TRANSCRIPT_LINE_RE.findall(text)) >= 3
 
 
 def _jobs_in_question(question: str, available: list[str]) -> list[str]:

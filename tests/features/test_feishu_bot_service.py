@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
+import pytest
 from app.features.feishu_bot.lark_cli import LarkCliError
 from app.features.feishu_bot.models import (
     BotActor,
@@ -239,6 +240,40 @@ def test_member_query_is_scoped_rendered_and_audited(tmp_path: Path) -> None:
     assert turns[0]["intent"] == "resume_counts"
 
 
+def test_service_strips_previous_query_results_before_calling_planner(
+    tmp_path: Path,
+) -> None:
+    bot, planner, _queries, _replies, repository = _bot(tmp_path)
+    previous = _event(event_id="previous", content="今天有多少份简历？")
+    assert repository.claim_event(previous) is True
+    repository.mark_processing(previous.event_id)
+    repository.append_turn(
+        event_id=previous.event_id,
+        chat_id=previous.chat_id,
+        sender_open_id=previous.sender_open_id,
+        actor_name="测试成员",
+        intent="resume_counts",
+        question=previous.content,
+        response="SENSITIVE_DB_RESULT_917",
+    )
+    repository.mark_completed(previous.event_id, response_message_id="om-previous")
+
+    status = asyncio.run(
+        bot.handle_event(_event(event_id="current", content="昨天呢？"))
+    )
+
+    assert status == "completed"
+    context = planner.calls[0]["context"]
+    assert isinstance(context, list)
+    assert context == [
+        {
+            "intent": "resume_counts",
+            "question": "今天有多少份简历？",
+        }
+    ]
+    assert "SENSITIVE_DB_RESULT_917" not in str(context)
+
+
 def test_long_event_id_uses_bounded_stable_reply_idempotency_key(tmp_path: Path) -> None:
     bot, _planner, _queries, replies, _repository = _bot(tmp_path)
     event = _event(event_id="event-" + "x" * 100)
@@ -459,3 +494,45 @@ def test_serve_stop_event_closes_idle_source_without_waiting_for_message(
     asyncio.run(scenario())
 
     assert source.closed is True
+
+
+def test_serve_stops_immediately_for_missing_scope_startup_failure(
+    tmp_path: Path,
+) -> None:
+    stop_event = asyncio.Event()
+    sources: list[object] = []
+
+    class _MissingScopeSource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def events(self):
+            raise LarkCliError(
+                "missing required scope",
+                error_type="permission",
+                subtype="missing_scope",
+            )
+            if False:
+                yield _event()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    def source_factory() -> _MissingScopeSource:
+        source = _MissingScopeSource()
+        sources.append(source)
+        return source
+
+    bot, _planner, _queries, _replies, _repository = _bot(
+        tmp_path,
+        event_source_factory=source_factory,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(LarkCliError, match="missing required scope"):
+            await asyncio.wait_for(bot.serve(stop_event), timeout=0.25)
+
+    asyncio.run(scenario())
+
+    assert len(sources) == 1
+    assert sources[0].closed is True

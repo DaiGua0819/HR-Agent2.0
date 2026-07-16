@@ -8,6 +8,7 @@ from app.control_plane.main import create_app
 from app.domain.batch.service import BatchService, parse_resume_text
 from app.domain.email_import.imap_client import EmailAttachment, EmailMessage
 from app.domain.email_import.service import EmailImportService
+from app.domain.scoring.engine import POSITION_SCORING_VERSION
 from app.domain.scoring.suggestions import GLOBAL_RULE_SUGGESTIONS
 from fastapi.testclient import TestClient
 
@@ -63,7 +64,7 @@ def test_rule_suggestions_and_control_plane_routes_are_wired() -> None:
         client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         rules = client.get("/api/scoring/rules", params={"job_type": "电气工程师"})
         assert rules.status_code == 200
-        assert rules.json()["version"] == "v5-position-must-bonus"
+        assert rules.json()["version"] == POSITION_SCORING_VERSION
 
         suggestion = client.post(
             "/api/scoring/feedback",

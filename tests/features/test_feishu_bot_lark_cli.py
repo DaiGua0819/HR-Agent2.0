@@ -10,6 +10,7 @@ from app.features.feishu_bot.lark_cli import (
     LarkCommandResult,
     LarkEventSource,
     LarkReplyClient,
+    _lark_parent_environment,
     _resolve_lark_cli_prefix,
 )
 
@@ -280,3 +281,29 @@ def test_windows_lark_cli_resolution_avoids_cmd_shell(tmp_path: Path) -> None:
     )
 
     assert resolved == [str(node), str(script)]
+
+
+def test_lark_parent_environment_uses_system_allowlist() -> None:
+    environment = _lark_parent_environment(
+        {
+            "PATH": "C:/bin",
+            "APPDATA": "C:/Users/test/AppData/Roaming",
+            "LOCALAPPDATA": "C:/Users/test/AppData/Local",
+            "USERPROFILE": "C:/Users/test",
+            "AUTO_SYNC_SECRET": "sync-secret",
+            "OPENAI_API_KEY": "openai-secret",
+            "DASHSCOPE_API_KEY": "dashscope-secret",
+            "FEISHU_APP_SECRET": "feishu-secret",
+        }
+    )
+
+    assert environment["PATH"] == "C:/bin"
+    assert environment["APPDATA"] == "C:/Users/test/AppData/Roaming"
+    assert environment["LOCALAPPDATA"] == "C:/Users/test/AppData/Local"
+    assert environment["USERPROFILE"] == "C:/Users/test"
+    assert environment["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] == "1"
+    assert environment["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] == "1"
+    assert "AUTO_SYNC_SECRET" not in environment
+    assert "OPENAI_API_KEY" not in environment
+    assert "DASHSCOPE_API_KEY" not in environment
+    assert "FEISHU_APP_SECRET" not in environment

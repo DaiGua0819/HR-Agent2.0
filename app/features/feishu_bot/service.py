@@ -146,10 +146,12 @@ class FeishuRecruitmentBot:
             )
 
         try:
-            context = self.repository.recent_turns(
-                event.chat_id,
-                event.sender_open_id,
-                limit=6,
+            context = _planner_context(
+                self.repository.recent_turns(
+                    event.chat_id,
+                    event.sender_open_id,
+                    limit=6,
+                )
             )
             available_jobs = self.queries.available_job_types(actor)
             plan = await self.planner.plan(
@@ -354,7 +356,15 @@ class FeishuRecruitmentBot:
 
 
 def _fatal_connection_error(error: LarkCliError) -> bool:
-    return error.error_type in {"conflict", "already_connected"} or error.subtype in {
+    return error.error_type in {
+        "auth",
+        "authentication",
+        "permission",
+        "validation",
+        "conflict",
+        "already_connected",
+    } or error.subtype in {
+        "missing_scope",
         "already_connected",
         "connection_exists",
         "event_bus_already_connected",
@@ -369,6 +379,16 @@ def _reply_idempotency_key(event_id: str) -> str:
         return key
     digest = sha256(event_id.encode("utf-8")).hexdigest()[:32]
     return f"{prefix}{digest}"
+
+
+def _planner_context(turns: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "intent": str(turn.get("intent") or ""),
+            "question": str(turn.get("question") or ""),
+        }
+        for turn in turns
+    ]
 
 
 async def _wait_for_stop(stop_event: asyncio.Event, timeout: float) -> bool:

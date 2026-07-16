@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +15,7 @@ from app.features.feishu_bot.codex_planner import (
     CodexRunResult,
     _codex_parent_environment,
     _resolve_command_prefix,
+    _run_subprocess,
 )
 from app.features.feishu_bot.models import BotActor
 
@@ -154,6 +158,154 @@ def test_codex_planner_uses_ephemeral_read_only_schema_constrained_process(
     assert "数据库" not in str(calls[0]["stdin"])
 
 
+def test_codex_planner_context_never_includes_previous_query_results(
+    tmp_path: Path,
+) -> None:
+    prompts: list[str] = []
+
+    async def runner(
+        argv: list[str],
+        *,
+        stdin: str,
+        cwd: Path,
+        timeout_seconds: float,
+        env: dict[str, str],
+    ) -> CodexRunResult:
+        del argv, cwd, timeout_seconds, env
+        prompts.append(stdin)
+        return CodexRunResult(
+            returncode=0,
+            stdout=_agent_message(_help_plan()),
+            stderr="",
+            elapsed_seconds=0.1,
+        )
+
+    planner = CodexQueryPlanner(
+        runtime_dir=tmp_path / "sandbox",
+        runner=runner,
+    )
+
+    asyncio.run(
+        planner.plan(
+            _member(),
+            "昨天呢？",
+            context=[
+                {
+                    "intent": "resume_counts",
+                    "question": "今天 AI 产品经理有多少份简历？",
+                    "response": "SENSITIVE_DB_RESULT_917",
+                }
+            ],
+            available_job_types=["AI产品经理"],
+        )
+    )
+
+    assert len(prompts) == 1
+    assert "resume_counts" in prompts[0]
+    assert "今天 AI 产品经理有多少份简历" in prompts[0]
+    assert "SENSITIVE_DB_RESULT_917" not in prompts[0]
+    assert '"response"' not in prompts[0]
+
+
+def test_codex_planner_redacts_sensitive_user_text_before_subprocess(
+    tmp_path: Path,
+) -> None:
+    prompts: list[str] = []
+
+    async def runner(
+        argv: list[str],
+        *,
+        stdin: str,
+        cwd: Path,
+        timeout_seconds: float,
+        env: dict[str, str],
+    ) -> CodexRunResult:
+        del argv, cwd, timeout_seconds, env
+        prompts.append(stdin)
+        return CodexRunResult(
+            returncode=0,
+            stdout=_agent_message(_help_plan()),
+            stderr="",
+            elapsed_seconds=0.1,
+        )
+
+    planner = CodexQueryPlanner(
+        runtime_dir=tmp_path / "sandbox",
+        runner=runner,
+    )
+
+    asyncio.run(
+        planner.plan(
+            _admin(),
+            (
+                "查 13800138000 和 private@example.com，"
+                "Authorization: Bearer subprocess-secret"
+            ),
+            context=[
+                {
+                    "intent": "resume_counts",
+                    "question": "Cookie: session=context-secret",
+                }
+            ],
+        )
+    )
+
+    assert len(prompts) == 1
+    assert "13800138000" not in prompts[0]
+    assert "private@example.com" not in prompts[0]
+    assert "subprocess-secret" not in prompts[0]
+    assert "context-secret" not in prompts[0]
+    assert "[手机号]" in prompts[0]
+    assert "[邮箱]" in prompts[0]
+    assert "[敏感凭据]" in prompts[0]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        (
+            "个人信息：候选人甲\n教育经历：某大学本科\n"
+            "工作经历：负责企业产品\n项目经历：参与智能体项目\n"
+            "专业技能：Python、SQL\n自我评价：执行力强\n" + "经历描述" * 80
+        ),
+        (
+            "10:01 候选人：请问岗位工作时间是什么？\n"
+            "10:02 HR：工作时间是早九晚六。\n"
+            "10:03 候选人：是否提供住宿？\n"
+            "10:04 HR：需要进一步确认。"
+        ),
+        (
+            "Education: Bachelor of Computer Science\n"
+            "Work Experience: Enterprise product owner and customer delivery\n"
+            "Project Experience: Built an AI workflow platform for sales teams\n"
+            "Skills: Python, SQL, product analytics and stakeholder management\n"
+            "Summary: Experienced B2B product manager"
+        ),
+    ],
+)
+def test_codex_planner_rejects_pasted_resume_or_chat_before_subprocess(
+    tmp_path: Path,
+    question: str,
+) -> None:
+    calls = 0
+
+    async def runner(*_args: object, **_kwargs: object) -> CodexRunResult:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("raw recruitment content must not reach Codex")
+
+    planner = CodexQueryPlanner(
+        runtime_dir=tmp_path / "sandbox",
+        runner=runner,
+    )
+
+    plan = asyncio.run(planner.plan(_admin(), question))
+
+    assert plan.intent == "unsupported"
+    assert "不要粘贴简历正文或候选人聊天原文" in plan.clarification
+    assert calls == 0
+
+
 def test_codex_planner_api_key_mode_uses_isolated_provider_and_home(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -212,7 +364,14 @@ def test_codex_planner_api_key_mode_uses_isolated_provider_and_home(
 
 @pytest.mark.parametrize(
     "item_type",
-    ["command_execution", "file_change", "mcp_tool_call", "web_search"],
+    [
+        "command_execution",
+        "file_change",
+        "mcp_tool_call",
+        "web_search",
+        "computer_use",
+        "future_tool_call",
+    ],
 )
 def test_codex_planner_rejects_any_tool_event(tmp_path: Path, item_type: str) -> None:
     async def runner(*_args: object, **_kwargs: object) -> CodexRunResult:
@@ -255,6 +414,36 @@ def test_codex_planner_rejects_tool_event_even_when_process_fails(tmp_path: Path
         asyncio.run(planner.plan(_member(), "help"))
 
 
+def test_codex_subprocess_terminates_as_soon_as_tool_event_appears(
+    tmp_path: Path,
+) -> None:
+    tool_event = json.dumps(
+        {
+            "type": "item.started",
+            "item": {"id": "item-tool", "type": "command_execution"},
+        }
+    )
+    script = (
+        "import time; "
+        f"print({tool_event!r}, flush=True); "
+        "time.sleep(2)"
+    )
+    started = time.monotonic()
+
+    with pytest.raises(CodexPolicyViolation, match="command_execution"):
+        asyncio.run(
+            _run_subprocess(
+                [sys.executable, "-c", script],
+                stdin="",
+                cwd=tmp_path,
+                timeout_seconds=10,
+                env=dict(os.environ),
+            )
+        )
+
+    assert time.monotonic() - started < 1.5
+
+
 def test_codex_plan_cannot_escalate_member_or_request_other_jobs(tmp_path: Path) -> None:
     plans = [
         {
@@ -282,6 +471,35 @@ def test_codex_plan_cannot_escalate_member_or_request_other_jobs(tmp_path: Path)
         asyncio.run(planner.plan(_member(), "看看 Worker 状态"))
     with pytest.raises(PermissionError, match="job_scope_denied"):
         asyncio.run(planner.plan(_member(), "运营 B 有多少简历"))
+
+
+def test_codex_plan_rejects_substring_job_scope_escalation(tmp_path: Path) -> None:
+    actor = BotActor(
+        open_id="ou-generic-product-member",
+        display_name="产品岗位成员",
+        role="member",
+        job_types=("产品经理",),
+        permissions=frozenset({"query:resumes"}),
+    )
+
+    async def runner(*_args: object, **_kwargs: object) -> CodexRunResult:
+        return CodexRunResult(
+            returncode=0,
+            stdout=_agent_message(
+                {
+                    **_help_plan(),
+                    "intent": "resume_counts",
+                    "jobTypes": ["AI产品经理"],
+                }
+            ),
+            stderr="",
+            elapsed_seconds=0.1,
+        )
+
+    planner = CodexQueryPlanner(runtime_dir=tmp_path, runner=runner)
+
+    with pytest.raises(PermissionError, match="job_scope_denied"):
+        asyncio.run(planner.plan(actor, "AI 产品经理有多少简历"))
 
 
 def test_codex_unavailable_uses_safe_context_aware_fallback(tmp_path: Path) -> None:
@@ -342,6 +560,40 @@ def test_windows_codex_launcher_resolves_node_without_shell() -> None:
         "C:/nvm/node_modules/@openai/codex/bin/codex.js",
     ]
     assert calls == ["codex.cmd"]
+
+
+def test_windows_codex_launcher_prefers_native_binary_over_node_wrapper(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "node"
+    command = root / "codex.cmd"
+    node = root / "node.exe"
+    script = root / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    native = (
+        root
+        / "node_modules"
+        / "@openai"
+        / "codex"
+        / "node_modules"
+        / "@openai"
+        / "codex-win32-x64"
+        / "vendor"
+        / "x86_64-pc-windows-msvc"
+        / "bin"
+        / "codex.exe"
+    )
+    for path in (command, node, script, native):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    resolved = _resolve_command_prefix(
+        "codex",
+        platform_name="nt",
+        machine_name="AMD64",
+        which=lambda name: str(command) if name == "codex.cmd" else None,
+    )
+
+    assert resolved == [str(native)]
 
 
 def test_codex_parent_environment_drops_project_model_credentials() -> None:

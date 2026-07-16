@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 from app.features.feishu_bot.access import FeishuBotAccessPolicy
 from app.features.feishu_bot.models import BotEvent
-from app.features.feishu_bot.repository import FeishuBotRepository
+from app.features.feishu_bot.repository import (
+    FeishuBotRepository,
+    redact_sensitive_text,
+)
 
 
 def _event(
@@ -90,6 +93,44 @@ def test_event_repository_tracks_lifecycle_and_redacts_turn_text(tmp_path: Path)
     assert "[敏感凭据]" in turns[0]["question"]
     assert len(turns[0]["question"]) <= 1000
     assert len(turns[0]["response"]) <= 4000
+
+
+@pytest.mark.parametrize(
+    ("value", "secrets"),
+    [
+        ("Authorization: Bearer super-secret-token", ("super-secret-token",)),
+        (
+            "Cookie: session=abc123; refresh=def456",
+            ("abc123", "def456"),
+        ),
+        (
+            "Authorization: AWS4-HMAC-SHA256 Credential=aws-key, Signature=aws-signature",
+            ("aws-key", "aws-signature"),
+        ),
+        ('{"app_secret":"json-secret"}', ("json-secret",)),
+        ('{"access_token":"json-token"}', ("json-token",)),
+    ],
+)
+def test_redact_sensitive_text_covers_header_and_json_credential_shapes(
+    value: str,
+    secrets: tuple[str, ...],
+) -> None:
+    redacted = redact_sensitive_text(value)
+
+    assert "[敏感凭据]" in redacted
+    for secret in secrets:
+        assert secret not in redacted
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["+86 138-0013-8000", "138 0013 8000"],
+)
+def test_redact_sensitive_text_covers_formatted_phone_numbers(value: str) -> None:
+    redacted = redact_sensitive_text(f"联系电话：{value}")
+
+    assert value not in redacted
+    assert "[手机号]" in redacted
 
 
 def test_bot_event_parses_lark_cli_payload() -> None:

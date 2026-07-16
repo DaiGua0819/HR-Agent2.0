@@ -10,10 +10,46 @@ from uuid import uuid4
 
 from app.features.feishu_bot.models import BotEvent
 
-_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?86[\s-]?)?1[3-9](?:[\s-]?\d){9}(?!\d)"
+)
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_COOKIE_RE = re.compile(
+    r"""(?ix)
+    (?<![\w-])(?P<key>["']?(?:cookie|set[\s_-]?cookie)["']?)\s*[:=]\s*
+    (?:
+      "(?:\\.|[^"\\])*"
+      | '(?:\\.|[^'\\])*'
+      | [^\r\n]+
+    )
+    """
+)
+_AUTHORIZATION_RE = re.compile(
+    r"""(?ix)
+    (?<![\w-])(?P<key>["']?authorization["']?)\s*[:=]\s*
+    (?:
+      "(?:\\.|[^"\\])*"
+      | '(?:\\.|[^'\\])*'
+      | [^\r\n]+
+    )
+    """
+)
 _CREDENTIAL_RE = re.compile(
-    r"(?i)\b(access[_-]?token|app[_-]?secret|authorization|cookie)\s*[:=]\s*[^\s,;]+"
+    r"""(?ix)
+    (?<![\w-])
+    (?P<key>["']?(?:
+      access[\s_-]?token
+      | refresh[\s_-]?token
+      | tenant[\s_-]?access[\s_-]?token
+      | app[\s_-]?secret
+    )["']?)
+    \s*[:=]\s*
+    (?:
+      "(?:\\.|[^"\\])*"
+      | '(?:\\.|[^'\\])*'
+      | (?:bearer\s+)?[^\s,;]+
+    )
+    """
 )
 
 _BOT_SCHEMA = """
@@ -236,7 +272,12 @@ def redact_sensitive_text(value: object) -> str:
     text = str(value or "")
     text = _PHONE_RE.sub("[手机号]", text)
     text = _EMAIL_RE.sub("[邮箱]", text)
-    return _CREDENTIAL_RE.sub(lambda match: f"{match.group(1)}=[敏感凭据]", text)
+    for pattern in (_COOKIE_RE, _AUTHORIZATION_RE, _CREDENTIAL_RE):
+        text = pattern.sub(
+            lambda match: f"{match.group('key')}=[敏感凭据]",
+            text,
+        )
+    return text
 
 
 def _bounded(value: object, limit: int) -> str:

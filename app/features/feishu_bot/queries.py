@@ -12,10 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.core.text import clean_text
-from app.domain.resume.job_types import (
-    any_job_type_matches,
-    canonical_resume_job_type,
-)
+from app.domain.resume.job_types import canonical_resume_job_type
 from app.features.feishu_bot.models import (
     BotActor,
     BotQueryPlan,
@@ -501,13 +498,13 @@ def _validated_requested_jobs(
 
 
 def _job_allowed(actor: BotActor, job: str) -> bool:
-    return "*" in actor.job_types or any_job_type_matches(job, actor.job_types)
+    return "*" in actor.job_types or job in actor.job_types
 
 
 def _job_selected(actor: BotActor, job: str, requested: tuple[str, ...]) -> bool:
     if not job or not _job_allowed(actor, job):
         return False
-    return not requested or any_job_type_matches(job, requested)
+    return not requested or job in requested
 
 
 def _table_exists(connection: sqlite3.Connection, table: str) -> bool:

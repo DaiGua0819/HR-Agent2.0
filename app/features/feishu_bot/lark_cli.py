@@ -18,15 +18,44 @@ ProcessFactory = Callable[..., Awaitable[Any]]
 CommandRunner = Callable[..., Awaitable["LarkCommandResult"]]
 
 _READY_MARKER = "[event] ready event_key=im.message.receive_v1"
-_LARK_PARENT_ENV_DENY = {
-    "APP_SECRET",
-    "FEISHU_APP_ID",
-    "FEISHU_APP_SECRET",
-    "LARK_ACCESS_TOKEN",
-    "LARK_APP_ID",
-    "LARK_APP_SECRET",
-    "LARK_REFRESH_TOKEN",
-    "LARK_TENANT_ACCESS_TOKEN",
+_LARK_PARENT_ENV_ALLOW = {
+    "ALL_PROXY",
+    "ALLUSERSPROFILE",
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOCALAPPDATA",
+    "NO_COLOR",
+    "NO_PROXY",
+    "OS",
+    "PATH",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "USERPROFILE",
+    "WINDIR",
 }
 
 
@@ -380,7 +409,7 @@ def _lark_parent_environment(
     environment = {
         key: value
         for key, value in source.items()
-        if key.upper() not in _LARK_PARENT_ENV_DENY
+        if key.upper() in _LARK_PARENT_ENV_ALLOW
     }
     environment["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
     environment["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"

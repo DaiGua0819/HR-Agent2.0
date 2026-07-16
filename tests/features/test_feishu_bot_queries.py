@@ -104,6 +104,41 @@ def test_resume_counts_and_recent_resumes_never_return_sensitive_fields(
     assert "rawText" not in item
 
 
+def test_member_job_scope_uses_exact_canonical_match_not_substring(
+    tmp_path: Path,
+) -> None:
+    database, runs_dir = _seed_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        _insert_resume(
+            connection,
+            resume_id="resume-generic-product",
+            name="候选人丁",
+            job="产品经理",
+            score=80,
+            platform="job51",
+            owner="宋峰峰",
+            updated_at="2026-07-16T03:00:00+00:00",
+        )
+        connection.commit()
+    actor = BotActor(
+        open_id="ou-generic-product-member",
+        display_name="产品岗位成员",
+        role="member",
+        job_types=("产品经理",),
+        permissions=frozenset({"query:resumes"}),
+    )
+    queries = ReadOnlyRecruitmentQueries(database, manager_runs_dir=runs_dir)
+
+    result = asyncio.run(
+        queries.execute(actor, BotQueryPlan(intent="resume_counts"))
+    )
+
+    assert result.data == {
+        "total": 1,
+        "byJob": [{"jobType": "产品经理", "count": 1}],
+    }
+
+
 def test_review_summary_is_personal_for_member_and_shared_for_admin(tmp_path: Path) -> None:
     database, runs_dir = _seed_database(tmp_path)
     queries = ReadOnlyRecruitmentQueries(database, manager_runs_dir=runs_dir)
