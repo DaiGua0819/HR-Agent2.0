@@ -6,7 +6,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from app.agent.judgement import judge_candidate_reply
+from app.agent.judgement import JudgementResult, judge_candidate_reply
 from app.agent.message_utils import (
     append_sent,
     candidate_messages_since_last_reply,
@@ -24,6 +24,7 @@ from app.agent.rules import (
     initial_common_phrase,
     is_ai_basic_rule,
     is_direct_resume_rule,
+    is_ignored_position,
     is_silent_question,
     load_chat_rules,
     looks_like_question,
@@ -87,8 +88,10 @@ class ConversationRunner:
         if conversation.messages and not conversation.should_reply:
             return self._finish(state, "wait", "last_message_not_candidate")
 
-        rule = select_position_rule(conversation.candidate.applied_position, self.rules)
         state["rules"] = self.rules
+        if is_ignored_position(conversation.candidate.applied_position, self.rules):
+            return self._finish(state, "skip", "ignored_position")
+        rule = select_position_rule(conversation.candidate.applied_position, self.rules)
         if not rule:
             return self._finish(state, "skip", "unconfigured_position")
         state["position_rule"] = rule
@@ -181,6 +184,18 @@ class ConversationRunner:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
+        if is_ai_basic_rule(conversation.candidate.applied_position, rule):
+            phrase = initial_common_phrase(rule)
+            judgement = await judge_candidate_reply(turn_text, question=phrase, llm=self.llm)
+            if judgement.status in {"accept", "reject"}:
+                return await self._handle_ai_basic(
+                    state,
+                    conversation,
+                    rule,
+                    turn_text,
+                    judgement=judgement,
+                )
+
         if looks_like_question(turn_text):
             if rule_screening(rule):
                 return await self._handle_screening(state, conversation, rule, turn_text)
@@ -240,6 +255,8 @@ class ConversationRunner:
         conversation: Conversation,
         rule: dict[str, Any],
         reply_text: str,
+        *,
+        judgement: JudgementResult | None = None,
     ) -> GraphState:
         phrase = initial_common_phrase(rule)
         if phrase and not message_sent(conversation, phrase):
@@ -247,7 +264,11 @@ class ConversationRunner:
         handled, _ = await self._preflight_resume_request(state)
         if handled:
             return handled
-        judgement = await judge_candidate_reply(reply_text, question=phrase, llm=self.llm)
+        judgement = judgement or await judge_candidate_reply(
+            reply_text,
+            question=phrase,
+            llm=self.llm,
+        )
         if judgement.status == "accept":
             return await self._request_resume_after_basic_accept(
                 state,
@@ -477,8 +498,6 @@ class ConversationRunner:
             return result
         send_result = await self.adapter.send_message(message)
         sent = self._send_result_ok(send_result)
-        if sent:
-            append_sent(state, message)
         send_payload = (
             asdict(send_result)
             if is_dataclass(send_result)
@@ -486,6 +505,12 @@ class ConversationRunner:
             if isinstance(send_result, dict)
             else {"value": str(send_result)}
         )
+        sent_message = message
+        details = send_payload.get("details")
+        if isinstance(details, dict):
+            sent_message = str(details.get("sentMessage") or message).strip() or message
+        if sent:
+            append_sent(state, sent_message)
         return {
             **result,
             "requested": sent,
@@ -533,6 +558,15 @@ class ConversationRunner:
         success_reason: str,
         **extra: Any,
     ) -> GraphState:
+        if result.get("candidateUnavailable"):
+            state["resume_requested"] = False
+            return self._finish(
+                state,
+                "wait",
+                "candidate_unavailable",
+                result=result,
+                **extra,
+            )
         handled = self._resume_request_result_handled(result)
         state["resume_requested"] = bool(
             result.get("requested")

@@ -469,3 +469,34 @@ ZHILIAN_RESUME_STATE_JS = r"""
   };
 }
 """
+
+ZHILIAN_CLOSED_JOB_SEARCH_MODAL_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const dialogs = Array.from(document.querySelectorAll(
+    ".km-modal--open, .km-modal__wrapper, [role='dialog']"
+  )).filter(visible);
+  const dialog = dialogs.find((item) => {
+    const value = String(item.innerText || "").replace(/\s+/g, "");
+    return value.includes("对方已关闭求职") && value.includes("无法继续进行沟通");
+  });
+  if (!dialog) {
+    return { visible: false, reason: "" };
+  }
+  const buttons = Array.from(dialog.querySelectorAll("button, [role='button']"))
+    .filter(visible)
+    .map((item) => String(item.innerText || "").trim());
+  return {
+    visible: true,
+    reason: "candidate_job_search_closed",
+    dismissVisible: buttons.some((item) => item === "知道了"),
+    buttons,
+  };
+}
+"""

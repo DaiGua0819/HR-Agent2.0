@@ -3088,16 +3088,41 @@ function initializeSmoothFilterSelects() {
   window.addEventListener("resize", updateOpenSmoothSelectMenuPosition);
   window.addEventListener("scroll", updateOpenSmoothSelectMenuPosition, true);
 }
+function applyGlobalResumeSearch(globalSearch, { immediate = false } = {}) {
+  if (state.view !== "resumes") return;
+  const queryField = $("filters")?.q;
+  if (!queryField) return;
+  queryField.value = globalSearch.value;
+  state.page = 1;
+  clearResumePrefetchCache();
+  if (!immediate) {
+    scheduleResumeFilterRefresh();
+    return;
+  }
+  loadResumes({ fromFilter: true }).catch((error) => {
+    if (error?.name === "AbortError") return;
+    console.debug("resume search refresh failed", error);
+  });
+}
 function bindGlobalSearchToFilters() {
   const globalSearch = $("globalSearch");
   if (!globalSearch) return;
+  let composing = false;
+  globalSearch.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  globalSearch.addEventListener("compositionend", () => {
+    composing = false;
+    applyGlobalResumeSearch(globalSearch);
+  });
+  globalSearch.addEventListener("input", () => {
+    if (composing) return;
+    applyGlobalResumeSearch(globalSearch);
+  });
   globalSearch.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    if (event.key !== "Enter" || composing || state.view !== "resumes") return;
     event.preventDefault();
-    $("filters").q.value = globalSearch.value;
-    state.page = 1;
-    clearResumePrefetchCache();
-    setView("resumes");
+    applyGlobalResumeSearch(globalSearch, { immediate: true });
   });
 }
 function applyResumeFilters() {

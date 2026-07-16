@@ -35,6 +35,7 @@ from app.platforms.zhilian.dom_scripts import (
     RESET_UNREAD_LIST_SCROLL_JS,
     SCROLL_UNREAD_LIST_JS,
     UNREAD_FILTER_STATE_JS,
+    ZHILIAN_CLOSED_JOB_SEARCH_MODAL_STATE_JS,
     ZHILIAN_RESUME_STATE_JS,
 )
 from app.platforms.zhilian.resume_files import save_zhilian_resume_bytes
@@ -45,6 +46,8 @@ ZHILIAN_UNREAD_SCROLL_WAIT_MS = 1600
 ZHILIAN_UNREAD_SCROLL_POLL_MS = 200
 ZHILIAN_UNREAD_STABLE_BOTTOM_READS = 2
 ZHILIAN_UNREAD_MAX_SCROLL_STEPS = 100
+_CLOSED_JOB_SEARCH_CACHE_ATTR = "_zhilian_closed_job_search_ids"
+_CLOSED_JOB_SEARCH_BUTTON_SELECTOR = ".km-modal--open button, .km-modal__wrapper button"
 
 
 async def open_chat_page(page: BrowserPage) -> None:
@@ -100,6 +103,8 @@ async def find_next_unread_thread(
 
     allowed = [item.strip() for item in allowed_positions or [] if item.strip()]
     excluded = {str(item) for item in exclude_ids or set() if str(item)}
+    closed_job_search_ids = _closed_job_search_ids(page)
+    excluded.update(closed_job_search_ids)
     inspected: set[str] = set()
     discovered: set[str] = set()
     stable_bottom_reads = 0
@@ -134,6 +139,14 @@ async def find_next_unread_thread(
                 continue
             click = await _open_session_from_state(page, state)
             if not click.get("ok"):
+                if click.get("reason") == "candidate_job_search_closed":
+                    closed_job_search_ids.add(row_identity)
+                    continue
+                if click.get("reason") == "candidate_job_search_closed_modal_not_dismissed":
+                    raise RuntimeError(
+                        "candidate_job_search_closed_modal_not_dismissed: "
+                        f"{click}"
+                    )
                 continue
             conversation = await read_chat_context(page, owner=owner)
             if not conversation.should_reply:
@@ -593,6 +606,70 @@ async def _verify_chat_ready(page: BrowserPage) -> dict[str, object]:
     return {"verified": await page.wait_for(selectors.CHAT_READY, timeout_ms=6500)}
 
 
+def _closed_job_search_ids(page: BrowserPage) -> set[str]:
+    cached = getattr(page, _CLOSED_JOB_SEARCH_CACHE_ATTR, None)
+    if isinstance(cached, set):
+        return cached
+    cached = set()
+    setattr(page, _CLOSED_JOB_SEARCH_CACHE_ATTR, cached)
+    return cached
+
+
+async def _closed_job_search_modal_state(page: BrowserPage) -> dict[str, object]:
+    state = await _safe_eval_dict(page, "zhilian.closed_job_search_modal_state")
+    if not state:
+        state = await _safe_eval_dict(page, ZHILIAN_CLOSED_JOB_SEARCH_MODAL_STATE_JS)
+    return state
+
+
+async def _verify_session_opened(page: BrowserPage) -> dict[str, object]:
+    modal = await _closed_job_search_modal_state(page)
+    if modal.get("visible"):
+        return {"verified": True, "reason": "candidate_job_search_closed"}
+    return await _verify_chat_ready(page)
+
+
+async def _verify_closed_job_search_modal_dismissed(page: BrowserPage) -> dict[str, object]:
+    modal = await _closed_job_search_modal_state(page)
+    return {
+        "verified": not bool(modal.get("visible")),
+        "reason": "" if not modal.get("visible") else "closed_job_search_modal_still_visible",
+    }
+
+
+async def _dismiss_closed_job_search_modal(page: BrowserPage) -> dict[str, object]:
+    modal = await _closed_job_search_modal_state(page)
+    if not modal.get("visible"):
+        return {"handled": False}
+    for button in await page.query_all(_CLOSED_JOB_SEARCH_BUTTON_SELECTOR):
+        if "".join((await button.text()).split()) != "知道了":
+            continue
+        click = await reliable_click_element(
+            page,
+            button,
+            label="智联关闭求职提示",
+            verify=lambda: _verify_closed_job_search_modal_dismissed(page),
+        )
+        return {
+            "handled": True,
+            "dismissed": bool(click.get("ok")),
+            "reason": (
+                "candidate_job_search_closed"
+                if click.get("ok")
+                else "candidate_job_search_closed_modal_not_dismissed"
+            ),
+            "modal": modal,
+            "click": click,
+        }
+    return {
+        "handled": True,
+        "dismissed": False,
+        "reason": "candidate_job_search_closed_modal_not_dismissed",
+        "modal": modal,
+        "click": {"ok": False, "reason": "dismiss_button_not_found"},
+    }
+
+
 async def _find_session_for_state(
     page: BrowserPage,
     state: dict[str, object],
@@ -629,6 +706,15 @@ async def _open_session_from_state(
     result = await _safe_eval_dict(page, CLICK_SESSION_ROW_JS, target)
     if result.get("opened"):
         await asyncio.sleep(1)
+        terminal = await _dismiss_closed_job_search_modal(page)
+        if terminal.get("handled"):
+            return {
+                "ok": False,
+                "terminal": True,
+                "method": "dom_inner_click",
+                "result": result,
+                **terminal,
+            }
         verified = await _verify_chat_ready(page)
         context = await _read_context_payload(page)
         identity_ok = _state_matches_context(state, context)
@@ -646,10 +732,18 @@ async def _open_session_from_state(
         page,
         row,
         label="智联候选人会话",
-        verify=lambda: _verify_chat_ready(page),
+        verify=lambda: _verify_session_opened(page),
     )
     if not fallback.get("ok"):
         return fallback
+    terminal = await _dismiss_closed_job_search_modal(page)
+    if terminal.get("handled"):
+        return {
+            **fallback,
+            "ok": False,
+            "terminal": True,
+            **terminal,
+        }
     context = await _read_context_payload(page)
     if _state_matches_context(state, context):
         return fallback

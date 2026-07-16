@@ -428,7 +428,7 @@ class FakePage:
                 self.resume_preview_closes += 1
                 return {"closed": True, "source": "fake_online_resume_close"}
             return {"closed": False, "reason": "not_online_resume_view"}
-        if script == "job51.close_export_dialog":
+        if script == "job51.close_export_dialog" or "export_success_dialog" in script:
             convo = self.current_conversation()
             if convo.get("export_dialog_open"):
                 convo["export_dialog_open"] = False

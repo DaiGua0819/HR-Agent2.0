@@ -141,20 +141,7 @@ async def request_or_download_resume(
         )
         if online.get("ok"):
             return {"requested": False, "resumeReceived": True, **online}
-        opened = online.get("opened")
-        if (
-            online.get("buttonFound")
-            and isinstance(opened, dict)
-            and opened.get("verified")
-        ):
-            return await _request_attachment_after_online_failure(page, online)
-        clicked, confirmed = await _request_resume_with_confirm(page)
-        return {
-            "requested": clicked,
-            "confirmed": confirmed,
-            "downloaded": False,
-            "reason": "preview_only_rejected",
-        }
+        return await _request_attachment_after_online_failure(page, online)
     online = await _download_online_resume(
         page,
         candidate_name=candidate_name,
@@ -269,11 +256,17 @@ async def _download_online_resume(
             if content is not None:
                 payload = {**payload, "filename": download.get("filename") or ""}
         if content is None:
+            export_queued = bool(download.get("exportQueued"))
             return {
                 "ok": False,
                 "blocked": True,
                 "buttonFound": True,
-                "reason": "online_resume_download_link_missing",
+                "reason": (
+                    "online_resume_export_queued_no_file"
+                    if export_queued
+                    else "online_resume_download_link_missing"
+                ),
+                "exportQueued": export_queued,
                 "href": href,
                 "opened": opened,
                 "download": download,
@@ -585,7 +578,7 @@ async def _request_attachment_after_online_failure(
 ) -> dict[str, object]:
     """Close an unusable online preview and request an attachment resume instead."""
 
-    await cleanup_resume_overlays(page)
+    cleanup = await cleanup_resume_overlays(page)
     clicked, confirmed = await _request_resume_with_confirm(page)
     return {
         "requested": clicked,
@@ -599,6 +592,7 @@ async def _request_attachment_after_online_failure(
         "needsAttachmentRequest": not clicked,
         "attachmentRequestMessage": ATTACHMENT_REQUEST_FALLBACK_MESSAGE,
         "onlineResumeFailure": online_failure,
+        "cleanup": cleanup,
     }
 
 

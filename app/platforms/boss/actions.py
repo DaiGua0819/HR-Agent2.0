@@ -21,6 +21,7 @@ from app.platforms.boss.dom_scripts import (
 from app.platforms.boss.interaction import (
     boss_click_element,
     boss_click_selector,
+    boss_security_warning_state,
     boss_type_and_send,
 )
 from app.platforms.boss.row_click import click_row_state, find_row_for_state
@@ -58,9 +59,20 @@ async def open_chat_page(page: BrowserPage) -> None:
 async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     """点击 BOSS 未读筛选。"""
 
+    warning = await boss_security_warning_state(page)
+    if warning.get("blocked"):
+        return {
+            "selected": False,
+            "ready": False,
+            "status": "security_warning",
+            "reason": "boss_security_warning",
+            "warning": warning,
+        }
     active_before = await _active_message_filter_label(page)
     if active_before == "未读":
         readiness = await wait_for_unread_list_ready(page)
+        if readiness.get("status") == "stale_active_filter":
+            return await _refresh_unread_filter(page, stale_state=readiness)
         return {
             "selected": True,
             "label": "未读",
@@ -92,6 +104,8 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
                     "state": {"activeFilter": active},
                 }
             )
+            if readiness.get("status") == "stale_active_filter":
+                return await _refresh_unread_filter(page, stale_state=readiness)
             return {
                 "selected": selected,
                 "label": label,
@@ -107,6 +121,67 @@ async def select_unread_filter(page: BrowserPage) -> dict[str, object]:
     }
 
 
+async def _refresh_unread_filter(
+    page: BrowserPage,
+    *,
+    stale_state: dict[str, object],
+) -> dict[str, object]:
+    all_click = await _click_message_filter_option(page, "全部")
+    if not all_click.get("ok"):
+        return {
+            "selected": False,
+            "ready": False,
+            "status": "stale_refresh_failed",
+            "reason": "boss_unread_filter_refresh_failed",
+            "refreshed": False,
+            "staleState": stale_state,
+            "allClick": all_click,
+        }
+    unread_click = await _click_message_filter_option(page, "未读")
+    if not unread_click.get("ok"):
+        return {
+            "selected": False,
+            "ready": False,
+            "status": "stale_refresh_failed",
+            "reason": "boss_unread_filter_refresh_failed",
+            "refreshed": False,
+            "staleState": stale_state,
+            "allClick": all_click,
+            "unreadClick": unread_click,
+        }
+    readiness = await wait_for_unread_list_ready(page)
+    return {
+        "selected": bool(readiness.get("ready")),
+        "label": "未读",
+        "active": await _active_message_filter_label(page),
+        "refreshed": True,
+        "staleState": stale_state,
+        "allClick": all_click,
+        "unreadClick": unread_click,
+        **readiness,
+    }
+
+
+async def _click_message_filter_option(
+    page: BrowserPage,
+    label: str,
+) -> dict[str, object]:
+    candidates = await page.query_all(selectors.MESSAGE_FILTER_OPTION)
+    if not candidates:
+        candidates = await page.query_all(selectors.UNREAD_FILTER)
+    for element in candidates:
+        element_label = (await element.text()).strip()
+        if _compact(element_label) != label:
+            continue
+        return await boss_click_element(
+            page,
+            element,
+            label=f"BOSS{label}筛选",
+            verify=lambda: _verify_filter_label(page, label),
+        )
+    return {"ok": False, "reason": f"{label}_filter_not_found"}
+
+
 async def wait_for_unread_list_ready(
     page: BrowserPage,
     *,
@@ -116,6 +191,7 @@ async def wait_for_unread_list_ready(
 
     deadline = time.monotonic() + max(timeout_ms, 0) / 1000
     stable_empty_reads = 0
+    stable_stale_reads = 0
     last_state: dict[str, object] = {}
     while True:
         state = await inspect_unread_list_state(page)
@@ -141,11 +217,25 @@ async def wait_for_unread_list_ready(
             )
         )
         stable_empty_reads = stable_empty_reads + 1 if empty_candidate else 0
+        stale_candidate = bool(
+            active
+            and not loading
+            and row_count > 0
+            and badge_rows == 0
+        )
+        stable_stale_reads = stable_stale_reads + 1 if stale_candidate else 0
         if stable_empty_reads >= 2:
             return {
                 "ready": True,
                 "status": "confirmed_empty",
                 "reason": "",
+                "state": state,
+            }
+        if stable_stale_reads >= 2:
+            return {
+                "ready": False,
+                "status": "stale_active_filter",
+                "reason": "boss_unread_filter_stale",
                 "state": state,
             }
         if time.monotonic() >= deadline:
@@ -325,6 +415,7 @@ async def send_message(page: BrowserPage, message: str) -> SendResult:
         sent=sent,
         verified=sent,
         blocked=not sent,
+        details=click,
         message="BOSS 已发送消息" if sent else "BOSS 发送按钮点击失败",
     )
 

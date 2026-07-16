@@ -21,10 +21,16 @@ from app.platforms.job51 import selectors
 from app.platforms.job51.actions_navigation import open_chat_page as navigate_chat_page
 from app.platforms.job51.actions_unread import select_unread_filter as refresh_unread_filter
 from app.platforms.job51.dom_scripts import (
+    CLEAR_NEW_GREETING_SELECTION_JS,
     CLICK_THREAD_BY_IDENTITY_JS,
+    NEW_GREETING_PHRASE_SELECTED_STATE_JS,
+    NEW_GREETING_PHRASE_STATE_JS,
+    NEW_GREETING_REPLY_STATE_JS,
+    NEW_GREETING_SELECTION_STATE_JS,
     OPENED_CANDIDATE_STATE_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
+    VERIFY_NEW_GREETING_REPLY_JS,
     VERIFY_SENT_JS,
 )
 from app.platforms.types import (
@@ -55,6 +61,7 @@ _NON_CANDIDATE_HEADER_NAMES = {
     "兼职",
     "实习",
 }
+_NEW_GREETING_RESUME_REQUEST_PHRASE = "我看不到您的详细信息，方便投一份简历吗？"
 
 
 async def open_chat_page(page: BrowserPage) -> None:
@@ -501,15 +508,39 @@ async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
     )
 
 
-async def send_message(page: BrowserPage, message: str) -> SendResult:
+async def send_message(
+    page: BrowserPage,
+    message: str,
+    *,
+    expected_identity: dict[str, object] | None = None,
+) -> SendResult:
     """51job 专用发送路径，并用最近己方消息校验。"""
 
     text = message.strip()
     if not text:
         return SendResult(sent=False, blocked=True, message="51job 待发送内容为空")
+    if expected_identity:
+        identity = await _send_identity_state(page, expected_identity)
+        if not identity.get("verified"):
+            return SendResult(
+                sent=False,
+                blocked=True,
+                message="51job 发送前候选人身份已变化",
+                details={
+                    "reason": "candidate_identity_changed_before_send",
+                    "identity": identity,
+                },
+            )
     await dismiss_interruptions(page)
     fill = await reliable_fill(page, selectors.CHAT_INPUT, text, label="51job聊天输入框")
     if not fill.get("ok"):
+        fallback = await _send_new_greeting_common_phrase(
+            page,
+            text,
+            expected_identity=expected_identity,
+        )
+        if fallback.sent or fallback.details.get("available"):
+            return fallback
         return SendResult(sent=False, blocked=True, message="51job 没有找到聊天输入框")
     click = await reliable_click(
         page,
@@ -594,6 +625,245 @@ def _position_matches(actual: str, expected: str) -> bool:
             or _ellipsis_position_match(right, left)
         )
     )
+
+
+async def _send_new_greeting_common_phrase(
+    page: BrowserPage,
+    requested_message: str,
+    *,
+    expected_identity: dict[str, object] | None = None,
+) -> SendResult:
+    expected = dict(expected_identity or {})
+    if not expected:
+        context = await _safe_eval_dict(page, "job51.read_chat_context")
+        if not context:
+            context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+        expected = {
+            "name": str(
+                context.get("name") or context.get("candidate_name") or ""
+            ).strip(),
+            "position": str(
+                context.get("position") or context.get("appliedPosition") or ""
+            ).strip(),
+        }
+    state = await _safe_eval_dict(page, "job51.new_greeting_reply_state", expected)
+    if not state:
+        state = await _safe_eval_dict(page, NEW_GREETING_REPLY_STATE_JS, expected)
+    if not state.get("available"):
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼单人回复不可用",
+            details={"available": False, "state": state},
+        )
+    if not state.get("matched"):
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼候选人身份校验失败",
+            details={"available": True, "state": state},
+        )
+    candidate_id = str(state.get("candidateId") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", candidate_id):
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼候选人 ID 不安全",
+            details={"available": True, "state": state},
+        )
+    checkbox_selector = f"#{candidate_id} label.el-checkbox"
+    selection_payload = {"candidateId": candidate_id}
+    selected = await reliable_click(
+        page,
+        checkbox_selector,
+        label="51job新招呼单候选人",
+        verify=lambda: _new_greeting_selection_state(page, selection_payload),
+    )
+    if not selected.get("ok"):
+        await _clear_new_greeting_selection(page, candidate_id)
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼候选人选择失败",
+            details={"available": True, "state": state, "selection": selected},
+        )
+    opened = await reliable_click(
+        page,
+        selectors.NEW_GREETING_BATCH_REPLY_BUTTON,
+        label="51job新招呼单人回复",
+        verify=lambda: _new_greeting_phrase_state(page),
+    )
+    if not opened.get("ok"):
+        await _clear_new_greeting_selection(page, candidate_id)
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼回复面板打开失败",
+            details={"available": True, "state": state, "replyPanel": opened},
+        )
+    phrase_element = None
+    sent_phrase = ""
+    allowed_phrases = _new_greeting_phrase_candidates(requested_message)
+    for element in await page.query_all(selectors.NEW_GREETING_PHRASE_ITEM):
+        phrase_text = " ".join((await element.text()).split())
+        if phrase_text in allowed_phrases:
+            phrase_element = element
+            sent_phrase = phrase_text
+            break
+    if phrase_element is None:
+        await _clear_new_greeting_selection(page, candidate_id)
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼缺少匹配常用语",
+            details={
+                "available": True,
+                "state": state,
+                "allowedPhrases": allowed_phrases,
+            },
+        )
+    phrase_payload = {"phrase": sent_phrase}
+    phrase_click = await reliable_click_element(
+        page,
+        phrase_element,
+        label="51job新招呼求简历常用语",
+        verify=lambda: _new_greeting_phrase_selected_state(page, phrase_payload),
+    )
+    if not phrase_click.get("ok"):
+        await _clear_new_greeting_selection(page, candidate_id)
+        return SendResult(
+            sent=False,
+            blocked=True,
+            message="51job 新招呼常用语选择失败",
+            details={"available": True, "state": state, "phraseClick": phrase_click},
+        )
+    send_payload = {"candidateId": candidate_id, "phrase": sent_phrase}
+    send = await reliable_click(
+        page,
+        selectors.NEW_GREETING_SEND_BUTTON,
+        label="51job新招呼发送",
+        verify=lambda: _verify_new_greeting_reply(page, send_payload),
+    )
+    sent = bool(send.get("ok"))
+    if not sent:
+        await _clear_new_greeting_selection(page, candidate_id)
+    return SendResult(
+        sent=sent,
+        verified=sent,
+        blocked=not sent,
+        message=("51job 新招呼常用语已发送" if sent else "51job 新招呼发送未验证"),
+        details={
+            "available": True,
+            "source": "new_greeting_common_phrase",
+            "candidateId": candidate_id,
+            "requestedMessage": requested_message,
+            "sentMessage": sent_phrase,
+            "state": state,
+            "selection": selected,
+            "replyPanel": opened,
+            "phraseClick": phrase_click,
+            "send": send,
+        },
+    )
+
+
+def _new_greeting_phrase_candidates(message: str) -> list[str]:
+    phrases = [" ".join(str(message or "").split())]
+    if "在线简历" in message and "附件简历" in message:
+        phrases.append(_NEW_GREETING_RESUME_REQUEST_PHRASE)
+    return list(dict.fromkeys(phrase for phrase in phrases if phrase))
+
+
+async def _send_identity_state(
+    page: BrowserPage,
+    expected: dict[str, object],
+) -> dict[str, object]:
+    conversation = await read_chat_context(page, owner="identity-check")
+    actual = {
+        "name": conversation.candidate.name,
+        "position": conversation.candidate.applied_position,
+        "label": conversation.id,
+    }
+    expected_name = str(expected.get("name") or "").strip()
+    actual_name = actual["name"]
+    names_conflict = bool(
+        expected_name
+        and actual_name
+        and _compact_identity_text(expected_name) != _compact_identity_text(actual_name)
+        and not _anonymous_name_matches(expected_name, actual_name)
+        and not _anonymous_name_matches(actual_name, expected_name)
+    )
+    if names_conflict:
+        return {
+            "verified": False,
+            "reason": "candidate_identity_mismatch",
+            "matchType": "identity_mismatch",
+            "evidence": ["name_conflict"],
+            "expected": expected,
+            "actual": actual,
+        }
+    match = _match_job51_opened_identity(
+        expected,
+        actual_name=actual["name"],
+        actual_position=actual["position"],
+        actual_label=actual["label"],
+    )
+    return {
+        "verified": bool(match.get("opened")),
+        "reason": "" if match.get("opened") else "candidate_identity_mismatch",
+        "matchType": match.get("matchType"),
+        "evidence": match.get("evidence"),
+        "expected": expected,
+        "actual": actual,
+    }
+
+
+async def _new_greeting_selection_state(
+    page: BrowserPage,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    state = await _safe_eval_dict(page, "job51.new_greeting_selection_state", payload)
+    if not state:
+        state = await _safe_eval_dict(page, NEW_GREETING_SELECTION_STATE_JS, payload)
+    return state
+
+
+async def _new_greeting_phrase_state(page: BrowserPage) -> dict[str, object]:
+    state = await _safe_eval_dict(page, "job51.new_greeting_phrase_state")
+    if not state:
+        state = await _safe_eval_dict(page, NEW_GREETING_PHRASE_STATE_JS)
+    return state
+
+
+async def _new_greeting_phrase_selected_state(
+    page: BrowserPage,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    state = await _safe_eval_dict(
+        page,
+        "job51.new_greeting_phrase_selected_state",
+        payload,
+    )
+    if not state:
+        state = await _safe_eval_dict(page, NEW_GREETING_PHRASE_SELECTED_STATE_JS, payload)
+    return state
+
+
+async def _verify_new_greeting_reply(
+    page: BrowserPage,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    state = await _safe_eval_dict(page, "job51.verify_new_greeting_reply", payload)
+    if not state:
+        state = await _safe_eval_dict(page, VERIFY_NEW_GREETING_REPLY_JS, payload)
+    return state
+
+
+async def _clear_new_greeting_selection(page: BrowserPage, candidate_id: str) -> None:
+    payload = {"candidateId": candidate_id}
+    cleared = await _safe_eval_dict(page, "job51.clear_new_greeting_selection", payload)
+    if not cleared:
+        await _safe_eval_dict(page, CLEAR_NEW_GREETING_SELECTION_JS, payload)
 
 
 def _ellipsis_position_match(pattern: str, value: str) -> bool:

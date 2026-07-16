@@ -285,16 +285,33 @@ def _rule_classify(question_text: str, answer_text: str) -> str:
     question_compact = _compact(question_text)
     if not compact:
         return "waiting"
-    if any(term in compact for term in ("没问题", "没有问题", "可以接受", "能接受")):
+    if any(term in compact for term in ("没问题", "没有问题")):
         return "accept"
-    if any(term in compact for term in ("不接受", "不能接受", "不可以", "不行", "不考虑")):
+    if any(
+        term in compact
+        for term in (
+            "不接受",
+            "不能接受",
+            "接受不了",
+            "无法接受",
+            "没法接受",
+            "不太能接受",
+            "不怎么能接受",
+            "不愿意接受",
+            "不可以",
+            "不行",
+            "不考虑",
+        )
+    ):
         return "reject"
+    if any(term in compact for term in ("可以接受", "能接受")):
+        return "accept"
     if any(term in question_compact for term in ("证", "经历", "熟悉", "了解", "接触", "做过")):
         if re.search(r"(没有|没|无|不是|不了解|不熟悉|没接触|没做过)", compact):
             return "reject"
         if re.search(r"(有|做过|接触过|了解|熟悉|会|持有|考了|拿到)", compact):
             return "accept"
-    if re.search(r"(不能|不可以|不接受|不行|不考虑|不愿意|没有|没|无|暂时不|拒绝)", compact):
+    if re.search(r"(不能|不可以|不接受|不行|不考虑|不愿意|暂时不|拒绝)", compact):
         return "reject"
     if re.search(r"(可以|接受|能|愿意|没问题|符合|是的|对)", compact):
         return "accept"

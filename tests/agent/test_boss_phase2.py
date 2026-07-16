@@ -9,14 +9,17 @@ import asyncio
 from pathlib import Path
 
 from app.agent.graph import build_recruit_graph
+from app.agent.judgement import judge_candidate_reply
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
 from app.agent.rules import find_knowledge_answer, find_knowledge_answers, load_chat_rules
 from app.agent.runner import ConversationRunner
+from app.agent.screening import analyze_position_screening
 from app.browser.fake_page import FakeElement, FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.boss import actions as boss_actions
 from app.platforms.boss.adapter import BossAdapter
+from app.platforms.types import ResumeRequestState
 from app.platforms.zhilian.adapter import ZhilianAdapter
 
 
@@ -200,6 +203,19 @@ class BossHardResumeActionPage(FakePage):
         return await super().eval_js(script, arg)
 
 
+class BossFrozenCandidatePage(BossHardResumeActionPage):
+    """Fake BOSS page whose current candidate is frozen by the platform."""
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "boss_candidate_unavailable" in script:
+            return {
+                "unavailable": True,
+                "reason": "boss_candidate_frozen",
+                "text": "该牛人已被系统冻结！牛人已被冻结，暂时无法操作",
+            }
+        return await super().eval_js(script, arg)
+
+
 class BossFilterHierarchyPage(FakePage):
     """Real BOSS exposes the filter container before its exact option spans."""
 
@@ -279,6 +295,47 @@ class BossUnreadHydrationPage(FakePage):
         return await super().eval_js(script, arg)
 
 
+class BossStaleUnreadFilterPage(BossUnreadHydrationPage):
+    """BOSS keeps the unread tab active while its rows still show the stale all-list."""
+
+    def __init__(self, *, menu_unread_count: int = 27) -> None:
+        super().__init__(eventually_ready=False)
+        self.unread_selected = True
+        self.refreshed = False
+        self.menu_unread_count = menu_unread_count
+
+    async def query_all(self, selector: str):
+        if selector == boss_actions.selectors.MESSAGE_FILTER_OPTION:
+            return [
+                FakeElement(self, "stale-filter-all", "全部"),
+                FakeElement(self, "stale-filter-unread", "未读"),
+            ]
+        return await super().query_all(selector)
+
+    async def handle_element_click(self, element) -> None:
+        if element.selector == "stale-filter-all":
+            self.unread_selected = False
+            return
+        if element.selector == "stale-filter-unread":
+            self.unread_selected = True
+            self.refreshed = True
+            return
+        await super().handle_element_click(element)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if "boss_unread_list_state" in script:
+            self.state_reads += 1
+            return {
+                "activeFilter": "未读" if self.unread_selected else "全部",
+                "rowCount": 17 if self.refreshed else 40,
+                "badgeRowCount": 17 if self.refreshed else 0,
+                "menuUnreadCount": self.menu_unread_count,
+                "loading": False,
+                "emptyState": False,
+            }
+        return await super().eval_js(script, arg)
+
+
 def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
     """同一张图和同一个 runner 类可分别注入智联/BOSS adapter。"""
 
@@ -307,6 +364,32 @@ def test_same_graph_and_runner_support_zhilian_and_boss() -> None:
         conversation("销售管培生", [{"sender": "other", "text": "你好"}]),
     )
     assert zhilian_state["next_action"] == boss_state["next_action"] == "ask_screening"
+
+
+def test_boss_send_message_preserves_low_level_failure_diagnostics(monkeypatch) -> None:
+    page = FakePage(
+        conversations=[
+            conversation("AI产品经理", [{"sender": "other", "text": "你好"}])
+        ]
+    )
+    page.selected_index = 0
+    failure = {
+        "ok": False,
+        "reason": "conversation_changed_before_send",
+        "expected": {"conversationId": "expected"},
+        "actual": {"conversationId": "actual"},
+    }
+
+    async def fake_type_and_send(*args, **kwargs):
+        _ = args, kwargs
+        return failure
+
+    monkeypatch.setattr(boss_actions, "boss_type_and_send", fake_type_and_send)
+
+    result = asyncio.run(boss_actions.send_message(page, "你好，可以看看简历吗"))
+
+    assert result.sent is False
+    assert result.details == failure
 
 
 def test_boss_operation_direct_resume_sends_prephrase_before_request() -> None:
@@ -433,6 +516,25 @@ def test_boss_ai_intern_sends_company_info_then_requests_resume() -> None:
     assert page.resume_requests == 1
 
 
+def test_boss_ai_solution_role_ignores_client_vendor_question_and_requests_resume() -> None:
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI智能体解决方案负责人",
+            [{"sender": "other", "text": "这个岗位是甲方还是乙方岗位？"}],
+        ),
+        rules=load_chat_rules(),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好，可以看看简历吗"],
+        ["你好，方便发一份简历过来吗"],
+    )
+    assert page.resume_requests == 1
+
+
 def test_ai_basic_acceptance_with_interview_question_answers_then_requests_resume() -> None:
     """AI 候选人接受基础条件后追问线上面试，先答再求简历。"""
 
@@ -452,6 +554,35 @@ def test_ai_basic_acceptance_with_interview_question_answers_then_requests_resum
     assert state["stage"] == "basic_accept"
     assert page.sent_messages == ["面试都是线上"]
     assert page.resume_requests == 1
+
+
+def test_ai_basic_acceptance_with_resume_offer_question_requests_resume() -> None:
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {"sender": "other", "text": "能接受"},
+                {"sender": "other", "text": "简历能发您一份，方便查阅吗😊"},
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "basic_accept"
+    assert page.resume_requests == 1
+
+
+def test_ai_basic_leading_acknowledgement_accepts_without_swallowing_hesitation() -> None:
+    accepted = asyncio.run(judge_candidate_reply("好的，我是已经毕业的应届生"))
+    hesitant = asyncio.run(judge_candidate_reply("好的，我再考虑一下"))
+
+    assert accepted.status == "accept"
+    assert hesitant.status == "unclear"
 
 
 def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
@@ -607,6 +738,57 @@ def test_boss_ai_intern_combines_location_and_accommodation_in_one_reply() -> No
     assert state["stage"] == "knowledge_hit"
 
 
+def test_boss_ai_intern_housing_self_resolved_question_matches_accommodation() -> None:
+    answers = find_knowledge_answers(
+        "住房是自行解决吗",
+        load_chat_rules(),
+        position="AI应用开发实习生",
+    )
+
+    assert [item["topic"] for item in answers] == ["accommodation"]
+    assert [item["answer"] for item in answers] == ["公司包住，两人间"]
+
+
+def test_boss_ai_intern_what_business_question_matches_company_business() -> None:
+    answers = find_knowledge_answers(
+        "做什么业务的",
+        load_chat_rules(),
+        position="AI应用开发实习生",
+    )
+
+    assert [item["topic"] for item in answers] == ["companyBusiness"]
+    assert [item["answer"] for item in answers] == ["主要做膨润土"]
+
+
+def test_hr_screening_answer_with_faq_replies_before_next_question() -> None:
+    rules = load_chat_rules()
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "人力资源管培生",
+            [
+                {
+                    "sender": "me",
+                    "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+                },
+                {
+                    "sender": "other",
+                    "text": "可以的，提供住宿吗？薪资构成怎么样呢？",
+                },
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert page.sent_messages[0] == "工作时间是8-11，13-17，培训期间一天150；公司包住，两人间"
+    assert page.sent_messages[1] in {
+        "你好，这个岗位需要出差，可以接受吗",
+        "你好，你可以接受出差吗",
+    }
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+
+
 def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
     """BOSS AI 应用开发：未发基础条件前，候选人提问也先发基础条件。"""
 
@@ -687,6 +869,24 @@ def test_boss_existing_attachment_does_not_download_locally() -> None:
     assert result["reason"] == "boss_attachment_present_no_local_download"
 
 
+def test_boss_unread_filter_stops_on_platform_security_warning() -> None:
+    class SecurityWarningPage:
+        async def eval_js(self, script: str, arg: object | None = None) -> dict[str, object]:
+            _ = script, arg
+            return {
+                "blocked": True,
+                "title": "风险提示",
+                "text": "不得使用任何第三方插件、外挂、软件等招聘辅助工具",
+            }
+
+    result = asyncio.run(boss_actions.select_unread_filter(SecurityWarningPage()))  # type: ignore[arg-type]
+
+    assert result["selected"] is False
+    assert result["ready"] is False
+    assert result["status"] == "security_warning"
+    assert result["reason"] == "boss_security_warning"
+
+
 def test_boss_existing_attachment_does_not_open_preview_download() -> None:
     """BOSS should not click preview/download for existing attachments."""
 
@@ -739,6 +939,26 @@ def test_boss_request_resume_uses_mouse_for_button_and_confirm(monkeypatch) -> N
     assert page.dom_click_scripts_called == []
 
 
+def test_boss_request_resume_skips_frozen_candidate_without_clicking(monkeypatch) -> None:
+    page = BossFrozenCandidatePage()
+    click_attempts: list[dict[str, object]] = []
+
+    async def fake_mouse_click(target_page, rect, **kwargs):
+        _ = target_page, kwargs
+        click_attempts.append(rect)
+        return {"ok": False, "reason": "unexpected_click"}
+
+    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
+
+    result = asyncio.run(boss_actions.request_resume(page))
+
+    assert result["ok"] is True
+    assert result["candidateUnavailable"] is True
+    assert result["outcome"] == "candidate_frozen"
+    assert result["reason"] == "boss_candidate_frozen"
+    assert click_attempts == []
+
+
 def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     """候选人主动发附件简历时，recruiter_request_resume 应点击授权卡片的“同意”。"""
 
@@ -759,6 +979,136 @@ def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     assert page.resume_consent_clicked is True
     assert page.resume_button_clicked is False
     assert page.dom_click_scripts_called == []
+
+
+def test_boss_resume_consent_accepts_attachment_state_change_when_click_is_unverified(
+    monkeypatch,
+) -> None:
+    """The received attachment is stronger evidence than stale consent-card DOM."""
+
+    states = iter(
+        (
+            ResumeRequestState(
+                has_resume_attachment=False,
+                already_requested=False,
+                pending_resume_consent=True,
+                summary="before",
+            ),
+            ResumeRequestState(
+                has_resume_attachment=True,
+                already_requested=False,
+                pending_resume_consent=True,
+                summary="after",
+            ),
+        )
+    )
+
+    async def fake_inspect(page):
+        _ = page
+        return next(states)
+
+    async def fake_click(page):
+        _ = page
+        return {"clicked": False, "reason": "resume_consent_button_not_found"}
+
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "inspect_resume_request_state",
+        fake_inspect,
+    )
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "_click_resume_consent",
+        fake_click,
+    )
+
+    result = asyncio.run(boss_actions.request_resume(FakePage()))
+
+    assert result["ok"] is True
+    assert result["outcome"] == "resume_consent_accepted"
+    assert result["acceptedResumeConsent"] is True
+    assert result["resumeReceived"] is True
+
+
+def test_boss_resume_consent_verifier_accepts_received_attachment(monkeypatch) -> None:
+    async def fake_inspect(page):
+        _ = page
+        return ResumeRequestState(
+            has_resume_attachment=True,
+            already_requested=False,
+            pending_resume_consent=True,
+            summary="attachment received while consent card remains mounted",
+        )
+
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "inspect_resume_request_state",
+        fake_inspect,
+    )
+
+    result = asyncio.run(boss_actions.actions_resume._resume_consent_accepted(FakePage()))
+
+    assert result["verified"] is True
+    assert result["reason"] == "resume_attachment_received"
+
+
+def test_boss_resume_consent_dismisses_stale_request_dialog_before_accepting(
+    monkeypatch,
+) -> None:
+    states = iter(
+        (
+            ResumeRequestState(
+                has_resume_attachment=False,
+                already_requested=False,
+                pending_resume_consent=True,
+                summary="before",
+            ),
+            ResumeRequestState(
+                has_resume_attachment=False,
+                already_requested=False,
+                pending_resume_consent=False,
+                summary="after",
+            ),
+        )
+    )
+    events: list[str] = []
+
+    async def fake_inspect(page):
+        _ = page
+        return next(states)
+
+    async def fake_dismiss(page):
+        _ = page
+        events.append("dismiss")
+        return {"dismissed": True}
+
+    async def fake_click(page):
+        _ = page
+        events.append("consent")
+        return {"clicked": True}
+
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "inspect_resume_request_state",
+        fake_inspect,
+    )
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "_dismiss_stale_resume_request_dialog",
+        fake_dismiss,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "_click_resume_consent",
+        fake_click,
+    )
+
+    result = asyncio.run(boss_actions.request_resume(FakePage()))
+
+    assert result["ok"] is True
+    assert events == ["dismiss", "consent"]
+    assert result["dialogDismiss"] == {"dismissed": True}
 
 
 def test_boss_request_resume_switches_to_consent_when_resume_arrives_before_confirm(
@@ -844,6 +1194,34 @@ def test_boss_runner_marks_unhandled_resume_request_as_failure() -> None:
     assert state["next_action"] == "request_resume_failed"
     assert state["stage"] == "request_resume_action_failed"
     assert state["decision"]["result"]["reason"] == "resume_request_confirm_failed"
+
+
+def test_boss_runner_treats_frozen_candidate_as_safe_terminal_skip() -> None:
+    page = FakePage(
+        conversations=[
+            conversation("DirectRole", [{"sender": "other", "text": "你好"}])
+        ]
+    )
+    adapter = BossAdapter(page, owner="宋峰峰", dry_run=False)
+
+    async def frozen_request_resume() -> dict[str, object]:
+        return {
+            "ok": True,
+            "outcome": "candidate_frozen",
+            "requested": False,
+            "candidateUnavailable": True,
+            "skipped": True,
+            "reason": "boss_candidate_frozen",
+        }
+
+    adapter.request_resume = frozen_request_resume  # type: ignore[method-assign]
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "candidate_unavailable"
+    assert state["decision"]["result"]["reason"] == "boss_candidate_frozen"
 
 
 def test_boss_skill_documents_request_resume_function_call_contract() -> None:
@@ -970,6 +1348,76 @@ def test_boss_unread_state_with_menu_count_does_not_false_drain(monkeypatch) -> 
     assert result["state"]["menuUnreadCount"] == 53
 
 
+def test_boss_unread_state_detects_stale_active_filter_without_waiting_full_timeout(
+    monkeypatch,
+) -> None:
+    page = BossStaleUnreadFilterPage()
+    monkeypatch.setattr(boss_actions, "BOSS_UNREAD_READY_POLL_MS", 0)
+
+    result = asyncio.run(
+        boss_actions.wait_for_unread_list_ready(page, timeout_ms=100)
+    )
+
+    assert result["ready"] is False
+    assert result["status"] == "stale_active_filter"
+    assert result["reason"] == "boss_unread_filter_stale"
+    assert page.state_reads >= 2
+
+
+def test_boss_unread_filter_refreshes_stale_active_list(monkeypatch) -> None:
+    page = BossStaleUnreadFilterPage()
+    readiness = iter(
+        (
+            {
+                "ready": False,
+                "status": "stale_active_filter",
+                "reason": "boss_unread_filter_stale",
+                "state": {"menuUnreadCount": 27},
+            },
+            {
+                "ready": True,
+                "status": "ready_with_unread",
+                "reason": "",
+                "state": {"badgeRowCount": 17},
+            },
+        )
+    )
+
+    async def fake_wait(target_page, **kwargs):
+        _ = target_page, kwargs
+        return next(readiness)
+
+    async def fake_click(target_page, element, **kwargs):
+        _ = kwargs
+        await target_page.handle_element_click(element)
+        return {"ok": True, "method": "humanized_mouse"}
+
+    monkeypatch.setattr(boss_actions, "wait_for_unread_list_ready", fake_wait)
+    monkeypatch.setattr(boss_actions, "boss_click_element", fake_click)
+
+    result = asyncio.run(boss_actions.select_unread_filter(page))
+
+    assert result["ready"] is True
+    assert result["status"] == "ready_with_unread"
+    assert result["refreshed"] is True
+    assert page.refreshed is True
+
+
+def test_boss_unread_state_detects_stale_rows_after_menu_count_reaches_zero(
+    monkeypatch,
+) -> None:
+    page = BossStaleUnreadFilterPage(menu_unread_count=0)
+    monkeypatch.setattr(boss_actions, "BOSS_UNREAD_READY_POLL_MS", 0)
+
+    result = asyncio.run(
+        boss_actions.wait_for_unread_list_ready(page, timeout_ms=100)
+    )
+
+    assert result["ready"] is False
+    assert result["status"] == "stale_active_filter"
+    assert result["reason"] == "boss_unread_filter_stale"
+
+
 def test_boss_send_message_uses_atomic_humanized_type_and_send(monkeypatch) -> None:
     """BOSS 发送必须委托给不可拆分的逐字输入与鼠标发送序列。"""
 
@@ -1043,6 +1491,92 @@ def test_boss_screening_ask_accept_and_reject() -> None:
     )
     assert state["next_action"] == "skip"
     assert page.resume_requests == 0
+
+
+def test_screening_rejects_negated_accept_phrases() -> None:
+    """“接受”出现在否定短语中时不得被关键词兜底误判为通过。"""
+
+    screening = {
+        "mode": "ask_required_questions",
+        "questions": [
+            {
+                "id": "single_rest",
+                "text": "你好，我们这边在湖州长兴，还是单休，你可以接受吗",
+                "required": True,
+            }
+        ],
+    }
+    question = screening["questions"][0]["text"]
+
+    for answer in ("不好意思哈！单休接受不了", "我不能接受单休", "不太能接受"):
+        fallback = asyncio.run(judge_candidate_reply(answer))
+        analysis = asyncio.run(
+            analyze_position_screening(
+                [
+                    {"sender": "me", "text": question},
+                    {"sender": "other", "text": answer},
+                ],
+                screening,
+            )
+        )
+
+        assert fallback.status == "reject", answer
+        assert analysis["status"] == "reject", answer
+
+
+def test_screening_does_not_reject_salary_or_job_content_questions() -> None:
+    screening = {
+        "mode": "ask_required_questions",
+        "questions": [
+            {
+                "id": "single_rest",
+                "text": "你好，我们这边在湖州长兴，还是单休，你可以接受吗",
+                "required": True,
+            }
+        ],
+    }
+    question = screening["questions"][0]["text"]
+    answer = "请问无责底薪是多少呢？ 请问具体工作内容是哪些呢？\n合适"
+
+    fallback = asyncio.run(judge_candidate_reply(answer))
+    analysis = asyncio.run(
+        analyze_position_screening(
+            [
+                {"sender": "me", "text": question},
+                {"sender": "other", "text": "请问无责底薪是多少呢？"},
+                {"sender": "other", "text": "请问具体工作内容是哪些呢？\n合适"},
+            ],
+            screening,
+        )
+    )
+
+    assert fallback.status == "unclear"
+    assert analysis["status"] == "unclear"
+
+
+def test_screening_still_rejects_missing_required_experience() -> None:
+    screening = {
+        "mode": "ask_required_questions",
+        "questions": [
+            {
+                "id": "sales_experience",
+                "text": "你之前做过化工原料外贸销售吗",
+                "required": True,
+            }
+        ],
+    }
+
+    analysis = asyncio.run(
+        analyze_position_screening(
+            [
+                {"sender": "me", "text": screening["questions"][0]["text"]},
+                {"sender": "other", "text": "没有"},
+            ],
+            screening,
+        )
+    )
+
+    assert analysis["status"] == "reject"
 
 
 def test_proactive_thresholds_cover_core_positions() -> None:

@@ -21,6 +21,14 @@ CHAT_INPUT = "#drop-area.input-textarea_self"
 SEND_BUTTON = "button.el-button.new-send-button.el-button--primary"
 MINE_MESSAGE = "div.message-item.mine"
 
+NEW_GREETING_BATCH_REPLY_BUTTON = "#sensor_Bchat_plbatchreply"
+NEW_GREETING_PHRASE_ITEM = (
+    ".el-popover:visible .greeting-item.greeting-item-batch"
+)
+NEW_GREETING_SEND_BUTTON = (
+    ".el-popover:visible .greeting-btn button.el-button--primary"
+)
+
 AI_GUIDE_CLOSE = "button.ai-guide-btn-no"
 WECHAT_NOTIFY_CLOSE = ".wechat-notify .close, .wechat-notify .el-icon-close"
 INTERRUPTION_CLOSE_TEXTS = ("不感兴趣", "跳过", "稍后再说", "知道了", "我知道了")

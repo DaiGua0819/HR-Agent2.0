@@ -89,6 +89,8 @@ class RecordingLocator:
         input_element: bool = False,
         boxes: list[dict[str, float]] | None = None,
         hit_matches: bool = True,
+        in_viewport: bool = True,
+        scroll_error: Exception | None = None,
     ) -> None:
         self.raw_page = raw_page
         self.box = box
@@ -96,9 +98,13 @@ class RecordingLocator:
         self.box_calls = 0
         self.input_element = input_element
         self.hit_matches = hit_matches
+        self.in_viewport = in_viewport
+        self.scroll_error = scroll_error
 
     async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
         self.raw_page.events.append(("scroll_into_view", timeout))
+        if self.scroll_error is not None:
+            raise self.scroll_error
 
     async def bounding_box(self) -> dict[str, float]:
         if self.boxes:
@@ -112,6 +118,8 @@ class RecordingLocator:
 
     async def evaluate(self, script: str, arg: object | None = None) -> str | bool:
         _ = arg
+        if "window.innerWidth" in script:
+            return self.in_viewport
         if "elementFromPoint" in script:
             return self.hit_matches
         return self.raw_page.input_text if self.input_element else ""
@@ -165,6 +173,56 @@ def test_humanized_click_moves_through_multiple_points_and_clicks_inside_target(
     assert len(moves) >= 8
     assert _inside({"x": 300, "y": 160, "width": 120, "height": 44}, moves[-1][1], moves[-1][2])
     assert [event[0] for event in page.page.events[-2:]] == ["down", "up"]
+
+
+def test_humanized_click_skips_scroll_wait_for_target_already_in_viewport() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(
+            page.page,
+            {"x": 560, "y": 330, "width": 90, "height": 36},
+            in_viewport=True,
+            scroll_error=TimeoutError("continuously moving editor layout"),
+        )
+    )
+
+    result = asyncio.run(
+        humanized_click_element(
+            page,
+            target,
+            label="BOSS发送按钮",
+            profile=replace(INSTANT_PROFILE, max_click_attempts=1),
+        )
+    )
+
+    assert result["ok"] is True
+    assert not any(event[0] == "scroll_into_view" for event in page.page.events)
+
+
+def test_boss_click_element_blocks_on_platform_security_warning() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(page.page, {"x": 300, "y": 160, "width": 120, "height": 44})
+    )
+
+    async def eval_js(script: str, arg: object | None = None) -> dict[str, object]:
+        _ = script, arg
+        return {
+            "blocked": True,
+            "title": "风险提示",
+            "text": "不得使用任何第三方插件、外挂、软件等招聘辅助工具",
+        }
+
+    page.eval_js = eval_js  # type: ignore[attr-defined]
+
+    result = asyncio.run(
+        boss_interaction.boss_click_element(page, target, label="BOSS发送按钮")
+    )
+
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "boss_security_warning"
+    assert not any(event[0] == "down" for event in page.page.events)
 
 
 def test_humanized_click_preverifies_before_retry_without_second_click() -> None:
@@ -244,6 +302,38 @@ def test_humanized_click_requires_final_point_to_hit_target_element() -> None:
     assert not any(event[0] == "down" for event in page.page.events)
 
 
+def test_humanized_click_runs_guard_before_pointer_hit_test() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(
+            page.page,
+            {"x": 300, "y": 160, "width": 120, "height": 44},
+            hit_matches=False,
+        )
+    )
+
+    async def guard() -> dict[str, object]:
+        return {
+            "verified": False,
+            "reason": "boss_security_warning",
+            "warning": {"title": "风险提示"},
+        }
+
+    result = asyncio.run(
+        humanized_click_element(
+            page,
+            target,
+            label="BOSS发送按钮",
+            pre_click_guard=guard,
+            profile=replace(INSTANT_PROFILE, max_click_attempts=1),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "boss_security_warning"
+    assert not any(event[0] == "down" for event in page.page.events)
+
+
 def test_humanized_click_cancels_when_pre_click_guard_detects_state_change() -> None:
     page = WrappedPage()
     target = WrappedElement(
@@ -269,6 +359,37 @@ def test_humanized_click_cancels_when_pre_click_guard_detects_state_change() -> 
 
     assert result["ok"] is False
     assert result["reason"] == "resume_request_state_changed"
+    assert not any(event[0] == "down" for event in page.page.events)
+
+
+def test_boss_click_element_rechecks_security_warning_before_mouse_down() -> None:
+    page = WrappedPage()
+    target = WrappedElement(
+        RecordingLocator(page.page, {"x": 300, "y": 160, "width": 120, "height": 44})
+    )
+    checks = 0
+
+    async def eval_js(script: str, arg: object | None = None) -> dict[str, object]:
+        nonlocal checks
+        _ = script, arg
+        checks += 1
+        if checks == 1:
+            return {"blocked": False, "title": "", "text": ""}
+        return {
+            "blocked": True,
+            "title": "风险提示",
+            "text": "不得使用任何第三方插件、外挂、软件等招聘辅助工具",
+        }
+
+    page.eval_js = eval_js  # type: ignore[attr-defined]
+
+    result = asyncio.run(
+        boss_interaction.boss_click_element(page, target, label="BOSS发送按钮")
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "boss_security_warning"
+    assert checks >= 2
     assert not any(event[0] == "down" for event in page.page.events)
 
 

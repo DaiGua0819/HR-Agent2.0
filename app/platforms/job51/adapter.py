@@ -17,6 +17,7 @@ class Job51Adapter:
         self.page = page
         self.owner = owner
         self.dry_run = is_dry_run(dry_run)
+        self._pending_send_identity: dict[str, object] | None = None
 
     async def open_chat_page(self) -> None:
         await actions_chat.open_chat_page(self.page)
@@ -53,7 +54,16 @@ class Job51Adapter:
                 message=message,
             )
             return SendResult(sent=False, verified=False, blocked=False, message="dry_run")
-        return await actions_chat.send_message(self.page, message)
+        expected_identity = self._pending_send_identity
+        try:
+            return await actions_chat.send_message(
+                self.page,
+                message,
+                expected_identity=expected_identity,
+            )
+        finally:
+            if expected_identity is not None:
+                self._pending_send_identity = None
 
     async def send_company_info(
         self,
@@ -82,7 +92,17 @@ class Job51Adapter:
         if self.dry_run:
             record_dry_run_intent("job51.request_resume", owner=self.owner, platform="job51")
             return {"requested": False, "downloaded": False, "dryRun": True}
-        return await actions_resume.request_or_download_resume(self.page)
+        conversation = await self.read_chat_context()
+        self._pending_send_identity = {
+            "name": conversation.candidate.name,
+            "position": conversation.candidate.applied_position,
+            "label": conversation.id,
+            "latest_message": conversation.latest_message,
+        }
+        result = await actions_resume.request_or_download_resume(self.page)
+        if not result.get("needsAttachmentRequest"):
+            self._pending_send_identity = None
+        return result
 
     async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:
         return await invite_to_interview(

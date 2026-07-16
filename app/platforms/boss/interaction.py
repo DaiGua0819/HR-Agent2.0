@@ -15,13 +15,70 @@ from app.browser.humanized_pointer import (
     humanized_type_element,
 )
 from app.browser.reliable_actions import reliable_click, reliable_click_element, reliable_fill
-from app.browser.reliable_support import is_fake
+from app.browser.reliable_support import is_fake, record_result
 from app.platforms.boss import selectors
 from app.settings import load_settings
 
 VerifyCallback = Callable[[], Awaitable[bool | dict[str, object]]]
 BOSS_THREAD_VERIFY_TIMEOUT_MS = 8000
 BOSS_SEND_VERIFY_TIMEOUT_MS = 8000
+
+_BOSS_SECURITY_WARNING_STATE_JS = """
+() => {
+  const visible = (element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0
+      && rect.height > 0
+      && style.display !== "none"
+      && style.visibility !== "hidden";
+  };
+  const dialogs = Array.from(document.querySelectorAll(
+    '[role="dialog"], .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, .modal'
+  )).filter(visible);
+  for (const dialog of dialogs) {
+    const text = String(dialog.innerText || dialog.textContent || "").trim();
+    if (text.includes("风险提示")
+      && text.includes("第三方")
+      && (text.includes("招聘辅助工具") || text.includes("封禁"))) {
+      return {blocked: true, title: "风险提示", text: text.slice(0, 1200)};
+    }
+  }
+  return {blocked: false, title: "", text: ""};
+}
+"""
+
+
+async def boss_security_warning_state(page: Any) -> dict[str, object]:
+    try:
+        raw = await page.eval_js(_BOSS_SECURITY_WARNING_STATE_JS)
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict) or not bool(raw.get("blocked")):
+        return {"blocked": False, "title": "", "text": ""}
+    return {
+        "blocked": True,
+        "title": str(raw.get("title") or "风险提示"),
+        "text": str(raw.get("text") or "")[:1200],
+    }
+
+
+def _security_warning_result(
+    page: Any,
+    warning: dict[str, object],
+    *,
+    label: str,
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "ok": False,
+        "blocked": True,
+        "verified": False,
+        "label": label,
+        "reason": "boss_security_warning",
+        "warning": warning,
+    }
+    record_result(page, result)
+    return result
 
 
 async def boss_click_element(
@@ -33,15 +90,31 @@ async def boss_click_element(
     pre_click_guard: VerifyCallback | None = None,
     profile: HumanizedInteractionProfile | None = None,
 ) -> dict[str, object]:
+    warning = await boss_security_warning_state(page)
+    if warning.get("blocked"):
+        return _security_warning_result(page, warning, label=label)
     profile = profile or _boss_profile()
     if is_fake(page):
         return await reliable_click_element(page, element, label=label, verify=verify)
+
+    async def guarded_pre_click() -> bool | dict[str, object]:
+        current_warning = await boss_security_warning_state(page)
+        if current_warning.get("blocked"):
+            return {
+                "verified": False,
+                "reason": "boss_security_warning",
+                "warning": current_warning,
+            }
+        if pre_click_guard is None:
+            return {"verified": True}
+        return await pre_click_guard()
+
     return await humanized_click_element(
         page,
         element,
         label=label,
         verify=verify,
-        pre_click_guard=pre_click_guard,
+        pre_click_guard=guarded_pre_click,
         profile=profile,
     )
 
@@ -117,6 +190,9 @@ async def boss_click_rect(
     verify: VerifyCallback | None = None,
     profile: HumanizedInteractionProfile | None = None,
 ) -> dict[str, object]:
+    warning = await boss_security_warning_state(page)
+    if warning.get("blocked"):
+        return _security_warning_result(page, warning, label=label)
     profile = profile or _boss_profile()
     return await humanized_click_rect(
         page,

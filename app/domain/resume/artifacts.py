@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from app.db.engine import connect, run_migrations
 from app.domain.resume.models import Resume
@@ -220,6 +222,10 @@ def _read_resume_text(path: Path) -> str:
         extracted = _read_pdf_text(path)
         if extracted:
             return extracted
+    if data.startswith(b"PK"):
+        extracted = _read_docx_text(path)
+        if extracted:
+            return extracted
     for encoding in ("utf-8", "gb18030"):
         try:
             return data.decode(encoding)
@@ -238,6 +244,28 @@ def _read_pdf_text(path: Path) -> str:
             return "\n".join(page.get_text() for page in document)
     except Exception:
         return ""
+
+
+def _read_docx_text(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            document_xml = archive.read("word/document.xml")
+        root = ElementTree.fromstring(document_xml)
+    except (KeyError, OSError, ElementTree.ParseError, zipfile.BadZipFile):
+        return ""
+
+    paragraphs: list[str] = []
+    for paragraph in root.iter():
+        if not paragraph.tag.endswith("}p"):
+            continue
+        text = "".join(
+            str(node.text or "")
+            for node in paragraph.iter()
+            if node.tag.endswith("}t")
+        ).strip()
+        if text:
+            paragraphs.append(text)
+    return "\n".join(paragraphs)
 
 
 def _artifact_params(artifact: ResumeArtifact) -> tuple[Any, ...]:

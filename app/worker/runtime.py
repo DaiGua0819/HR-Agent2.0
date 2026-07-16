@@ -24,6 +24,10 @@ from app.settings import load_settings
 DEFAULT_DRAIN_MAX_CONTACTS = 300
 
 
+class WorkerPreparationBlocked(RuntimeError):
+    """The platform page is readable but requires operator intervention."""
+
+
 @dataclass
 class WorkerRuntime:
     """worker 运行期上下文。"""
@@ -81,6 +85,8 @@ class WorkerRuntime:
                     **contact,
                     "dryRun": load_settings().dry_run,
                 }
+            except WorkerPreparationBlocked as error:
+                return self._preparation_blocked_payload(platform, str(error))
             finally:
                 self.events.append({"event": "finish", "platform": platform.value})
                 self.agent_busy = False
@@ -156,6 +162,14 @@ class WorkerRuntime:
                     drained=False,
                     stop_reason="max_contacts_reached",
                 )
+            except WorkerPreparationBlocked as error:
+                reason = str(error)
+                return {
+                    **self._preparation_blocked_payload(platform, reason),
+                    "contacts": [],
+                    "drained": False,
+                    "stopReason": reason,
+                }
             finally:
                 self.events.append({"event": "drain_finish", "platform": platform.value})
                 self.agent_busy = False
@@ -247,8 +261,28 @@ class WorkerRuntime:
             and not bool(unread_state.get("ready"))
         ):
             reason = str(unread_state.get("reason") or "unread_list_not_ready")
-            raise RuntimeError(reason)
+            raise WorkerPreparationBlocked(reason)
         await adapter.select_positions(None)
+
+    def _preparation_blocked_payload(
+        self,
+        platform: Platform,
+        reason: str,
+    ) -> dict[str, object]:
+        return {
+            "accepted": False,
+            "processed": 0,
+            "owner": self.owner,
+            "platform": platform.value,
+            "nextAction": "blocked",
+            "stage": reason,
+            "decision": {
+                "action": "failed",
+                "reason": reason,
+                "failureReason": reason,
+            },
+            "dryRun": load_settings().dry_run,
+        }
 
     async def _find_next_unread_thread(
         self,

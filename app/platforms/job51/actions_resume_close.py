@@ -36,9 +36,9 @@ CLOSE_ONLINE_RESUME_JS = r"""
     }
     return el;
   };
-  const rootText = text(document.body);
-  const looksLikeResume = rootText.includes("在线简历") ||
-    Boolean(document.querySelector("#sensor_imresume_download"));
+  const looksLikeResume = Array.from(document.querySelectorAll(
+    "#IMResumePrint, #sensor_imresume_download"
+  )).some(visible);
   if (!looksLikeResume) {
     return { closed: false, reason: "not_online_resume_view" };
   }
@@ -96,8 +96,7 @@ CLOSE_GENERIC_BLOCKERS_JS = r"""
     ".el-dialog__wrapper",
     ".el-message-box__wrapper",
     ".wechat-notify",
-    "[class*='guide']",
-    "[class*='popover']"
+    "[class*='guide']"
   ].join(",");
   const blockers = Array.from(document.querySelectorAll(blockerSelectors)).filter(visible);
   const safe = /关闭|取消|稍后|再说|知道了|我知道了|不感兴趣|跳过|close|cancel|later|skip/i;
@@ -142,6 +141,48 @@ CLOSE_GENERIC_BLOCKERS_JS = r"""
 """
 
 
+CLOSE_EXPORT_DIALOG_JS = r"""
+() => {
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) || "" : "");
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const dialogs = Array.from(document.querySelectorAll(
+    ".el-message-box__wrapper, .el-dialog__wrapper, [role='dialog']"
+  )).filter(visible);
+  const dialog = dialogs.find((item) => {
+    const label = text(item);
+    return label.includes("导出") &&
+      (label.includes("导出成功") || label.includes("导出记录"));
+  });
+  if (!dialog) {
+    return { closed: false, reason: "export_dialog_not_found" };
+  }
+  const controls = Array.from(dialog.querySelectorAll(
+    "button, .el-message-box__headerbtn, [role='button'], [aria-label]"
+  )).filter(visible);
+  const acknowledged = controls.find((item) => text(item) === "我知道了");
+  const headerClose = controls.find((item) => {
+    const label = [text(item), attr(item, "aria-label"), attr(item, "class")].join(" ");
+    return /关闭|close|el-message-box__headerbtn/i.test(label);
+  });
+  const target = acknowledged || headerClose;
+  if (!target) {
+    return { closed: false, reason: "export_dialog_close_control_not_found" };
+  }
+  const label = [text(target), attr(target, "aria-label"), attr(target, "class")]
+    .join(" ").replace(/\s+/g, " ").trim();
+  target.click();
+  return { closed: true, source: "export_success_dialog", label };
+}
+"""
+
+
 OVERLAY_STATE_JS = r"""
 () => {
   const visible = (el) => {
@@ -152,13 +193,15 @@ OVERLAY_STATE_JS = r"""
       rect.width > 0 && rect.height > 0;
   };
   const remaining = [];
-  if (visible(document.querySelector("#IMResumePrint"))) {
+  const anyVisible = (selector) => Array.from(document.querySelectorAll(selector)).some(visible);
+  if (anyVisible("#IMResumePrint")) {
     remaining.push("online_resume_preview");
   }
-  if (visible(document.querySelector(".annex-resume"))) {
+  if (anyVisible(".annex-resume")) {
     remaining.push("annex_resume_preview");
   }
-  if (visible(document.querySelector(".el-dialog, .el-message-box, [role='dialog']"))) {
+  if (anyVisible(".el-dialog, .el-dialog__wrapper, .el-message-box, " +
+      ".el-message-box__wrapper, [role='dialog']")) {
     remaining.push("dialog");
   }
   return { remaining };
@@ -193,10 +236,36 @@ async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
         actions.append({"name": "export_dialog", "attempt": attempt, **export})
         if export.get("closed"):
             closed += 1
+        state = await _overlay_state(page)
+        remaining = [
+            str(item)
+            for item in state.get("remaining", [])
+            if str(item or "").strip()
+        ]
+        actions.append({"name": "overlay_state", "attempt": attempt, **state})
+        if remaining and (preview.get("closed") or export.get("closed")):
+            state = await _wait_overlay_transition(page)
+            remaining = [
+                str(item)
+                for item in state.get("remaining", [])
+                if str(item or "").strip()
+            ]
+            actions.append({"name": "overlay_transition", "attempt": attempt, **state})
+        if not remaining:
+            break
         generic = await _close_generic_blocker(page)
         actions.append({"name": "generic_blocker", "attempt": attempt, **generic})
         if generic.get("closed"):
             closed += 1
+        state = await _overlay_state(page)
+        remaining = [
+            str(item)
+            for item in state.get("remaining", [])
+            if str(item or "").strip()
+        ]
+        actions.append({"name": "overlay_state", "attempt": attempt, **state})
+        if not remaining:
+            break
         try:
             pressed = await page.press("body", "Escape", timeout_ms=1000)
         except Exception as error:
@@ -246,7 +315,7 @@ async def _close_online_resume(page: BrowserPage) -> dict[str, object]:
 
 async def _close_export_dialog(page: BrowserPage) -> dict[str, object]:
     try:
-        result = await page.eval_js("job51.close_export_dialog")
+        result = await page.eval_js(CLOSE_EXPORT_DIALOG_JS)
     except Exception as error:
         return {"closed": False, "reason": "export_close_error", "error": str(error)}
     await asyncio.sleep(1)
@@ -268,3 +337,17 @@ async def _overlay_state(page: BrowserPage) -> dict[str, object]:
     except Exception as error:
         return {"remaining": [], "error": str(error)}
     return result if isinstance(result, dict) else {"remaining": []}
+
+
+async def _wait_overlay_transition(
+    page: BrowserPage,
+    *,
+    timeout_ms: int = 800,
+    interval_ms: int = 100,
+) -> dict[str, object]:
+    deadline = asyncio.get_running_loop().time() + max(timeout_ms, 0) / 1000
+    last = await _overlay_state(page)
+    while last.get("remaining") and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(max(interval_ms, 0) / 1000)
+        last = await _overlay_state(page)
+    return last

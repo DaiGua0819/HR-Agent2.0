@@ -115,6 +115,202 @@ READ_UNREAD_ROWS_JS = r"""
 }
 """
 
+NEW_GREETING_REPLY_STATE_JS = r"""
+(expected) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const compact = (value) => String(value || "").replace(/\s+/g, "").toLowerCase();
+  const contains = (actual, expectedValue) => {
+    const left = compact(actual);
+    const right = compact(expectedValue);
+    return Boolean(left && right && left.includes(right));
+  };
+  const expectedName = String(expected && expected.name || "").trim();
+  const expectedPosition = String(expected && expected.position || "").trim();
+  const cards = Array.from(document.querySelectorAll(".batch-chat-item")).filter(visible);
+  if (!cards.length) {
+    return { available: false, matched: false, reason: "new_greeting_view_not_visible" };
+  }
+  if (!expectedName || !expectedPosition) {
+    return {
+      available: true,
+      matched: false,
+      reason: "new_greeting_expected_identity_incomplete",
+      expected: { name: expectedName, position: expectedPosition },
+    };
+  }
+  const matches = cards.filter((card) => {
+    const cardText = text(card);
+    return contains(cardText, expectedName) && contains(cardText, expectedPosition);
+  });
+  if (matches.length !== 1) {
+    return {
+      available: true,
+      matched: false,
+      reason: matches.length ? "new_greeting_identity_ambiguous" : "new_greeting_identity_mismatch",
+      expected: { name: expectedName, position: expectedPosition },
+      candidates: cards.map((card) => text(card).slice(0, 300)),
+    };
+  }
+  const card = matches[0];
+  const input = card.querySelector("input[type='checkbox']");
+  const candidateId = String(input && input.value || "").trim();
+  if (!candidateId) {
+    return {
+      available: true,
+      matched: false,
+      reason: "new_greeting_candidate_id_missing",
+      cardText: text(card).slice(0, 300),
+    };
+  }
+  return {
+    available: true,
+    matched: true,
+    candidateId,
+    actual: {
+      name: expectedName,
+      position: expectedPosition,
+      cardText: text(card).slice(0, 500),
+    },
+  };
+}
+"""
+
+NEW_GREETING_SELECTION_STATE_JS = r"""
+(payload) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const candidateId = String(payload && payload.candidateId || "").trim();
+  const selectedIds = Array.from(document.querySelectorAll(
+    ".batch-chat-item input[type='checkbox']:checked"
+  )).map((input) => String(input.value || "").trim()).filter(Boolean);
+  const button = document.querySelector("#sensor_Bchat_plbatchreply");
+  const buttonEnabled = Boolean(
+    visible(button) && !button.disabled && !String(button.className || "").includes("is-disabled")
+  );
+  const verified = selectedIds.length === 1 && selectedIds[0] === candidateId && buttonEnabled;
+  return {
+    verified,
+    candidateId,
+    selectedIds,
+    buttonEnabled,
+    reason: verified ? "" : "new_greeting_candidate_not_exclusively_selected",
+  };
+}
+"""
+
+NEW_GREETING_PHRASE_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const roots = Array.from(document.querySelectorAll(".el-popover")).filter(visible);
+  const items = roots.flatMap((root) => Array.from(root.querySelectorAll(
+    ".greeting-item.greeting-item-batch"
+  )).filter(visible));
+  return {
+    verified: roots.length > 0 && items.length > 0,
+    phrases: items.map((item) => text(item)).filter(Boolean),
+    reason: roots.length
+      ? "new_greeting_common_phrases_missing"
+      : "new_greeting_reply_popover_missing",
+  };
+}
+"""
+
+NEW_GREETING_PHRASE_SELECTED_STATE_JS = r"""
+(payload) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const phrase = compact(payload && payload.phrase || "");
+  const items = Array.from(document.querySelectorAll(
+    ".el-popover .greeting-item.greeting-item-batch"
+  )).filter(visible);
+  const item = items.find((candidate) => compact(candidate.innerText) === phrase);
+  const checked = Boolean(item && (
+    item.querySelector("input[type='radio']:checked") ||
+    item.querySelector(".el-radio.is-checked") ||
+    item.getAttribute("aria-checked") === "true"
+  ));
+  return {
+    verified: checked,
+    phrase: payload && payload.phrase || "",
+    reason: checked ? "" : "new_greeting_common_phrase_not_selected",
+  };
+}
+"""
+
+VERIFY_NEW_GREETING_REPLY_JS = r"""
+(payload) => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const compact = (value) => String(value || "").replace(/\s+/g, "");
+  const candidateId = String(payload && payload.candidateId || "").trim();
+  const phrase = String(payload && payload.phrase || "").trim();
+  const input = Array.from(document.querySelectorAll(
+    ".batch-chat-item input[type='checkbox']"
+  )).find((item) => String(item.value || "").trim() === candidateId);
+  const card = input && input.closest(".batch-chat-item");
+  const cardGone = !card;
+  const phraseVisible = Boolean(card && compact(text(card)).includes(compact(phrase)));
+  const successToast = Array.from(document.querySelectorAll(
+    ".el-message--success, .el-notification.success, [class*='success']"
+  )).filter(visible).find((item) => /成功|success/i.test(text(item)));
+  const verified = Boolean(cardGone || phraseVisible || successToast);
+  return {
+    verified,
+    candidateId,
+    cardGone,
+    phraseVisible,
+    successToast: successToast ? text(successToast).slice(0, 160) : "",
+    reason: verified ? "" : "new_greeting_reply_not_verified",
+  };
+}
+"""
+
+CLEAR_NEW_GREETING_SELECTION_JS = r"""
+(payload) => {
+  const candidateId = String(payload && payload.candidateId || "").trim();
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  const input = Array.from(document.querySelectorAll(
+    ".batch-chat-item input[type='checkbox']"
+  )).find((item) => String(item.value || "").trim() === candidateId);
+  if (input && input.checked) {
+    const label = input.closest("label.el-checkbox");
+    (label || input).click();
+  }
+  return { cleared: !input || !input.checked, candidateId };
+}
+"""
+
 CLICK_THREAD_BY_IDENTITY_JS = r"""
 (expected) => {
   const visible = (el) => {

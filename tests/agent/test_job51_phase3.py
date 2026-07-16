@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 
 from app.agent.graph import build_recruit_graph
+from app.agent.rules import load_chat_rules
 from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
@@ -1449,6 +1452,21 @@ def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
     ]
 
 
+def test_job51_explicitly_ignored_position_skips_without_requesting_resume() -> None:
+    state, page = run_case(
+        conversation(
+            "新媒体运营（上海农夫果园）",
+            [{"sender": "other", "text": "对方向你发送了简历"}],
+        ),
+        rules=load_chat_rules(),
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "ignored_position"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
 def test_job51_operation_and_finance_have_prompt() -> None:
     """运营 A/B 和财务 AI 直求简历岗位都会先发要简历话术。"""
 
@@ -1979,6 +1997,30 @@ def test_job51_cleanup_resume_overlays_closes_export_dialog() -> None:
     assert page.current_conversation().get("export_dialog_open") is False
 
 
+def test_job51_cleanup_closes_visible_export_dialog_after_hidden_dialog() -> None:
+    """A hidden mounted dialog must not mask a later visible export-success dialog."""
+
+    page = HiddenThenVisibleExportDialogPage()
+
+    result = asyncio.run(cleanup_resume_overlays(page))
+
+    assert page.export_dialog_open is False
+    assert page.generic_close_called is False
+    assert result["remaining"] == []
+    assert any(
+        action.get("name") == "export_dialog"
+        and action.get("source") == "export_success_dialog"
+        for action in result["actions"]
+    )
+
+
+def test_job51_resume_cleanup_scripts_do_not_treat_normal_popovers_as_overlays() -> None:
+    """Normal navigation popover references are not resume overlays or blockers."""
+
+    assert "rootText.includes" not in actions_resume_close.CLOSE_ONLINE_RESUME_JS
+    assert "[class*='popover']" not in actions_resume_close.CLOSE_GENERIC_BLOCKERS_JS
+
+
 def test_job51_cleanup_resume_overlays_reports_remaining_overlay() -> None:
     """If a resume overlay cannot be closed, processing must see it in diagnostics."""
 
@@ -1996,6 +2038,14 @@ def test_job51_resume_validation_and_memory_guard() -> None:
     docx = b"PK\x03\x04[Content_Types].xml"
     assert validate_resume_bytes(pdf).ok
     assert validate_resume_bytes(docx).ok
+
+    delayed_content_types = io.BytesIO()
+    with zipfile.ZipFile(delayed_content_types, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("docProps/app.xml", bytes(range(256)) * 32)
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", "<document />")
+    assert validate_resume_bytes(delayed_content_types.getvalue()).ok
+
     assert not validate_resume_bytes("在线简历预览文字".encode()).ok
     assert not validate_resume_bytes(b"%PDF-1.7\nmissing eof").ok
     assert resume_download_suitability_guard("", "销售管培生")["blocked"] is True
@@ -2102,7 +2152,8 @@ def test_job51_request_resume_rejects_preview_only() -> None:
     assert result["requested"] is True
     assert result["confirmed"] is True
     assert result["downloaded"] is False
-    assert result["reason"] == "preview_only_rejected"
+    assert result["reason"] == "online_resume_not_exportable_attachment_requested"
+    assert result["onlineResumeFailure"]["reason"] == "online_resume_preview_not_verified"
     assert page.resume_requests == 1
 
 
@@ -2208,6 +2259,102 @@ def test_job51_runner_sends_attachment_message_when_native_request_is_unavailabl
     assert result["reason"] == "online_resume_not_exportable_attachment_message_sent"
     assert page.sent_messages == ["在线简历暂时无法导出，方便发一份附件简历过来吗"]
     assert page.resume_requests == 0
+
+
+def test_job51_runner_uses_single_candidate_common_phrase_in_new_greeting_view() -> None:
+    """New-greeting cards must request a resume without a normal chat input."""
+
+    page = NewGreetingOnlineResumeWithoutNativeRequestPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                preview_only=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    common_phrase = "我看不到您的详细信息，方便投一份简历吗？"
+    result = state["decision"]["result"]
+    assert state["stage"] == "resume_consent_requested"
+    assert result["requested"] is True
+    assert result["textRequestSent"] is True
+    assert result["attachmentRequestSendResult"]["details"]["source"] == (
+        "new_greeting_common_phrase"
+    )
+    assert page.sent_messages == [common_phrase]
+    assert state["sent_messages"] == [common_phrase]
+    assert page.new_greeting_selection_cleared is True
+
+
+def test_job51_online_preview_fallback_does_not_escape_to_another_candidate() -> None:
+    """Closing an unusable preview must preserve the original conversation."""
+
+    target = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+        preview_only=True,
+    )
+    target["name"] = "Target Candidate"
+    wrong = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "另一个候选人"}],
+        label="Wrong Candidate",
+    )
+    wrong["name"] = "Wrong Candidate"
+    page = EscapeDriftOnlineResumeWithoutNativeRequestPage(
+        conversations=[target, wrong]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    fallback = "在线简历暂时无法导出，方便发一份附件简历过来吗"
+    assert state["stage"] == "resume_consent_requested"
+    assert page.escape_presses == 0
+    assert target["messages"][-1] == {"sender": "me", "text": fallback}
+    assert wrong["messages"] == [{"sender": "other", "text": "另一个候选人"}]
+
+
+def test_job51_resume_fallback_blocks_if_page_changes_candidate_after_close() -> None:
+    """The pre-preview identity must guard every fallback send after a page drift."""
+
+    target = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+        preview_only=True,
+    )
+    target["name"] = "Target Candidate"
+    wrong = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "另一个候选人"}],
+        label="Wrong Candidate",
+    )
+    wrong["name"] = "Wrong Candidate"
+    page = CloseDriftOnlineResumeWithoutNativeRequestPage(
+        conversations=[target, wrong]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    result = state["decision"]["result"]
+    assert state["stage"] == "request_resume_action_failed"
+    assert result["textRequestSent"] is False
+    assert result["attachmentRequestSendResult"]["details"]["reason"] == (
+        "candidate_identity_changed_before_send"
+    )
+    assert page.sent_messages == []
+    assert target["messages"] == [
+        {"sender": "other", "text": "您好，我对职位很感兴趣"}
+    ]
+    assert wrong["messages"] == [{"sender": "other", "text": "另一个候选人"}]
 
 
 def test_job51_attachment_without_download_link_blocks_without_request() -> None:
@@ -2888,6 +3035,45 @@ class StubbornResumeOverlayPage:
         return True
 
 
+class HiddenThenVisibleExportDialogPage:
+    """Models Element UI keeping a hidden dialog before the visible export result."""
+
+    def __init__(self) -> None:
+        self.export_dialog_open = True
+        self.post_close_state_reads = 0
+        self.generic_close_called = False
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        _ = selector
+        return []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == actions_resume_close.OVERLAY_STATE_JS:
+            detects_all_dialogs = "querySelectorAll" in script
+            if not self.export_dialog_open and self.post_close_state_reads == 0:
+                self.post_close_state_reads += 1
+                return {"remaining": ["dialog"]}
+            return {
+                "remaining": ["dialog"]
+                if self.export_dialog_open and detects_all_dialogs
+                else []
+            }
+        if "export_success_dialog" in script:
+            if self.export_dialog_open:
+                self.export_dialog_open = False
+                return {"closed": True, "source": "export_success_dialog"}
+            return {"closed": False, "reason": "export_dialog_not_found"}
+        if "generic_blocker" in script:
+            self.generic_close_called = True
+            return {"closed": False, "reason": "generic_blocker_not_found"}
+        return {"closed": False, "reason": "close_not_found"}
+
+    async def press(self, selector: str, key: str, timeout_ms: int = 1000) -> bool:
+        _ = selector, key, timeout_ms
+        return False
+
+
 class InterceptedAttachmentPage:
     """Simulates a 51job attachment card covered by the quick-reply bar."""
 
@@ -3063,6 +3249,153 @@ class OnlineResumeWithoutNativeRequestPage(OnlineResumeEntryPage):
         return await super().query_all(selector)
 
 
+class NewGreetingOnlineResumeWithoutNativeRequestPage(
+    OnlineResumeWithoutNativeRequestPage
+):
+    """51 new-greeting view only supports a selected-card common phrase reply."""
+
+    common_phrase = "我看不到您的详细信息，方便投一份简历吗？"
+    candidate_id = "candidate-new-greeting"
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.new_greeting_selected = False
+        self.new_greeting_popover_open = False
+        self.new_greeting_phrase_selected = False
+        self.new_greeting_sent = False
+        self.new_greeting_selection_cleared = False
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        if selector == "#drop-area.input-textarea_self":
+            return []
+        if selector == f"#{self.candidate_id} label.el-checkbox":
+            return [NewGreetingReplyElement(self, "candidate_checkbox")]
+        if selector == "#sensor_Bchat_plbatchreply":
+            return [NewGreetingReplyElement(self, "batch_reply")]
+        if "greeting-item.greeting-item-batch" in selector:
+            return [NewGreetingReplyElement(self, "common_phrase")]
+        if "greeting-btn" in selector and "button" in selector:
+            return [NewGreetingReplyElement(self, "send")]
+        return await super().query_all(selector)
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.new_greeting_reply_state":
+            current = self.current_conversation()
+            expected = arg if isinstance(arg, dict) else {}
+            name = str(current.get("name") or "")
+            position = str(current.get("position") or "")
+            return {
+                "available": True,
+                "matched": (
+                    str(expected.get("name") or "") == name
+                    and str(expected.get("position") or "") == position
+                ),
+                "candidateId": self.candidate_id,
+                "checkboxSelector": f"#{self.candidate_id} label.el-checkbox",
+                "actual": {"name": name, "position": position},
+            }
+        if script == "job51.new_greeting_selection_state":
+            return {
+                "verified": self.new_greeting_selected,
+                "candidateId": self.candidate_id,
+            }
+        if script == "job51.new_greeting_phrase_state":
+            return {
+                "verified": self.new_greeting_popover_open,
+                "phrases": [self.common_phrase] if self.new_greeting_popover_open else [],
+            }
+        if script == "job51.new_greeting_phrase_selected_state":
+            return {"verified": self.new_greeting_phrase_selected}
+        if script == "job51.verify_new_greeting_reply":
+            return {
+                "verified": self.new_greeting_sent,
+                "candidateId": self.candidate_id,
+            }
+        if script == "job51.clear_new_greeting_selection":
+            self.new_greeting_selected = False
+            self.new_greeting_selection_cleared = True
+            return {"cleared": True}
+        return await super().eval_js(script, arg)
+
+
+class NewGreetingReplyElement:
+    def __init__(
+        self,
+        page: NewGreetingOnlineResumeWithoutNativeRequestPage,
+        kind: str,
+    ) -> None:
+        self.page = page
+        self.kind = kind
+
+    async def click(self, timeout_ms: int | None = None) -> None:
+        _ = timeout_ms
+        if self.kind == "candidate_checkbox":
+            self.page.new_greeting_selected = not self.page.new_greeting_selected
+            return
+        if self.kind == "batch_reply":
+            self.page.new_greeting_popover_open = self.page.new_greeting_selected
+            return
+        if self.kind == "common_phrase":
+            self.page.new_greeting_phrase_selected = True
+            return
+        if self.kind == "send" and self.page.new_greeting_phrase_selected:
+            self.page.append_sent_message(self.page.common_phrase)
+            self.page.new_greeting_sent = True
+            self.page.new_greeting_popover_open = False
+            self.page.new_greeting_selected = False
+            self.page.new_greeting_selection_cleared = True
+
+    async def text(self) -> str:
+        if self.kind == "common_phrase":
+            return self.page.common_phrase
+        if self.kind == "send":
+            return "发送"
+        if self.kind == "batch_reply":
+            return "批量回复"
+        return self.page.candidate_id
+
+    async def attr(self, name: str) -> str | None:
+        if name == "value" and self.kind == "candidate_checkbox":
+            return self.page.candidate_id
+        return None
+
+
+class EscapeDriftOnlineResumeWithoutNativeRequestPage(
+    OnlineResumeWithoutNativeRequestPage
+):
+    """A generic Escape leaves the selected candidate and opens another one."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.escape_presses = 0
+
+    async def press(
+        self,
+        selector: str,
+        key: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        if key == "Escape":
+            _ = selector, timeout_ms
+            self.escape_presses += 1
+            self.selected_index = 1
+            return True
+        return await super().press(selector, key, timeout_ms)
+
+
+class CloseDriftOnlineResumeWithoutNativeRequestPage(
+    OnlineResumeWithoutNativeRequestPage
+):
+    """The platform changes the active candidate immediately after preview close."""
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        result = await super().eval_js(script, arg)
+        if "online_resume_close_not_found" in script and isinstance(result, dict):
+            if result.get("closed"):
+                self.selected_index = 1
+        return result
+
+
 class AlwaysMismatchedJob51Page(FakePage):
     def __init__(self) -> None:
         super().__init__(
@@ -3124,13 +3457,13 @@ class SlowRow:
         return self.label
 
 
-def run_case(convo: dict[str, object]):
+def run_case(convo: dict[str, object], *, rules: dict[str, object] | None = None):
     """运行单条 51job 会话。"""
 
     page = FakePage(conversations=[convo])
     adapter = Job51Adapter(page, owner="和新红")
     sink = InMemoryDecisionSink()
-    runner = ConversationRunner(adapter, rules=sample_rules(), decision_sink=sink)
+    runner = ConversationRunner(adapter, rules=rules or sample_rules(), decision_sink=sink)
     state = asyncio.run(runner.run_current())
     assert sink.events
     return state, page

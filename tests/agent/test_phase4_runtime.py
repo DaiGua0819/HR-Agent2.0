@@ -11,7 +11,7 @@ from typing import Any
 from app.accounts.manager import AccountManager
 from app.control_plane.dispatcher import Dispatcher
 from app.control_plane.main import create_app
-from app.control_plane.worker_client import InProcessWorkerClient
+from app.control_plane.worker_client import InProcessWorkerClient, WorkerClient
 from app.core.constants import Platform
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.types import ConversationRef
@@ -89,6 +89,27 @@ def test_worker_drain_counts_unique_contact_payloads() -> None:
     ]
 
 
+def test_worker_client_uses_long_timeout_for_browser_automation() -> None:
+    """Browser automation may legitimately take several minutes per contact."""
+
+    client = WorkerClient("http://127.0.0.1:8801")
+
+    assert client.automation_timeout_seconds >= 300
+    assert client.status_timeout_seconds <= 30
+
+
+def test_worker_returns_structured_platform_blocker_from_prepare_stage() -> None:
+    runtime = BlockedPreparationRuntime()
+
+    result = asyncio.run(runtime.process_messages(Platform.BOSS))
+
+    assert result["accepted"] is False
+    assert result["processed"] == 0
+    assert result["stage"] == "boss_security_warning"
+    assert result["nextAction"] == "blocked"
+    assert result["decision"]["failureReason"] == "boss_security_warning"
+
+
 def test_job51_generic_visible_attachment_href_downloads_for_any_owner() -> None:
     """51 通用可见附件 href 真实下载对任意账号生效，预览文字仍拒绝。"""
 
@@ -103,7 +124,8 @@ def test_job51_generic_visible_attachment_href_downloads_for_any_owner() -> None
     preview_adapter = Job51Adapter(preview_page, owner="宋峰峰")
     preview = asyncio.run(preview_adapter.request_resume())
     assert preview["downloaded"] is False
-    assert preview["reason"] == "preview_only_rejected"
+    assert preview["reason"] == "online_resume_not_exportable_attachment_requested"
+    assert preview["onlineResumeFailure"]["reason"] == "online_resume_entry_not_found"
 
 
 class SerialTracker:
@@ -184,6 +206,29 @@ class DuplicateContactRuntime(WorkerRuntime):
     async def _graph_stage(self, state: dict[str, object]) -> str:
         _ = state
         return "rules_loaded"
+
+
+class BlockedPreparationRuntime(WorkerRuntime):
+    def __init__(self) -> None:
+        super().__init__(owner="和新红", port=8801, cdp_port=9222)
+
+    async def start(self) -> None:
+        self.agent_ready = True
+
+    def _adapter(self, platform: Platform) -> BlockedPreparationAdapter:
+        _ = platform
+        return BlockedPreparationAdapter()
+
+
+class BlockedPreparationAdapter:
+    async def open_chat_page(self) -> None:
+        return None
+
+    async def select_unread_filter(self) -> dict[str, object]:
+        return {"ready": False, "reason": "boss_security_warning"}
+
+    async def select_positions(self, positions: object) -> None:
+        _ = positions
 
 
 def _runtime_clients() -> dict[str, InProcessWorkerClient]:

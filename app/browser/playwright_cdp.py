@@ -193,7 +193,22 @@ class PlaywrightCDPPage:
         download_dir = Path(str(behavior.get("downloadPath") or "")) if behavior.get("ok") else None
         before_files = self._download_directory_snapshot(download_dir)
         try:
-            view = self.page.get_by_text("查看附件简历").last
+            toolbar_view = self.page.locator(".session-new-action a.km-button").filter(
+                has_text="查看附件简历"
+            ).last
+            if await toolbar_view.count():
+                view = toolbar_view
+                entry_source = "toolbar_anchor"
+            else:
+                detail_view = self.page.locator(
+                    ".im-resume-detail .newest-attach-resume"
+                ).last
+                if await detail_view.count():
+                    view = detail_view
+                    entry_source = "resume_detail_attachment"
+                else:
+                    view = self.page.get_by_text("查看附件简历").last
+                    entry_source = "generic_text_fallback"
             if not await view.count():
                 return {
                     "ok": False,
@@ -208,12 +223,19 @@ class PlaywrightCDPPage:
                 download_task = asyncio.create_task(
                     page_waiter("download", timeout=max(min(timeout_ms, 5000), 1))
                 )
-            await view.click(timeout=5000)
+            click_error = ""
+            try:
+                await view.click(timeout=5000)
+            except Exception as error:
+                click_error = str(error)
             clicked = {
-                "clicked": True,
+                "clicked": not bool(click_error),
                 "source": "zhilian_view_attachment_click",
+                "entrySource": entry_source,
                 "downloadBehavior": behavior,
             }
+            if click_error:
+                clicked["clickError"] = click_error
             event_tasks = {task for task in (page_task, download_task) if task is not None}
             if event_tasks:
                 await asyncio.wait(
@@ -225,6 +247,7 @@ class PlaywrightCDPPage:
             if popup is not None:
                 target_page = popup
                 opened_new_page = target_page is not self.page
+                clicked["clicked"] = True
                 clicked["openedPage"] = True
                 clicked["popupInitialUrl"] = self._safe_page_url(target_page)
             else:
@@ -232,6 +255,7 @@ class PlaywrightCDPPage:
 
             direct_download = await self._attachment_task_result(download_task)
             if direct_download is not None:
+                clicked["clicked"] = True
                 direct = await self._download_event_payload(
                     direct_download,
                     download_dir=download_dir,
@@ -671,12 +695,41 @@ class PlaywrightCDPPage:
                 "path": str(path),
             }
         except Exception as error:
+            export_status = await self._job51_export_status_dialog()
+            if clicked.get("confirmed") and export_status.get("queued"):
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_export_queued_no_file",
+                    "exportQueued": True,
+                    "exportDialog": export_status,
+                    "error": str(error),
+                }
             return {
                 "ok": False,
                 "clicked": clicked,
                 "reason": "download_not_captured",
                 "error": str(error),
             }
+
+    async def _job51_export_status_dialog(self) -> dict[str, Any]:
+        dialog = self.page.locator(".el-message-box__wrapper:visible").last
+        try:
+            if not await dialog.count() or not await dialog.is_visible():
+                return {"queued": False, "reason": "export_status_dialog_not_visible"}
+            content = " ".join((await dialog.inner_text(timeout=2000)).split())
+        except Exception as error:
+            return {
+                "queued": False,
+                "reason": "export_status_dialog_read_failed",
+                "error": str(error),
+            }
+        queued = "导出成功" in content and "导出记录" in content
+        return {
+            "queued": queued,
+            "reason": "" if queued else "export_status_dialog_unrecognized",
+            "text": content[:240],
+        }
 
     async def _setup_job51_uuid_download_behavior(self) -> dict[str, Any]:
         download_dir = PROJECT_ROOT / "data" / "downloads" / "_browser_uuid" / "job51"

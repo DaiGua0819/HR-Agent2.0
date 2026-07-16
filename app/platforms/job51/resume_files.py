@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -131,8 +133,16 @@ def validate_resume_bytes(content: bytes | bytearray | None) -> ResumeValidation
     data = bytes(content or b"")
     if data.startswith(b"%PDF-") and b"%%EOF" in data[-4096:]:
         return ResumeValidation(True, "pdf")
-    if data.startswith(b"PK") and b"[Content_Types].xml" in data[:4096]:
-        return ResumeValidation(True, "docx")
+    if data.startswith(b"PK"):
+        if b"[Content_Types].xml" in data[:4096]:
+            return ResumeValidation(True, "docx")
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                names = set(archive.namelist())
+        except (OSError, zipfile.BadZipFile):
+            names = set()
+        if {"[Content_Types].xml", "word/document.xml"}.issubset(names):
+            return ResumeValidation(True, "docx")
     if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         return ResumeValidation(True, "doc")
     return ResumeValidation(False, reason="invalid_resume_signature")

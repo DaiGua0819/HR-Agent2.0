@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import zipfile
 from pathlib import Path
 
 from app.agent.runner import ConversationRunner
@@ -157,6 +158,48 @@ def test_artifact_parse_backfills_resume_name_and_hard_link(tmp_path: Path) -> N
     assert resume.parsed_name == "王小丽"
     assert resume.linked_session_id == session.id
     assert resume.linked_platform_conversation_id == "platform-1"
+
+
+def test_artifact_parse_extracts_docx_text(tmp_path: Path) -> None:
+    database = tmp_path / "docx-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    conversation = _conversation("docx-1", "仲献平", "AI产品经理", ["附件简历"])
+    session = resolve_or_create_session(conversation_repo, conversation).session
+    resume_file = tmp_path / "candidate.docx"
+    document_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>个人信息</w:t></w:r></w:p>
+        <w:p><w:r><w:t>姓 名：仲献平 性 别：男 出 生：19880702</w:t></w:r></w:p>
+        <w:p><w:r><w:t>AI 产品经理</w:t></w:r></w:p>
+      </w:body>
+    </w:document>
+    """
+    with zipfile.ZipFile(resume_file, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", document_xml)
+
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.ZHILIAN.value,
+        owner="宋峰峰",
+        platform_conversation_id="docx-1",
+        candidate_name_from_platform="仲献平",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="docx-hash",
+        source_kind="attachment",
+    )
+
+    parsed = parse_pending_artifacts(artifact_store, resume_repo)
+    resume = resume_repo.get(parsed[0].resume_id)
+
+    assert artifact_store.get(artifact.id).parse_status == "parsed"  # type: ignore[union-attr]
+    assert resume is not None
+    assert resume.parsed_name == "仲献平"
+    assert "AI 产品经理" in str(resume.payload.get("rawText") or "")
 
 
 def test_runner_persists_status_and_writes_artifact_after_live_download(tmp_path: Path) -> None:

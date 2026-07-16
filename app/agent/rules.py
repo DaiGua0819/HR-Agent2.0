@@ -64,6 +64,17 @@ def select_position_rule(
     return None
 
 
+def is_ignored_position(position: str, rules: dict[str, Any] | None = None) -> bool:
+    """判断岗位是否被业务明确配置为直接忽略。"""
+
+    data = rules or load_chat_rules()
+    ignored = data.get("ignoredPositions") or []
+    if not isinstance(ignored, list):
+        return False
+    target = _compact(position)
+    return bool(target) and any(target == _compact(str(item)) for item in ignored)
+
+
 def screening_questions(rule: dict[str, Any] | None) -> list[str]:
     """提取岗位筛选主问法，兼容旧 JSON 的多种字段形状。"""
 
@@ -239,6 +250,10 @@ def find_knowledge_answers(
     payment = best_by_topic.get("salaryPaymentDate")
     amount = best_by_topic.get("salaryAmount")
     if payment and amount and _compact(str(amount["matchedPattern"])) in {"工资", "薪资"}:
+        best_by_topic.pop("salaryAmount", None)
+    compensation = best_by_topic.get("scheduleAndTrainingCompensation")
+    amount = best_by_topic.get("salaryAmount")
+    if compensation and amount and _compact(str(amount["matchedPattern"])) in {"工资", "薪资"}:
         best_by_topic.pop("salaryAmount", None)
 
     ordered = sorted(

@@ -119,8 +119,10 @@ async def humanized_click_element(
                     },
                 )
         try:
-            await locator.scroll_into_view_if_needed(timeout=5000)
             first_box = await locator.bounding_box()
+            if not _valid_box(first_box) or not await _locator_is_in_viewport(locator):
+                await locator.scroll_into_view_if_needed(timeout=5000)
+                first_box = await locator.bounding_box()
             if not _valid_box(first_box):
                 attempts.append({"attempt": attempt, "reason": "target_box_unavailable"})
                 continue
@@ -172,15 +174,6 @@ async def humanized_click_element(
                     }
                 )
                 continue
-            if not await _locator_contains_point(locator, target_x, target_y):
-                attempts.append(
-                    {
-                        "attempt": attempt,
-                        "reason": "target_not_at_pointer",
-                        "target": {"x": round(target_x, 2), "y": round(target_y, 2)},
-                    }
-                )
-                continue
             if pre_click_guard is not None:
                 guard = await verify_once(pre_click_guard)
                 if not guard.get("verified"):
@@ -192,6 +185,15 @@ async def humanized_click_element(
                         }
                     )
                     continue
+            if not await _locator_contains_point(locator, target_x, target_y):
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "reason": "target_not_at_pointer",
+                        "target": {"x": round(target_x, 2), "y": round(target_y, 2)},
+                    }
+                )
+                continue
             await mouse.down()
             await _sleep_range(profile.mouse_down_ms, profile, randomizer)
             await mouse.up()
@@ -505,6 +507,26 @@ async def _locator_contains_point(locator: Any, x: float, y: float) -> bool:
         )
     except TypeError:
         return True
+    except Exception:
+        return False
+    return bool(value)
+
+
+async def _locator_is_in_viewport(locator: Any) -> bool:
+    try:
+        value = await locator.evaluate(
+            """
+            element => {
+              const rect = element.getBoundingClientRect();
+              return rect.width > 0
+                && rect.height > 0
+                && rect.left >= 0
+                && rect.top >= 0
+                && rect.right <= window.innerWidth
+                && rect.bottom <= window.innerHeight;
+            }
+            """
+        )
     except Exception:
         return False
     return bool(value)

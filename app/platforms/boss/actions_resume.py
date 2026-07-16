@@ -40,6 +40,18 @@ async def request_resume(page: BrowserPage) -> dict[str, object]:
     handled = await _handle_terminal_resume_state(page, state)
     if handled is not None:
         return handled
+    unavailable = await _inspect_candidate_unavailable(page)
+    if unavailable.get("unavailable"):
+        return {
+            "ok": True,
+            "outcome": "candidate_frozen",
+            "requested": False,
+            "candidateUnavailable": True,
+            "skipped": True,
+            "reason": str(unavailable.get("reason") or "boss_candidate_frozen"),
+            "beforeState": _resume_state_payload(state),
+            "unavailableState": unavailable,
+        }
     if (await _confirm_prompt_visible(page)).get("verified"):
         return await _confirm_resume_request(page, state)
     click = await _click_request_resume_button(page)
@@ -106,6 +118,61 @@ async def _confirm_prompt_visible(page: BrowserPage) -> dict[str, object]:
     body = await page.text()
     visible = "确定向牛人索取简历" in body and "取消" in body and "确定" in body
     return {"verified": visible, "source": "body_text" if visible else "none"}
+
+
+async def _inspect_candidate_unavailable(page: BrowserPage) -> dict[str, object]:
+    return await _safe_eval_dict(page, _BOSS_CANDIDATE_UNAVAILABLE_JS)
+
+
+async def _dismiss_stale_resume_request_dialog(page: BrowserPage) -> dict[str, object]:
+    target = await _safe_eval_dict(page, _BOSS_REQUEST_RESUME_CANCEL_TARGET_JS)
+    selector = str(target.get("selector") or "")
+    if not selector:
+        return {
+            "dismissed": False,
+            "reason": str(target.get("reason") or "stale_request_dialog_not_found"),
+            "target": target,
+        }
+    element = await page.query(selector)
+    if element is None:
+        return {
+            "dismissed": False,
+            "reason": "stale_request_dialog_cancel_not_found",
+            "target": target,
+        }
+    click = await boss_click_mutable_dialog_element(
+        page,
+        element,
+        label="BOSS取消过期求简历弹层",
+        verify=lambda: _stale_resume_request_dialog_closed(page),
+        pre_click_guard=lambda: _validate_stale_resume_request_cancel(page, selector),
+    )
+    return {
+        "dismissed": bool(click.get("ok")),
+        "reason": "" if click.get("ok") else str(click.get("reason") or "dialog_cancel_failed"),
+        "target": target,
+        "click": click,
+    }
+
+
+async def _stale_resume_request_dialog_closed(page: BrowserPage) -> dict[str, object]:
+    visible = await _safe_eval_dict(page, _BOSS_CONFIRM_PROMPT_VISIBLE_JS)
+    closed = not bool(visible.get("verified"))
+    return {
+        "verified": closed,
+        "reason": "" if closed else "stale_request_dialog_still_visible",
+    }
+
+
+async def _validate_stale_resume_request_cancel(
+    page: BrowserPage,
+    selector: str,
+) -> dict[str, object]:
+    return await _safe_eval_dict(
+        page,
+        _BOSS_VALIDATE_REQUEST_RESUME_CANCEL_TARGET_JS,
+        selector,
+    )
 
 
 async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
@@ -199,9 +266,16 @@ async def _trusted_click_visible_request_resume_confirm(page: BrowserPage) -> di
 
 async def _resume_consent_accepted(page: BrowserPage) -> dict[str, object]:
     state = await inspect_resume_request_state(page)
+    verified = bool(state.has_resume_attachment or not state.pending_resume_consent)
+    if state.has_resume_attachment:
+        reason = "resume_attachment_received"
+    elif verified:
+        reason = ""
+    else:
+        reason = "resume_consent_still_pending"
     return {
-        "verified": not state.pending_resume_consent,
-        "reason": "" if not state.pending_resume_consent else "resume_consent_still_pending",
+        "verified": verified,
+        "reason": reason,
     }
 
 
@@ -283,9 +357,13 @@ async def _handle_terminal_resume_state(
 ) -> dict[str, object] | None:
     before_state = before_state or state
     if state.pending_resume_consent:
+        dialog_dismiss = await _dismiss_stale_resume_request_dialog(page)
         consent_click = await _click_resume_consent(page)
         after_consent = await inspect_resume_request_state(page)
-        accepted = bool(consent_click.get("clicked") and not after_consent.pending_resume_consent)
+        accepted = bool(
+            after_consent.has_resume_attachment
+            or (consent_click.get("clicked") and not after_consent.pending_resume_consent)
+        )
         return {
             "ok": accepted,
             "outcome": "resume_consent_accepted" if accepted else "resume_consent_accept_failed",
@@ -297,6 +375,7 @@ async def _handle_terminal_resume_state(
             "beforeState": _resume_state_payload(before_state),
             "afterState": _resume_state_payload(after_consent),
             "click": consent_click,
+            "dialogDismiss": dialog_dismiss,
             "stateChangeClick": click or {},
         }
     if state.has_resume_attachment:
@@ -537,6 +616,142 @@ _BOSS_CONFIRM_PROMPT_VISIBLE_JS = r"""
     bodyText.includes("取消") &&
     bodyText.includes("确定");
   return { verified: bodyVisible, source: bodyVisible ? `${marker}_body` : marker };
+}
+"""
+
+
+_BOSS_CANDIDATE_UNAVAILABLE_JS = r"""
+() => {
+  const marker = "boss_candidate_unavailable";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const roots = Array.from(document.querySelectorAll(
+    ".chat-conversation, .conversation-box"
+  )).filter(visible);
+  for (const root of roots) {
+    const notices = Array.from(root.querySelectorAll(
+      ".notice-list.tip-freeze, .conversation-operate .chat-tooltip-custom"
+    )).filter(visible);
+    const frozen = notices.find((el) => {
+      const value = text(el);
+      return value.includes("牛人已被系统冻结") ||
+        value.includes("牛人已被冻结，暂时无法操作");
+    });
+    if (frozen) {
+      return {
+        unavailable: true,
+        reason: "boss_candidate_frozen",
+        source: marker,
+        text: text(frozen).slice(0, 120),
+      };
+    }
+  }
+  return { unavailable: false, reason: "", source: marker };
+}
+"""
+
+
+_BOSS_REQUEST_RESUME_CANCEL_TARGET_JS = r"""
+() => {
+  const marker = "boss_request_resume_cancel_target";
+  const attribute = "data-recruit-agent-cancel-target";
+  const prompt = "确定向牛人索取简历吗";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  document.querySelectorAll(`[${attribute}]`).forEach((el) => el.removeAttribute(attribute));
+  const containers = Array.from(document.querySelectorAll(
+    ".exchange-tooltip, .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, " +
+    "[role='dialog'], .modal, [class*='dialog'], [class*='modal']"
+  )).filter((el) => visible(el) && text(el).includes(prompt));
+  if (!containers.length) {
+    return { found: false, reason: "stale_request_dialog_not_found", source: marker };
+  }
+  const candidates = [];
+  for (const root of containers) {
+    candidates.push(...Array.from(root.querySelectorAll(
+      ".boss-btn-outline, .boss-btn, button, [role='button'], .btn, a, span"
+    )));
+  }
+  const matches = candidates
+    .filter((el) => visible(el) && text(el) === "取消")
+    .sort((a, b) => {
+      const priority = (el) => el.matches(".boss-btn-outline, .btn-outline, .cancel-btn") ? 0 : 1;
+      return priority(a) - priority(b);
+    });
+  if (!matches.length) {
+    return { found: false, reason: "stale_request_dialog_cancel_not_found", source: marker };
+  }
+  const target = matches[0];
+  target.setAttribute(attribute, "request-resume");
+  const rect = target.getBoundingClientRect();
+  return {
+    found: true,
+    source: marker,
+    selector: `[${attribute}='request-resume']`,
+    text: text(target),
+    promptText: text(containers[0]).slice(0, 160),
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+"""
+
+
+_BOSS_VALIDATE_REQUEST_RESUME_CANCEL_TARGET_JS = r"""
+(selector) => {
+  const marker = "boss_validate_request_resume_cancel_target";
+  const prompt = "确定向牛人索取简历吗";
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
+  const target = document.querySelector(selector);
+  if (!visible(target) || text(target) !== "取消") {
+    return { verified: false, reason: "stale_request_dialog_cancel_changed", source: marker };
+  }
+  const dialog = target.closest(
+    ".exchange-tooltip, .boss-dialog__wrapper, .boss-dialog, .dialog-wrap.active, " +
+    "[role='dialog'], .modal, [class*='dialog'], [class*='modal']"
+  );
+  if (!visible(dialog) || !text(dialog).includes(prompt)) {
+    return { verified: false, reason: "stale_request_dialog_changed", source: marker };
+  }
+  const rect = target.getBoundingClientRect();
+  const hit = document.elementFromPoint(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2
+  );
+  if (!hit || !(hit === target || target.contains(hit))) {
+    return {
+      verified: false,
+      reason: "stale_request_dialog_cancel_obscured",
+      source: marker,
+      hitText: text(hit).slice(0, 80),
+    };
+  }
+  return {
+    verified: true,
+    reason: "stale_request_dialog_cancel_current",
+    source: marker,
+  };
 }
 """
 

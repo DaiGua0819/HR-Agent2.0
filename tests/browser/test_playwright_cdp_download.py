@@ -43,6 +43,32 @@ def test_zhilian_attachment_download_does_not_close_original_page_without_popup(
     assert original.closed is False
 
 
+def test_zhilian_attachment_download_uses_popup_when_entry_click_times_out() -> None:
+    opened = _RawPage()
+    original = _ZhilianRawPage(opened_page=opened, click_should_timeout=True)
+    page = _FetchingCDPPage(original)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["source"] == "opened_pdf_url"
+    assert result["clicked"]["openedPage"] is True
+    assert "entry click timed out" in result["clicked"]["clickError"]
+    assert opened.closed is True
+
+
+def test_zhilian_attachment_download_prefers_toolbar_anchor_over_generic_text() -> None:
+    opened = _RawPage()
+    original = _ZhilianRawPage(opened_page=opened)
+    page = _FetchingCDPPage(original)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert original.locator_requests[0] == ".session-new-action a.km-button"
+    assert result["clicked"]["entrySource"] == "toolbar_anchor"
+
+
 def test_zhilian_attachment_download_does_not_fetch_unchanged_chat_page(
     tmp_path: Path,
 ) -> None:
@@ -264,6 +290,25 @@ def test_job51_download_targets_only_visible_save_dialog(tmp_path: Path) -> None
     assert raw.confirm_clicks == 1
 
 
+def test_job51_download_reports_async_export_without_immediate_file(tmp_path: Path) -> None:
+    """51 may queue an export and show a success dialog without a download event."""
+
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=None,
+        export_status_visible=True,
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=200))
+
+    assert result["ok"] is False
+    assert result["reason"] == "online_resume_export_queued_no_file"
+    assert result["exportQueued"] is True
+    assert result["clicked"]["confirmed"] is True
+    assert raw.confirm_clicks == 1
+
+
 class _FetchingCDPPage(PlaywrightCDPPage):
     def __init__(self, page: Any) -> None:
         super().__init__(page)
@@ -285,6 +330,10 @@ class _RawPage:
 
     def get_by_text(self, text: str) -> _Locator:
         _ = text
+        return _Locator()
+
+    def locator(self, selector: str) -> _Locator:
+        _ = selector
         return _Locator()
 
     async def wait_for_load_state(self, state: str, timeout: int) -> None:
@@ -332,15 +381,22 @@ class _ZhilianRawPage(_RawPage):
         opened_page: Any | None,
         download: _Download | None = None,
         on_click: Any | None = None,
+        click_should_timeout: bool = False,
     ) -> None:
         super().__init__(opened_page=opened_page)
         self.download = download
         self.on_click = on_click
+        self.click_should_timeout = click_should_timeout
         self.view_clicks = 0
+        self.locator_requests: list[str] = []
 
     def get_by_text(self, text: str) -> _ZhilianLocator:
         _ = text
         return _ZhilianLocator(self)
+
+    def locator(self, selector: str) -> _ZhilianLocator:
+        self.locator_requests.append(selector)
+        return _ZhilianLocator(self, selector=selector)
 
     async def wait_for_event(self, event: str, timeout: int) -> Any:
         _ = timeout
@@ -383,6 +439,7 @@ class _Job51DownloadRawPage:
         download: _Download | None = None,
         pdf_click_should_timeout: bool = False,
         save_visible: bool = True,
+        export_status_visible: bool = False,
     ) -> None:
         self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
         self.save_clicks = 0
@@ -390,6 +447,7 @@ class _Job51DownloadRawPage:
         self.confirm_clicks = 0
         self.pdf_click_should_timeout = pdf_click_should_timeout
         self.save_visible = save_visible
+        self.export_status_visible = export_status_visible
         self.url = "https://ehire.51job.com/Revision/chat"
         self.download = download
         self.expect_download_calls = 0
@@ -405,6 +463,8 @@ class _Job51DownloadRawPage:
     def expect_download(self, timeout: int):  # noqa: ANN001
         _ = timeout
         self.expect_download_calls += 1
+        if self.download is None and self.export_status_visible:
+            return _TimedOutDownload()
         if self.download is None:
             raise AssertionError("download should not be awaited when CDP setup fails")
         return _ExpectDownload(self.download)
@@ -423,6 +483,15 @@ class _ExpectDownload:
     @property
     async def value(self) -> _Download:
         return self.download
+
+
+class _TimedOutDownload:
+    async def __aenter__(self) -> _TimedOutDownload:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = exc_type, exc, tb
+        raise TimeoutError("download event did not arrive")
 
 
 class _Download:
@@ -486,11 +555,15 @@ class _Job51Locator:
     async def count(self) -> int:
         if self.selector == "#sensor_imresume_download" and not self.page.save_visible:
             return 0
+        if "el-message-box" in self.selector:
+            return int(self.page.export_status_visible)
         return 1
 
     async def is_visible(self) -> bool:
         if self.selector == "#sensor_imresume_download":
             return self.page.save_visible
+        if "el-message-box" in self.selector:
+            return self.page.export_status_visible
         return True
 
     async def click(self, timeout: int) -> None:
@@ -503,6 +576,12 @@ class _Job51Locator:
                 raise TimeoutError("Pdf button is already active but not stable")
         elif self.has_text == "确定":
             self.page.confirm_clicks += 1
+
+    async def inner_text(self, timeout: int) -> str:
+        _ = timeout
+        if "el-message-box" in self.selector and self.page.export_status_visible:
+            return "导出成功后会在当前页面展示下载结果，可在个人中心 - 导出记录中查看"
+        return ""
 
 
 class _Context:
@@ -521,6 +600,10 @@ class _Locator:
     def last(self) -> _Locator:
         return self
 
+    def filter(self, *, has_text: str) -> _Locator:
+        _ = has_text
+        return self
+
     async def count(self) -> int:
         return 1
 
@@ -529,11 +612,22 @@ class _Locator:
 
 
 class _ZhilianLocator(_Locator):
-    def __init__(self, page: _ZhilianRawPage) -> None:
+    def __init__(self, page: _ZhilianRawPage, *, selector: str = "") -> None:
         self.page = page
+        self.selector = selector
+
+    @property
+    def last(self) -> _ZhilianLocator:
+        return self
+
+    def filter(self, *, has_text: str) -> _ZhilianLocator:
+        _ = has_text
+        return self
 
     async def click(self, timeout: int) -> None:
         _ = timeout
         self.page.view_clicks += 1
         if callable(self.page.on_click):
             self.page.on_click()
+        if self.page.click_should_timeout:
+            raise TimeoutError("entry click timed out after popup opened")

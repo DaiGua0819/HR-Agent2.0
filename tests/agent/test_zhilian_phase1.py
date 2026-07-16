@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.agent.rules import find_knowledge_answer
 from app.agent.runner import ZhilianConversationRunner
-from app.browser.fake_page import FakePage
+from app.browser.fake_page import FakeElement, FakePage
 from app.domain.conversation.repository import ConversationRepository
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.zhilian import selectors
@@ -673,6 +673,48 @@ def test_zhilian_find_next_unread_accepts_excluded_conversation_ids() -> None:
     assert ref.conversation_id == "next-row"
 
 
+def test_zhilian_closed_job_search_dialog_is_dismissed_and_cached() -> None:
+    """关闭求职的会话只点“知道了”，并在当前 Worker 生命周期内持续跳过。"""
+
+    page = ClosedJobSearchZhilianPage(
+        conversations=[
+            {
+                "id": "closed-row",
+                "name": "关闭求职候选人",
+                "position": "AI产品经理",
+                "label": "关闭求职候选人 AI产品经理",
+                "latest_message": "人才投递了您的职位",
+                "unread_count": 1,
+                "messages": [],
+                "job_search_closed": True,
+            },
+            {
+                "id": "next-row",
+                "name": "正常候选人",
+                "position": "AI产品经理",
+                "label": "正常候选人 AI产品经理",
+                "latest_message": "您好，希望进一步沟通",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "您好，希望进一步沟通"}],
+            },
+        ]
+    )
+
+    ref = asyncio.run(find_next_unread_thread(page, owner="和新红"))
+
+    assert ref is not None
+    assert ref.conversation_id == "next-row"
+    assert page.dismiss_clicks == 1
+    assert page.delete_clicks == 0
+
+    repeated = asyncio.run(
+        find_next_unread_thread(page, owner="和新红", exclude_ids={"next-row"})
+    )
+
+    assert repeated is None
+    assert page.dismiss_clicks == 1
+
+
 def test_zhilian_identity_requires_name_when_available() -> None:
     """同岗位多候选人时，不能只靠岗位相同误判打开成功。"""
 
@@ -1031,6 +1073,51 @@ class VirtualizedZhilianPage(FakePage):
                 "atBottom": len(self.windows) <= 1,
             }
         return await super().eval_js(script, arg)
+
+
+class ClosedJobSearchZhilianPage(FakePage):
+    """Expose the live “candidate closed job search” modal after opening one row."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.closed_modal_visible = False
+        self.dismiss_clicks = 0
+        self.delete_clicks = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "zhilian.closed_job_search_modal_state":
+            return {
+                "visible": self.closed_modal_visible,
+                "reason": "candidate_job_search_closed" if self.closed_modal_visible else "",
+            }
+        return await super().eval_js(script, arg)
+
+    async def query_all(self, selector: str) -> list[FakeElement]:
+        if "km-modal--open" in selector and self.closed_modal_visible:
+            return [
+                FakeElement(self, "closed-job-dismiss", "知道了"),
+                FakeElement(self, "closed-job-delete", "删除对话"),
+            ]
+        return await super().query_all(selector)
+
+    async def wait_for(self, selector: str, timeout_ms: int = 5000) -> bool:
+        if self.closed_modal_visible and selector == selectors.CHAT_READY:
+            return False
+        return await super().wait_for(selector, timeout_ms)
+
+    async def handle_element_click(self, element: FakeElement) -> None:
+        if element.selector == "closed-job-dismiss":
+            self.dismiss_clicks += 1
+            self.closed_modal_visible = False
+            return
+        if element.selector == "closed-job-delete":
+            self.delete_clicks += 1
+            return
+        await super().handle_element_click(element)
+        if element.selector.startswith("conversation:") and self.current_conversation().get(
+            "job_search_closed"
+        ):
+            self.closed_modal_visible = True
 
 
 def virtual_row(item: dict[str, object]) -> dict[str, object]:

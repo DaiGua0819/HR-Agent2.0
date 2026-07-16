@@ -835,7 +835,7 @@ h3 { font-size: 15px; }
 }
 .candidate-card__heading {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 46px 112px;
+  grid-template-columns: minmax(0, 1fr) 46px 61px 112px;
   align-items: center;
   gap: 8px;
 }
@@ -866,6 +866,7 @@ h3 { font-size: 15px; }
   background: #eef2f7;
 }
 .candidate-card__heading-status {
+  grid-column: 4;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -2214,7 +2215,7 @@ h3 { font-size: 15px; }
   }
 
   .candidate-card__heading {
-    grid-template-columns: minmax(0, 1fr) 42px 92px;
+    grid-template-columns: minmax(0, 1fr) 42px 55px 92px;
   }
 
   .candidate-card__heading-status {

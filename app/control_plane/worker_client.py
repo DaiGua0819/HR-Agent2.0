@@ -37,16 +37,17 @@ class WorkerClient:
     """访问单个 worker 的 HTTP 客户端。"""
 
     base_url: str
-    timeout_seconds: float = 30
+    status_timeout_seconds: float = 30
+    automation_timeout_seconds: float = 600
 
     async def status(self) -> dict[str, Any]:
-        async with self._client() as client:
+        async with self._client(self.status_timeout_seconds) as client:
             response = await client.get("/status")
             response.raise_for_status()
             return response.json()
 
     async def process_messages(self, platform: Platform) -> dict[str, Any]:
-        async with self._client() as client:
+        async with self._client(self.automation_timeout_seconds) as client:
             response = await client.post(f"/automation/{platform.value}/process-messages")
             response.raise_for_status()
             return response.json()
@@ -54,7 +55,7 @@ class WorkerClient:
     async def proactive_contact(
         self, platform: Platform, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        async with self._client() as client:
+        async with self._client(self.automation_timeout_seconds) as client:
             response = await client.post(
                 f"/automation/{platform.value}/proactive-contact",
                 json=payload or {},
@@ -63,19 +64,19 @@ class WorkerClient:
             return response.json()
 
     async def interview_invite(self, payload: dict[str, Any]) -> dict[str, Any]:
-        async with self._client() as client:
+        async with self._client(self.automation_timeout_seconds) as client:
             response = await client.post("/interview-invite", json=payload)
             response.raise_for_status()
             return response.json()
 
     async def pause(self, platform: Platform) -> dict[str, Any]:
-        async with self._client() as client:
+        async with self._client(self.status_timeout_seconds) as client:
             response = await client.post(f"/automation/{platform.value}/pause")
             response.raise_for_status()
             return response.json()
 
-    def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds)
+    def _client(self, timeout_seconds: float) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=self.base_url, timeout=timeout_seconds)
 
 
 @dataclass
