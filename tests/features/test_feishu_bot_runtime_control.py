@@ -48,14 +48,19 @@ def _member() -> BotActor:
     )
 
 
-def _event(*, sender: str = "ou-admin", content: str = "启动处理程序") -> BotEvent:
+def _event(
+    *,
+    sender: str = "ou-admin",
+    content: str = "启动处理程序",
+    message_type: str = "text",
+) -> BotEvent:
     return BotEvent(
         event_id=f"event-{sender}-{content}",
         message_id="om-control",
         sender_open_id=sender,
         chat_id="oc-control",
         chat_type="p2p",
-        message_type="text",
+        message_type=message_type,
         content=content,
         create_time="1784179200000",
     )
@@ -110,6 +115,8 @@ class _RuntimeController:
 
     async def execute(self, action: str, request: RuntimeControlRequest):
         self.calls.append((action, request))
+        if action == "status":
+            return {"status": "idle", "message": "处理程序状态：空闲。"}
         return {
             "status": "started" if action == "start" else "pause_requested",
             "message": "处理程序已启动。" if action == "start" else "已请求暂停处理程序。",
@@ -156,6 +163,24 @@ def test_authorized_admin_start_bypasses_codex(tmp_path: Path) -> None:
     assert controller.calls[0][0] == "start"
     assert controller.calls[0][1].actor_open_id == "ou-admin"
     assert replies.calls[0]["text"] == "处理程序已启动。"
+
+
+def test_authorized_admin_post_status_bypasses_codex(tmp_path: Path) -> None:
+    bot, planner, controller, replies = _bot(
+        tmp_path,
+        actors={"ou-admin": _admin()},
+    )
+
+    status = asyncio.run(
+        bot.handle_event(
+            _event(content="查看处理状态", message_type="post"),
+        )
+    )
+
+    assert status == "completed"
+    assert planner.calls == []
+    assert controller.calls[0][0] == "status"
+    assert replies.calls[0]["text"] == "处理程序状态：空闲。"
 
 
 def test_member_cannot_start_runtime_and_never_reaches_codex(tmp_path: Path) -> None:

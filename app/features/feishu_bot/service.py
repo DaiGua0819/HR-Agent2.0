@@ -25,6 +25,8 @@ from app.features.feishu_bot.runtime_control import (
     parse_runtime_control_command,
 )
 
+_TEXTUAL_MESSAGE_TYPES = frozenset({"text", "post"})
+
 
 class _Repository(Protocol):
     def claim_event(self, event: BotEvent) -> bool: ...
@@ -151,7 +153,7 @@ class FeishuRecruitmentBot:
                 reason="unauthorized_open_id",
             )
 
-        if event.message_type != "text" or not event.content.strip():
+        if event.message_type not in _TEXTUAL_MESSAGE_TYPES or not event.content.strip():
             return await self._reply_and_audit(
                 event,
                 actor,
