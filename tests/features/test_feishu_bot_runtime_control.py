@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from app.features.feishu_bot.models import BotActor, BotEvent, BotQueryPlan, BotQueryResult
 from app.features.feishu_bot.repository import FeishuBotRepository
 from app.features.feishu_bot.runtime_control import (
@@ -263,6 +264,7 @@ def _batch(
     status: str,
     *,
     reasons: list[str] | None = None,
+    skipped_targets: list[str] | None = None,
 ) -> AgentManagerBatchResult:
     anomaly = bool(reasons)
     return AgentManagerBatchResult(
@@ -280,6 +282,7 @@ def _batch(
                 "response": {},
             },
         ),
+        skipped_targets=tuple(skipped_targets or ()),
     )
 
 
@@ -320,6 +323,71 @@ def test_runtime_controller_retries_transient_failure_with_limit() -> None:
     assert reports[0][1].max_retries == 2
     assert reports[0][1].status == "complete"
     assert "自动重试：1/2" in render_runtime_completion_report(reports[0][1])
+
+
+def test_runtime_controller_reports_explicitly_skipped_targets() -> None:
+    manager = _Manager(
+        [_batch("complete", skipped_targets=["宋峰峰:job51"])],
+    )
+    reports = []
+    controller = RecruitmentRuntimeController(
+        manager=manager,
+        retry_delay_seconds=0,
+        report_sink=lambda request, report: _append_report(reports, request, report),
+    )
+
+    async def scenario() -> None:
+        await controller.execute(
+            "start",
+            RuntimeControlRequest(
+                event_id="event-skip",
+                message_id="om-skip",
+                actor_open_id="ou-admin",
+                actor_name="王鑫力",
+            ),
+        )
+        await asyncio.wait_for(controller.wait_until_idle(), timeout=1)
+
+    asyncio.run(scenario())
+
+    assert reports[0][1].skipped_targets == ("宋峰峰:job51",)
+    assert "跳过目标：宋峰峰:job51" in render_runtime_completion_report(reports[0][1])
+
+
+def test_runtime_controller_reports_manager_failure_detail() -> None:
+    class _FailingManager(_Manager):
+        async def start_runtime(self) -> None:
+            raise RuntimeError(
+                "agent_manager_command_failed:run:"
+                "preflight_failed:宋峰峰:job51:platform_page_missing"
+            )
+
+    reports = []
+    controller = RecruitmentRuntimeController(
+        manager=_FailingManager([]),
+        retry_delay_seconds=0,
+        report_sink=lambda request, report: _append_report(reports, request, report),
+    )
+
+    async def scenario() -> None:
+        await controller.execute(
+            "start",
+            RuntimeControlRequest(
+                event_id="event-failure",
+                message_id="om-failure",
+                actor_open_id="ou-admin",
+                actor_name="王鑫力",
+            ),
+        )
+        await asyncio.wait_for(controller.wait_until_idle(), timeout=1)
+
+    asyncio.run(scenario())
+
+    assert reports[0][1].anomaly_reasons == (
+        "runtime_control_error:agent_manager_command_failed:run:"
+        "preflight_failed:宋峰峰:job51:platform_page_missing",
+    )
+    assert "platform_page_missing" in render_runtime_completion_report(reports[0][1])
 
 
 def test_runtime_controller_does_not_retry_identity_failure() -> None:
@@ -583,6 +651,7 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
                             "runId": "run-1",
                             "status": "complete",
                             "logPath": str(log_path),
+                            "skipped": ["宋峰峰:job51"],
                         }
                     }
                 ),
@@ -598,6 +667,7 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
         max_contacts=0,
         max_anomalies=0,
         sleep_seconds=1,
+        skip_targets=("宋峰峰:job51",),
         runner=runner,
         blocked_env_names={"OPENAI_API_KEY"},
     )
@@ -613,8 +683,9 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
     assert batch.run_id == "run-1"
     assert batch.status == "complete"
     assert len(batch.events) == 1
+    assert batch.skipped_targets == ("宋峰峰:job51",)
     assert calls[0][-2:] == ("start", "--adopt-running")
-    assert calls[1][-7:] == (
+    assert calls[1][-9:] == (
         "run",
         "--max-contacts",
         "0",
@@ -622,6 +693,8 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
         "0",
         "--sleep",
         "1.0",
+        "--skip",
+        "宋峰峰:job51",
     )
     assert calls[-1][-3:] == ("stop", "--reason", "feishu_admin_pause")
     assert all("启动处理程序" not in part for call in calls for part in call)
@@ -631,3 +704,36 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
         "FEISHU_BOT_RUNTIME_CONTROL_ENABLED" not in env for env in environments
     )
     assert all(env["SAFE_MANAGER_VALUE"] == "kept" for env in environments)
+
+
+def test_agent_manager_client_surfaces_structured_failure(tmp_path: Path) -> None:
+    async def runner(argv, *, cwd, env):
+        del cwd, env
+        command = argv[argv.index("--topology") + 2]
+        if command == "run":
+            return AgentManagerCommandResult(
+                returncode=2,
+                stdout=json.dumps(
+                    {
+                        "ok": False,
+                        "error": (
+                            'preflight_failed:[{"owner":"宋峰峰",'
+                            '"platform":"job51","reason":"platform_page_missing"}]'
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+                stderr="",
+            )
+        return AgentManagerCommandResult(returncode=0, stdout="{}", stderr="")
+
+    client = AgentManagerSubprocessClient(
+        python_executable=tmp_path / "python.exe",
+        manager_script=tmp_path / "agent_manager.py",
+        topology_path=tmp_path / "topology.json",
+        project_root=tmp_path,
+        runner=runner,
+    )
+
+    with pytest.raises(RuntimeError, match="platform_page_missing"):
+        asyncio.run(client.run_batch())

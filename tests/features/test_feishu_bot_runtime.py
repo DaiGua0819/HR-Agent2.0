@@ -17,6 +17,7 @@ from app.features.feishu_bot.runtime import (
 )
 from app.features.feishu_bot.runtime_control import (
     AgentManagerBatchResult,
+    AgentManagerSubprocessClient,
     RecruitmentRuntimeController,
 )
 from app.settings import AppSettings
@@ -67,6 +68,7 @@ def test_settings_default_to_disabled_dedicated_non_secret_profile(
     assert settings.feishu_bot_codex_base_url == ""
     assert settings.feishu_bot_codex_api_key_env == ""
     assert settings.feishu_bot_runtime_control_enabled is False
+    assert settings.parsed_feishu_bot_runtime_control_skip_targets == ()
     assert "secret" not in settings.feishu_bot_profile.lower()
     dumped = settings.model_dump()
     assert "feishu_bot_app_secret" not in dumped
@@ -87,11 +89,14 @@ def test_runtime_injects_fixed_control_controller_only_when_enabled(
             FEISHU_BOT_RUNTIME_CONTROL_ENABLED=True,
             FEISHU_BOT_AGENT_MANAGER_PATH=manager,
             FEISHU_BOT_AGENT_MANAGER_TOPOLOGY_PATH=topology,
+            FEISHU_BOT_RUNTIME_CONTROL_SKIP_TARGETS="宋峰峰:job51",
         )
     ).bot_factory()
 
     assert disabled.runtime_controller is None
     assert isinstance(enabled.runtime_controller, RecruitmentRuntimeController)
+    assert isinstance(enabled.runtime_controller.manager, AgentManagerSubprocessClient)
+    assert enabled.runtime_controller.manager.skip_targets == ("宋峰峰:job51",)
 
 
 def test_runtime_control_sends_start_ack_and_completion_report(
@@ -628,6 +633,10 @@ def test_operational_cli_and_manager_are_bot_only_and_hidden() -> None:
     assert '$Action -in @("start", "preflight")' in manager
     assert '$env:FEISHU_BOT_ENABLED = "true"' in manager
     assert '$env:FEISHU_BOT_RUNTIME_CONTROL_ENABLED = "true"' in manager
+    assert (
+        '$env:FEISHU_BOT_RUNTIME_CONTROL_SKIP_TARGETS = '
+        '"$([char]0x5B8B)$([char]0x5CF0)$([char]0x5CF0):job51"'
+    ) in manager
     assert "SetEnvironmentVariable" not in manager
     assert "OPENAI_API_KEY=" not in manager
     assert "$worktreeHostRoot" in manager

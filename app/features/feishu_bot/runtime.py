@@ -337,6 +337,7 @@ def _build_bot(settings: AppSettings) -> FeishuRecruitmentBot:
             max_contacts=settings.feishu_bot_runtime_control_max_contacts,
             max_anomalies=settings.feishu_bot_runtime_control_max_anomalies,
             sleep_seconds=settings.feishu_bot_runtime_control_sleep_seconds,
+            skip_targets=settings.parsed_feishu_bot_runtime_control_skip_targets,
             blocked_env_names={
                 "OPENAI_API_KEY",
                 "CODEX_API_KEY",

@@ -47,6 +47,7 @@ class AgentManagerBatchResult:
     run_id: str
     status: str
     events: tuple[dict[str, object], ...] = ()
+    skipped_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class RuntimeCompletionReport:
     anomalies: int
     anomaly_reasons: tuple[str, ...]
     by_platform: dict[str, PlatformRuntimeSummary] = field(default_factory=dict)
+    skipped_targets: tuple[str, ...] = ()
 
 
 class AgentManagerPort(Protocol):
@@ -114,6 +116,7 @@ class AgentManagerSubprocessClient:
         max_contacts: int = 0,
         max_anomalies: int = 0,
         sleep_seconds: float = 1.0,
+        skip_targets: Sequence[str] = (),
         runner: Callable[..., Awaitable[AgentManagerCommandResult]] | None = None,
         blocked_env_names: Sequence[str] = (),
     ) -> None:
@@ -124,6 +127,7 @@ class AgentManagerSubprocessClient:
         self.max_contacts = int(max_contacts)
         self.max_anomalies = max(0, int(max_anomalies))
         self.sleep_seconds = max(0.0, float(sleep_seconds))
+        self.skip_targets = _validated_skip_targets(skip_targets)
         self.runner = runner or _run_manager_command
         self.blocked_env_names = {
             clean_text(item).upper() for item in blocked_env_names if clean_text(item)
@@ -133,7 +137,7 @@ class AgentManagerSubprocessClient:
         await self._execute("start", "--adopt-running")
 
     async def run_batch(self) -> AgentManagerBatchResult:
-        result = await self._execute(
+        arguments = [
             "run",
             "--max-contacts",
             str(self.max_contacts),
@@ -141,6 +145,11 @@ class AgentManagerSubprocessClient:
             str(self.max_anomalies),
             "--sleep",
             str(self.sleep_seconds),
+        ]
+        for target in self.skip_targets:
+            arguments.extend(("--skip", target))
+        result = await self._execute(
+            *arguments,
             allowed_returncodes={0, 3},
         )
         del result
@@ -152,10 +161,17 @@ class AgentManagerSubprocessClient:
         )
         log_path = Path(clean_text(current.get("logPath"))) if current.get("logPath") else None
         events = _read_manager_events(log_path, project_root=self.project_root)
+        raw_skipped = current.get("skipped")
+        skipped = raw_skipped if isinstance(raw_skipped, list) else []
         return AgentManagerBatchResult(
             run_id=clean_text(current.get("runId")),
             status=clean_text(current.get("status")) or "failed",
             events=tuple(events),
+            skipped_targets=tuple(
+                clean_text(item)
+                for item in skipped
+                if clean_text(item)
+            ),
         )
 
     async def request_stop(self, reason: str) -> None:
@@ -192,9 +208,7 @@ class AgentManagerSubprocessClient:
         )
         allowed = allowed_returncodes or {0}
         if result.returncode not in allowed:
-            raise RuntimeError(
-                f"agent_manager_command_failed:{arguments[0]}:{result.returncode}"
-            )
+            raise RuntimeError(_manager_failure_reason(arguments[0], result))
         return result
 
 
@@ -230,6 +244,8 @@ def render_runtime_completion_report(report: RuntimeCompletionReport) -> str:
         lines.append(f"自动重试：{report.retry_count}/{report.max_retries}")
     if report.anomaly_reasons:
         lines.append(f"停止原因：{'; '.join(report.anomaly_reasons[:3])}")
+    if report.skipped_targets:
+        lines.append(f"跳过目标：{', '.join(report.skipped_targets)}")
     return "\n".join(lines)
 
 
@@ -415,6 +431,7 @@ class RecruitmentRuntimeController:
     async def _run(self, request: RuntimeControlRequest) -> None:
         retry_count = 0
         all_events: list[dict[str, object]] = []
+        skipped_targets: list[str] = []
         last_batch = AgentManagerBatchResult(run_id="", status="failed")
         try:
             while True:
@@ -426,6 +443,9 @@ class RecruitmentRuntimeController:
                 self._state = "running"
                 last_batch = await self.manager.run_batch()
                 all_events.extend(last_batch.events)
+                for target in last_batch.skipped_targets:
+                    if target not in skipped_targets:
+                        skipped_targets.append(target)
                 summary = summarize_manager_events(last_batch.events)
                 if (
                     last_batch.status == "stopped_on_anomaly"
@@ -439,6 +459,7 @@ class RecruitmentRuntimeController:
                     continue
                 break
         except Exception as exc:
+            failure_reason = clean_text(str(exc)) or type(exc).__name__
             last_batch = AgentManagerBatchResult(
                 run_id=last_batch.run_id,
                 status="failed",
@@ -450,7 +471,7 @@ class RecruitmentRuntimeController:
                     "platform": "runtime",
                     "classification": {
                         "is_anomaly": True,
-                        "reasons": [f"runtime_control_error:{type(exc).__name__}"],
+                        "reasons": [f"runtime_control_error:{failure_reason[:800]}"],
                     },
                     "summary": {"processed": 0},
                     "response": {},
@@ -470,6 +491,7 @@ class RecruitmentRuntimeController:
             anomalies=summary.anomalies,
             anomaly_reasons=summary.anomaly_reasons,
             by_platform=summary.by_platform,
+            skipped_targets=tuple(skipped_targets),
         )
         self._last_report = report
         self._state = final_status
@@ -560,6 +582,41 @@ def _integer(value: object) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _validated_skip_targets(values: Sequence[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in values:
+        target = clean_text(value)
+        owner, separator, platform = target.rpartition(":")
+        if (
+            separator != ":"
+            or not owner
+            or platform not in {"boss", "job51", "zhilian"}
+            or owner.startswith("-")
+        ):
+            raise ValueError("invalid_runtime_control_skip_target")
+        if target not in result:
+            result.append(target)
+    return tuple(result)
+
+
+def _manager_failure_reason(
+    command: str,
+    result: AgentManagerCommandResult,
+) -> str:
+    detail = ""
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        detail = clean_text(payload.get("error"))
+    if not detail:
+        detail = clean_text(result.stderr)
+    if not detail:
+        detail = f"returncode_{result.returncode}"
+    return f"agent_manager_command_failed:{command}:{detail[:800]}"
 
 
 def _current_run(status: dict[str, object]) -> dict[str, object]:

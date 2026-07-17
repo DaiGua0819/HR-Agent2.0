@@ -16,6 +16,8 @@
 
 `启动处理程序` 使用权威 `agent_manager.py` 执行 `start --adopt-running`，随后按 topology 中的固定顺序处理消息。运行参数由本地环境固定，不能通过飞书修改。
 
+当前 `scripts/manage_feishu_bot.ps1` 通过 `FEISHU_BOT_RUNTIME_CONTROL_SKIP_TARGETS` 固定跳过 `宋峰峰:job51`，沿用该账号暂不处理 51job 的业务约束。跳过目标会出现在结束汇报中；飞书消息不能增加、删除或覆盖跳过项。
+
 `暂停处理程序` 写入 `feishu_admin_pause` 优雅停止请求。当前联系人允许处理完成，随后停止下一联系人；不会强杀 Worker、关闭 CloakBrowser 或清除登录状态。
 
 运行遇到 HTTP 500、临时连接失败、Worker/CDP 短暂不可用等基础设施异常时，默认最多自动恢复并重试 2 次。身份不匹配、登录验证、发送失败、未知问题、简历下载失败和残留遮罩等保护类异常不会自动重试。
@@ -49,7 +51,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File scripts\manage_feishu_bot.ps1 -Action stop
 ```
 
-`preflight` 和 `start` 只在当前机器人子进程中设置 `FEISHU_BOT_ENABLED=true`，不会修改 `.env` 或系统环境。`start` 使用 Windows detached process 启动，并等待状态文件确认真实服务 PID 后才返回。
+`preflight` 和 `start` 只在当前机器人子进程中设置启用状态和固定跳过目标，不会修改 `.env` 或系统环境。`start` 使用 Windows detached process 启动，并等待状态文件确认真实服务 PID 后才返回。
 
 ## 状态与审计
 

@@ -264,6 +264,10 @@ class AppSettings(BaseSettings):
         default=1.0,
         validation_alias="FEISHU_BOT_RUNTIME_CONTROL_SLEEP_SECONDS",
     )
+    feishu_bot_runtime_control_skip_targets: str = Field(
+        default="",
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_SKIP_TARGETS",
+    )
     legacy_resume_db_path: Path = Field(
         default=Path("../patchwork-recruit-gpt/data/resumes.sqlite"),
         validation_alias="LEGACY_RESUME_DB_PATH",
@@ -319,6 +323,11 @@ class AppSettings(BaseSettings):
     @property
     def resolved_feishu_bot_agent_manager_topology_path(self) -> Path:
         return self.resolve_path(self.feishu_bot_agent_manager_topology_path)
+
+    @property
+    def parsed_feishu_bot_runtime_control_skip_targets(self) -> tuple[str, ...]:
+        values = self.feishu_bot_runtime_control_skip_targets.replace("，", ",").split(",")
+        return tuple(item.strip() for item in values if item.strip())
 
     def worker_for_owner(self, owner: str) -> WorkerConfig:
         """按负责人查找 worker 配置。"""
