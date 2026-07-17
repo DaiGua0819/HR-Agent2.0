@@ -650,11 +650,14 @@ def _manager_environment(
     *,
     blocked: set[str],
 ) -> dict[str, str]:
-    return {
+    environment = {
         key: value
         for key, value in source.items()
         if not key.upper().startswith("FEISHU_BOT_") and key.upper() not in blocked
     }
+    environment["PYTHONUTF8"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8"
+    return environment
 
 
 def _read_manager_events(

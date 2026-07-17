@@ -704,6 +704,8 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
         "FEISHU_BOT_RUNTIME_CONTROL_ENABLED" not in env for env in environments
     )
     assert all(env["SAFE_MANAGER_VALUE"] == "kept" for env in environments)
+    assert all(env["PYTHONUTF8"] == "1" for env in environments)
+    assert all(env["PYTHONIOENCODING"] == "utf-8" for env in environments)
 
 
 def test_agent_manager_client_surfaces_structured_failure(tmp_path: Path) -> None:
