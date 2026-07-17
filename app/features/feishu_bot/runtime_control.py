@@ -366,7 +366,7 @@ class RecruitmentRuntimeController:
             return {"status": "already_running", "message": "处理程序已经在运行。"}
         manager_status = await self.manager.status()
         current = _current_run(manager_status)
-        if clean_text(current.get("status")) in {"running", "stop_requested"}:
+        if _run_is_active(current):
             self._state = clean_text(current.get("status"))
             return {"status": "already_running", "message": "处理程序已经在运行。"}
         self._pause_requested = False
@@ -377,8 +377,9 @@ class RecruitmentRuntimeController:
     async def _pause(self) -> dict[str, object]:
         if self._task is None or self._task.done():
             manager_status = await self.manager.status()
-            current_status = clean_text(_current_run(manager_status).get("status"))
-            if current_status not in {"running", "stop_requested"}:
+            current = _current_run(manager_status)
+            current_status = clean_text(current.get("status"))
+            if not _run_is_active(current):
                 self._state = "paused"
                 return {"status": "paused", "message": "处理程序当前已暂停。"}
             if current_status == "stop_requested":
@@ -400,11 +401,12 @@ class RecruitmentRuntimeController:
         current = _current_run(manager_status)
         run_id = clean_text(current.get("runId"))
         current_status = clean_text(current.get("status"))
-        display_state = (
-            current_status
-            if current_status in {"running", "stop_requested"}
-            else self._state
-        )
+        if _run_is_active(current):
+            display_state = current_status
+        elif current_status == "stop_requested" and clean_text(current.get("finishedAt")):
+            display_state = "paused"
+        else:
+            display_state = self._state
         suffix = (
             f"，运行批次 {run_id}"
             if run_id and display_state in {"running", "stop_requested"}
@@ -622,6 +624,13 @@ def _manager_failure_reason(
 def _current_run(status: dict[str, object]) -> dict[str, object]:
     current = status.get("currentRun")
     return current if isinstance(current, dict) else {}
+
+
+def _run_is_active(current: dict[str, object]) -> bool:
+    return (
+        clean_text(current.get("status")) in {"running", "stop_requested"}
+        and not clean_text(current.get("finishedAt"))
+    )
 
 
 async def _run_manager_command(

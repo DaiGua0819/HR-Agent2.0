@@ -563,6 +563,79 @@ def test_runtime_status_hides_completed_run_id_and_uses_chinese_label() -> None:
     assert result == {"status": "idle", "message": "处理程序状态：空闲。"}
 
 
+def test_runtime_status_treats_finished_stop_request_as_paused() -> None:
+    class _FinishedStopManager(_Manager):
+        async def status(self) -> dict[str, object]:
+            return {
+                "currentRun": {
+                    "runId": "run-paused",
+                    "status": "stop_requested",
+                    "finishedAt": "2026-07-17T05:45:33+00:00",
+                }
+            }
+
+    manager = _FinishedStopManager([], current_status="stop_requested")
+    controller = RecruitmentRuntimeController(
+        manager=manager,
+        max_retries=2,
+        retry_delay_seconds=0,
+        report_sink=lambda request, report: _append_report([], request, report),
+    )
+
+    result = asyncio.run(
+        controller.execute(
+            "status",
+            RuntimeControlRequest(
+                event_id="event-status",
+                message_id="om-status",
+                actor_open_id="ou-admin",
+                actor_name="王鑫力",
+            ),
+        )
+    )
+
+    assert result == {"status": "paused", "message": "处理程序状态：已暂停。"}
+
+
+def test_runtime_controller_can_restart_after_finished_stop_request() -> None:
+    class _FinishedStopManager(_Manager):
+        async def status(self) -> dict[str, object]:
+            return {
+                "currentRun": {
+                    "runId": "run-paused",
+                    "status": "stop_requested",
+                    "finishedAt": "2026-07-17T05:45:33+00:00",
+                }
+            }
+
+    manager = _FinishedStopManager([_batch("complete")], current_status="stop_requested")
+    controller = RecruitmentRuntimeController(
+        manager=manager,
+        max_retries=2,
+        retry_delay_seconds=0,
+        report_sink=lambda request, report: _append_report([], request, report),
+    )
+
+    async def scenario() -> dict[str, object]:
+        result = await controller.execute(
+            "start",
+            RuntimeControlRequest(
+                event_id="event-restart",
+                message_id="om-restart",
+                actor_open_id="ou-admin",
+                actor_name="王鑫力",
+            ),
+        )
+        await asyncio.wait_for(controller.wait_until_idle(), timeout=1)
+        return result
+
+    result = asyncio.run(scenario())
+
+    assert result == {"status": "started", "message": "处理程序已启动。"}
+    assert manager.start_calls == 1
+    assert manager.run_calls == 1
+
+
 def test_completion_report_retries_one_transient_reply_failure() -> None:
     manager = _Manager([_batch("complete")])
     delivered = []
