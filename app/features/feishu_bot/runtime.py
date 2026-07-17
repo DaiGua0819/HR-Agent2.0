@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,8 +32,14 @@ from app.features.feishu_bot.lark_cli import (
 from app.features.feishu_bot.models import BotEvent
 from app.features.feishu_bot.queries import ReadOnlyRecruitmentQueries
 from app.features.feishu_bot.repository import FeishuBotRepository, redact_sensitive_text
+from app.features.feishu_bot.runtime_control import (
+    AgentManagerSubprocessClient,
+    RecruitmentRuntimeController,
+    render_runtime_completion_report,
+    runtime_report_idempotency_key,
+)
 from app.features.feishu_bot.service import FeishuRecruitmentBot
-from app.settings import AppSettings, load_settings
+from app.settings import PROJECT_ROOT, AppSettings, load_settings
 
 DEDICATED_LARK_PROFILE = "hr-agent-readonly-bot"
 Probe = Callable[..., Awaitable[dict[str, object]]]
@@ -150,6 +157,10 @@ class FeishuBotRuntime:
         checks["access"] = access_check
         if not access_check["ok"]:
             errors.append(str(access_check["error"]))
+        if self.settings.feishu_bot_runtime_control_enabled:
+            control_check = _check_runtime_control(self.settings)
+            checks["runtimeControl"] = control_check
+            errors.extend(str(item) for item in control_check["errors"])
         if errors:
             return {"ok": False, "errors": errors, "checks": checks}
         lark = await self.lark_probe(self.settings.feishu_bot_profile)
@@ -316,12 +327,48 @@ def _build_bot(settings: AppSettings) -> FeishuRecruitmentBot:
         profile=settings.feishu_bot_profile,
         cwd=settings.resolved_feishu_bot_runtime_dir,
     )
+    runtime_controller = None
+    if settings.feishu_bot_runtime_control_enabled:
+        manager = AgentManagerSubprocessClient(
+            python_executable=sys.executable,
+            manager_script=settings.resolved_feishu_bot_agent_manager_path,
+            topology_path=settings.resolved_feishu_bot_agent_manager_topology_path,
+            project_root=PROJECT_ROOT,
+            max_contacts=settings.feishu_bot_runtime_control_max_contacts,
+            max_anomalies=settings.feishu_bot_runtime_control_max_anomalies,
+            sleep_seconds=settings.feishu_bot_runtime_control_sleep_seconds,
+            blocked_env_names={
+                "OPENAI_API_KEY",
+                "CODEX_API_KEY",
+                settings.feishu_bot_codex_api_key_env,
+            },
+        )
+
+        async def report_sink(request, report) -> None:
+            await replies.reply(
+                request.message_id,
+                render_runtime_completion_report(report),
+                idempotency_key=runtime_report_idempotency_key(
+                    request.event_id,
+                    report.run_id,
+                ),
+            )
+
+        runtime_controller = RecruitmentRuntimeController(
+            manager=manager,
+            report_sink=report_sink,
+            max_retries=settings.feishu_bot_runtime_control_max_retries,
+            retry_delay_seconds=(
+                settings.feishu_bot_runtime_control_retry_delay_seconds
+            ),
+        )
     return FeishuRecruitmentBot(
         repository=repository,
         access_policy=access_policy,
         planner=planner,
         queries=queries,
         replies=replies,
+        runtime_controller=runtime_controller,
         event_source_factory=lambda: LarkEventSource(
             profile=settings.feishu_bot_profile,
             cwd=settings.resolved_feishu_bot_runtime_dir,
@@ -451,6 +498,22 @@ def _check_access_config(path: Path) -> dict[str, object]:
     if not actors:
         return {"ok": False, "error": "feishu_bot_access_list_empty"}
     return {"ok": True, "actorCount": len(actors)}
+
+
+def _check_runtime_control(settings: AppSettings) -> dict[str, object]:
+    errors: list[str] = []
+    manager_path = settings.resolved_feishu_bot_agent_manager_path
+    topology_path = settings.resolved_feishu_bot_agent_manager_topology_path
+    if not manager_path.is_file():
+        errors.append("feishu_bot_agent_manager_missing")
+    if not topology_path.is_file():
+        errors.append("feishu_bot_agent_manager_topology_missing")
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "managerConfigured": manager_path.is_file(),
+        "topologyConfigured": topology_path.is_file(),
+    }
 
 
 def _safe_probe_result(value: dict[str, object]) -> dict[str, object]:

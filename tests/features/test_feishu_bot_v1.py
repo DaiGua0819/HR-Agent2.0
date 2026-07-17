@@ -165,6 +165,7 @@ users:
   - openId: ou-admin
     displayName: 王鑫力
     role: admin
+    runtimeControl: true
     jobTypes:
       - '*'
 """.strip(),
@@ -185,8 +186,30 @@ users:
     assert admin is not None
     assert admin.job_types == ("*",)
     assert admin.can("query:workers") is True
+    assert admin.can("control:runtime") is True
     assert policy.resolve("菜花") is None
     assert policy.resolve("ou-unknown") is None
+
+
+def test_admin_runtime_control_is_denied_unless_explicitly_enabled(tmp_path: Path) -> None:
+    config = tmp_path / "access.yaml"
+    config.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 只读管理员
+    role: admin
+    jobTypes:
+      - '*'
+""".strip(),
+        encoding="utf-8",
+    )
+
+    actor = FeishuBotAccessPolicy(config).resolve("ou-admin")
+
+    assert actor is not None
+    assert actor.can("query:workers") is True
+    assert actor.can("control:runtime") is False
 
 
 def test_access_policy_rejects_duplicate_open_ids(tmp_path: Path) -> None:

@@ -20,6 +20,10 @@ from app.features.feishu_bot.render import (
     render_help,
     render_query_result,
 )
+from app.features.feishu_bot.runtime_control import (
+    RuntimeControlRequest,
+    parse_runtime_control_command,
+)
 
 
 class _Repository(Protocol):
@@ -89,11 +93,19 @@ class _EventSource(Protocol):
     async def close(self) -> None: ...
 
 
+class _RuntimeController(Protocol):
+    async def execute(
+        self,
+        action: str,
+        request: RuntimeControlRequest,
+    ) -> dict[str, object]: ...
+
+
 EventSourceFactory = Callable[[], _EventSource]
 
 
 class FeishuRecruitmentBot:
-    """Permission-gated bot pipeline with no recruitment write capabilities."""
+    """Permission-gated queries plus fixed runtime controls outside Codex."""
 
     def __init__(
         self,
@@ -103,6 +115,7 @@ class FeishuRecruitmentBot:
         planner: _Planner,
         queries: _Queries,
         replies: _Replies,
+        runtime_controller: _RuntimeController | None = None,
         event_source_factory: EventSourceFactory | None = None,
         initial_reconnect_seconds: float = 1.0,
         max_reconnect_seconds: float = 30.0,
@@ -112,6 +125,7 @@ class FeishuRecruitmentBot:
         self.planner = planner
         self.queries = queries
         self.replies = replies
+        self.runtime_controller = runtime_controller
         self.event_source_factory = event_source_factory
         self.initial_reconnect_seconds = max(0.1, float(initial_reconnect_seconds))
         self.max_reconnect_seconds = max(
@@ -143,6 +157,45 @@ class FeishuRecruitmentBot:
                 actor,
                 intent="help",
                 response=render_help(actor),
+            )
+
+        control_action = parse_runtime_control_command(event.content)
+        if control_action is not None:
+            if not actor.can("control:runtime"):
+                return await self._reply_denied(
+                    event,
+                    "当前账号无权启动或暂停招聘处理程序。",
+                    reason="feishu_bot_permission_denied:control:runtime",
+                )
+            if self.runtime_controller is None:
+                return await self._reply_failure_notice(
+                    event,
+                    DATA_UNAVAILABLE_TEXT,
+                    error="runtime_controller_unavailable",
+                    status="failed",
+                )
+            try:
+                control_result = await self.runtime_controller.execute(
+                    control_action,
+                    RuntimeControlRequest(
+                        event_id=event.event_id,
+                        message_id=event.message_id,
+                        actor_open_id=actor.open_id,
+                        actor_name=actor.display_name,
+                    ),
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                return await self._reply_failure_notice(
+                    event,
+                    DATA_UNAVAILABLE_TEXT,
+                    error=str(exc),
+                    status="failed",
+                )
+            return await self._reply_and_audit(
+                event,
+                actor,
+                intent=f"runtime_{control_action}",
+                response=str(control_result.get("message") or "运行控制请求已受理。"),
             )
 
         try:

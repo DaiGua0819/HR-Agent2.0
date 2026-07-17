@@ -32,6 +32,7 @@ if (-not (Test-Path -LiteralPath $runner)) {
 }
 if ($Action -in @("start", "preflight")) {
     $env:FEISHU_BOT_ENABLED = "true"
+    $env:FEISHU_BOT_RUNTIME_CONTROL_ENABLED = "true"
 }
 
 switch ($Action) {

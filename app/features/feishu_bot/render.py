@@ -19,6 +19,8 @@ def render_help(actor: BotActor | None = None) -> str:
     ]
     if actor is not None and actor.is_admin:
         lines.append("管理员还可查询 Worker 状态和最近异常。")
+    if actor is not None and actor.can("control:runtime"):
+        lines.append("运行控制：启动处理程序、暂停处理程序、查看处理状态。")
     return "\n".join(lines)
 
 

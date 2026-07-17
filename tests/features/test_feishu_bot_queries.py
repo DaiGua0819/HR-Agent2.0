@@ -334,8 +334,14 @@ def _seed_database(tmp_path: Path) -> tuple[Path, Path]:
             response={
                 "processed": 1,
                 "nextAction": "request_resume",
-                "decision": {"action": "request_resume"},
-                "result": {"requested": True, "confirmed": True},
+                "decision": {
+                    "action": "request_resume",
+                    "result": {
+                        "requested": True,
+                        "confirmed": True,
+                        "downloaded": False,
+                    },
+                },
             },
         ),
         _contact_event(

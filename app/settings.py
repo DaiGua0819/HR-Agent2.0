@@ -218,6 +218,52 @@ class AppSettings(BaseSettings):
         default="",
         validation_alias="FEISHU_BOT_CODEX_API_KEY_ENV",
     )
+    feishu_bot_runtime_control_enabled: bool = Field(
+        default=False,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_ENABLED",
+    )
+    feishu_bot_agent_manager_path: Path = Field(
+        default_factory=lambda: (
+            Path.home()
+            / ".codex"
+            / "skills"
+            / "recruit-agent-manager"
+            / "scripts"
+            / "agent_manager.py"
+        ),
+        validation_alias="FEISHU_BOT_AGENT_MANAGER_PATH",
+    )
+    feishu_bot_agent_manager_topology_path: Path = Field(
+        default_factory=lambda: (
+            Path.home()
+            / ".codex"
+            / "skills"
+            / "recruit-agent-manager"
+            / "references"
+            / "topology.json"
+        ),
+        validation_alias="FEISHU_BOT_AGENT_MANAGER_TOPOLOGY_PATH",
+    )
+    feishu_bot_runtime_control_max_retries: int = Field(
+        default=2,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_MAX_RETRIES",
+    )
+    feishu_bot_runtime_control_retry_delay_seconds: float = Field(
+        default=3.0,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_RETRY_DELAY_SECONDS",
+    )
+    feishu_bot_runtime_control_max_contacts: int = Field(
+        default=0,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_MAX_CONTACTS",
+    )
+    feishu_bot_runtime_control_max_anomalies: int = Field(
+        default=0,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_MAX_ANOMALIES",
+    )
+    feishu_bot_runtime_control_sleep_seconds: float = Field(
+        default=1.0,
+        validation_alias="FEISHU_BOT_RUNTIME_CONTROL_SLEEP_SECONDS",
+    )
     legacy_resume_db_path: Path = Field(
         default=Path("../patchwork-recruit-gpt/data/resumes.sqlite"),
         validation_alias="LEGACY_RESUME_DB_PATH",
@@ -265,6 +311,14 @@ class AppSettings(BaseSettings):
     @property
     def resolved_feishu_bot_manager_runs_dir(self) -> Path:
         return self.resolve_path(self.feishu_bot_manager_runs_dir)
+
+    @property
+    def resolved_feishu_bot_agent_manager_path(self) -> Path:
+        return self.resolve_path(self.feishu_bot_agent_manager_path)
+
+    @property
+    def resolved_feishu_bot_agent_manager_topology_path(self) -> Path:
+        return self.resolve_path(self.feishu_bot_agent_manager_topology_path)
 
     def worker_for_owner(self, owner: str) -> WorkerConfig:
         """按负责人查找 worker 配置。"""

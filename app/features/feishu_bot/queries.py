@@ -552,17 +552,31 @@ def _manager_events(runs_dir: Path) -> list[dict[str, object]]:
 
 
 def _resume_handling(platform: str, response: dict[str, object]) -> str:
-    result = response.get("result") if isinstance(response.get("result"), dict) else {}
     decision = (
         response.get("decision") if isinstance(response.get("decision"), dict) else {}
     )
+    result = decision.get("result") if isinstance(decision.get("result"), dict) else {}
     next_action = clean_text(response.get("nextAction") or response.get("next_action"))
     action = clean_text(decision.get("action") or response.get("action"))
-    requested = bool(result.get("requested") or response.get("requested"))
-    confirmed = bool(result.get("confirmed") or response.get("confirmed"))
-    if platform == "boss" and requested and confirmed:
-        return "boss_request_verified_server_imap"
-    if next_action == "request_resume" or action == "request_resume":
+    if platform == "boss":
+        reason = clean_text(result.get("reason"))
+        outcome = clean_text(result.get("outcome"))
+        request_action = next_action == "request_resume" or action == "request_resume"
+        verified_request = request_action and (
+            bool(result.get("ok"))
+            or bool(result.get("requested") and result.get("confirmed"))
+        )
+        if verified_request or reason == "boss_attachment_present_no_local_download" or outcome in {
+            "request_confirmed",
+            "resume_attachment_received",
+            "resume_consent_accepted",
+        }:
+            return "boss_request_verified_server_imap"
+    if bool(result.get("downloaded")):
+        return "local_resume_downloaded"
+    if (
+        next_action == "request_resume" or action == "request_resume"
+    ) and bool(result.get("requested") or result.get("confirmed")):
         return "resume_requested_waiting"
     return "none"
 

@@ -42,6 +42,7 @@ def _admin() -> BotActor:
                 "query:errors",
                 "query:all_jobs",
                 "query:shared_queue",
+                "control:runtime",
             }
         ),
     )
@@ -338,6 +339,8 @@ def test_help_result_uses_role_specific_deterministic_renderer(tmp_path: Path) -
 
     assert status == "completed"
     assert "管理员还可查询 Worker 状态和最近异常" in replies.calls[0]["text"]
+    assert "启动处理程序" in replies.calls[0]["text"]
+    assert "暂停处理程序" in replies.calls[0]["text"]
 
 
 def test_database_read_failure_returns_safe_message_and_is_audited(

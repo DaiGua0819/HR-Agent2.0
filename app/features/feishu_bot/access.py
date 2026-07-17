@@ -72,14 +72,20 @@ def _actor_from_config(item: dict[str, Any]) -> BotActor | None:
     role = clean_text(item.get("role")).lower()
     if not open_id or not display_name or role not in {"admin", "member"}:
         raise ValueError("invalid_feishu_bot_access_user")
+    runtime_control = item.get("runtimeControl") is True
+    if runtime_control and role != "admin":
+        raise ValueError("member_feishu_bot_runtime_control_forbidden")
     job_types = _job_types(item.get("jobTypes"), role=role)
+    permissions = set(_ADMIN_PERMISSIONS if role == "admin" else _MEMBER_PERMISSIONS)
+    if runtime_control:
+        permissions.add("control:runtime")
     return BotActor(
         open_id=open_id,
         display_name=display_name,
         role=role,  # type: ignore[arg-type]
         job_types=job_types,
         review_user_id=clean_text(item.get("reviewUserId")),
-        permissions=_ADMIN_PERMISSIONS if role == "admin" else _MEMBER_PERMISSIONS,
+        permissions=frozenset(permissions),
     )
 
 

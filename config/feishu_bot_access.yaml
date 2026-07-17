@@ -3,6 +3,7 @@ users:
   - openId: ou_0ae40de4ac0e63d584c9644e84b62d26
     displayName: 王鑫力
     role: admin
+    runtimeControl: true
     jobTypes:
       - "*"
     # Existing interview-center identity; this intentionally differs from the bot-app openId.

@@ -8,11 +8,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from app.features.feishu_bot.models import BotEvent
 from app.features.feishu_bot.repository import FeishuBotRepository
 from app.features.feishu_bot.runtime import (
     DEDICATED_LARK_PROFILE,
     FeishuBotInstanceLock,
     FeishuBotRuntime,
+)
+from app.features.feishu_bot.runtime_control import (
+    AgentManagerBatchResult,
+    RecruitmentRuntimeController,
 )
 from app.settings import AppSettings
 from scripts.run_feishu_bot import build_parser, launch_detached_bot
@@ -61,10 +66,147 @@ def test_settings_default_to_disabled_dedicated_non_secret_profile(
     assert settings.feishu_bot_profile == "hr-agent-readonly-bot"
     assert settings.feishu_bot_codex_base_url == ""
     assert settings.feishu_bot_codex_api_key_env == ""
+    assert settings.feishu_bot_runtime_control_enabled is False
     assert "secret" not in settings.feishu_bot_profile.lower()
     dumped = settings.model_dump()
     assert "feishu_bot_app_secret" not in dumped
     assert "feishu_bot_app_id" not in dumped
+
+
+def test_runtime_injects_fixed_control_controller_only_when_enabled(
+    tmp_path: Path,
+) -> None:
+    manager = tmp_path / "agent_manager.py"
+    topology = tmp_path / "topology.json"
+    manager.touch()
+    topology.write_text("{}", encoding="utf-8")
+    disabled = FeishuBotRuntime(settings=_settings(tmp_path)).bot_factory()
+    enabled = FeishuBotRuntime(
+        settings=_settings(
+            tmp_path,
+            FEISHU_BOT_RUNTIME_CONTROL_ENABLED=True,
+            FEISHU_BOT_AGENT_MANAGER_PATH=manager,
+            FEISHU_BOT_AGENT_MANAGER_TOPOLOGY_PATH=topology,
+        )
+    ).bot_factory()
+
+    assert disabled.runtime_controller is None
+    assert isinstance(enabled.runtime_controller, RecruitmentRuntimeController)
+
+
+def test_runtime_control_sends_start_ack_and_completion_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.feishu_bot import runtime as runtime_module
+
+    manager_path = tmp_path / "agent_manager.py"
+    topology_path = tmp_path / "topology.json"
+    manager_path.touch()
+    topology_path.write_text("{}", encoding="utf-8")
+    settings = _settings(
+        tmp_path,
+        FEISHU_BOT_RUNTIME_CONTROL_ENABLED=True,
+        FEISHU_BOT_AGENT_MANAGER_PATH=manager_path,
+        FEISHU_BOT_AGENT_MANAGER_TOPOLOGY_PATH=topology_path,
+        FEISHU_BOT_RUNTIME_CONTROL_RETRY_DELAY_SECONDS=0,
+    )
+    settings.resolved_feishu_bot_access_config_path.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 管理员
+    role: admin
+    runtimeControl: true
+    jobTypes: ['*']
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        async def status(self) -> dict[str, object]:
+            return {"currentRun": {"status": "complete"}}
+
+        async def start_runtime(self) -> None:
+            return None
+
+        async def run_batch(self) -> AgentManagerBatchResult:
+            return AgentManagerBatchResult(
+                run_id="run-1",
+                status="complete",
+                events=(
+                    {
+                        "event": "contact_result",
+                        "platform": "boss",
+                        "classification": {"is_anomaly": False, "reasons": []},
+                        "summary": {"processed": 1, "resumeHandling": ""},
+                        "response": {
+                            "platform": "boss",
+                            "nextAction": "request_resume",
+                            "decision": {
+                                "action": "request_resume",
+                                "result": {"requested": True, "confirmed": True},
+                            },
+                        },
+                    },
+                ),
+            )
+
+        async def request_stop(self, reason: str) -> None:
+            del reason
+
+    class _Replies:
+        latest: _Replies | None = None
+
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.calls: list[dict[str, str]] = []
+            _Replies.latest = self
+
+        async def reply(
+            self,
+            message_id: str,
+            text: str,
+            *,
+            idempotency_key: str,
+        ) -> str:
+            self.calls.append(
+                {
+                    "message_id": message_id,
+                    "text": text,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            return f"reply-{len(self.calls)}"
+
+    monkeypatch.setattr(runtime_module, "AgentManagerSubprocessClient", lambda **_: _Manager())
+    monkeypatch.setattr(runtime_module, "LarkReplyClient", _Replies)
+    bot = FeishuBotRuntime(settings=settings).bot_factory()
+    event = BotEvent(
+        event_id="event-start",
+        message_id="om-start",
+        sender_open_id="ou-admin",
+        chat_id="oc-admin",
+        chat_type="p2p",
+        message_type="text",
+        content="启动处理程序",
+        create_time="1784179200000",
+    )
+
+    async def scenario() -> None:
+        assert await bot.handle_event(event) == "completed"
+        assert isinstance(bot.runtime_controller, RecruitmentRuntimeController)
+        await asyncio.wait_for(bot.runtime_controller.wait_until_idle(), timeout=1)
+
+    asyncio.run(scenario())
+
+    replies = _Replies.latest
+    assert replies is not None
+    assert replies.calls[0]["text"] == "处理程序已启动。"
+    assert "处理联系人：1 人" in replies.calls[1]["text"]
+    assert "业务简历获取：1 份" in replies.calls[1]["text"]
+    assert replies.calls[1]["idempotency_key"].startswith("feishu-runtime-report:")
 
 
 def test_runtime_keeps_bot_audit_writes_out_of_recruitment_database(
@@ -114,6 +256,51 @@ def test_preflight_requires_explicit_enable_before_any_external_probe(
 
     assert result["ok"] is False
     assert result["errors"] == ["feishu_bot_disabled"]
+    assert calls == []
+
+
+def test_preflight_rejects_enabled_runtime_control_without_manager_files(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    settings = _settings(
+        tmp_path,
+        FEISHU_BOT_RUNTIME_CONTROL_ENABLED=True,
+        FEISHU_BOT_AGENT_MANAGER_PATH=tmp_path / "missing-manager.py",
+        FEISHU_BOT_AGENT_MANAGER_TOPOLOGY_PATH=tmp_path / "missing-topology.json",
+    )
+    settings.resolved_feishu_bot_access_config_path.write_text(
+        """
+users:
+  - openId: ou-admin
+    displayName: 管理员
+    role: admin
+    runtimeControl: true
+    jobTypes: ['*']
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def lark_probe(_profile: str) -> dict[str, object]:
+        calls.append("lark")
+        return {"ok": True}
+
+    async def codex_probe() -> dict[str, object]:
+        calls.append("codex")
+        return {"ok": True}
+
+    runtime = FeishuBotRuntime(
+        settings=settings,
+        lark_probe=lark_probe,
+        codex_probe=codex_probe,
+    )
+
+    result = asyncio.run(runtime.preflight())
+
+    assert result["ok"] is False
+    assert "feishu_bot_agent_manager_missing" in result["errors"]
+    assert "feishu_bot_agent_manager_topology_missing" in result["errors"]
     assert calls == []
 
 
@@ -440,6 +627,7 @@ def test_operational_cli_and_manager_are_bot_only_and_hidden() -> None:
     assert "Start-Process" not in manager
     assert '$Action -in @("start", "preflight")' in manager
     assert '$env:FEISHU_BOT_ENABLED = "true"' in manager
+    assert '$env:FEISHU_BOT_RUNTIME_CONTROL_ENABLED = "true"' in manager
     assert "SetEnvironmentVariable" not in manager
     assert "OPENAI_API_KEY=" not in manager
     assert "$worktreeHostRoot" in manager
