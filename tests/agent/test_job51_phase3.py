@@ -46,7 +46,7 @@ from app.platforms.job51.actions_resume import (
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.job51.dom_scripts import READ_CHAT_CONTEXT_JS
-from app.platforms.types import MessageSender
+from app.platforms.types import Conversation, ConversationRef, MessageSender
 from scripts.platform_once_common import (
     _find_candidate_row,
     _process,
@@ -212,6 +212,19 @@ def test_job51_find_next_thread_verifies_opened_candidate() -> None:
         )
     )
     assert opened["opened"] is True
+
+
+def test_job51_find_next_thread_does_not_repeat_successful_identity_verification() -> None:
+    page = CountingOpenedVerificationPage(
+        conversations=[
+            conversation("销售管培生", [{"sender": "other", "text": "你好"}], label="候选人A")
+        ]
+    )
+
+    ref = asyncio.run(find_next_thread(page, owner="和新红"))
+
+    assert ref is not None
+    assert page.opened_state_reads == 1
 
 
 def test_job51_find_next_thread_uses_parsed_row_identity_when_attrs_missing() -> None:
@@ -1612,6 +1625,45 @@ def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_direct_resume_reuses_single_chat_context_snapshot() -> None:
+    page = ContextCountingJob51Page(
+        conversations=[
+            conversation("AI Product Manager", [{"sender": "other", "text": "您好，我想了解岗位"}])
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    assert state["next_action"] == "request_resume"
+    assert page.context_reads == 1
+
+
+def test_job51_chat_context_snapshot_resets_for_next_selected_contact() -> None:
+    first = conversation("AI Product Manager", [{"sender": "other", "text": "first"}])
+    first["name"] = "Candidate A"
+    second = conversation("Content Operations", [{"sender": "other", "text": "second"}])
+    second["name"] = "Candidate B"
+    page = ContextCountingJob51Page(conversations=[first, second])
+    adapter = Job51Adapter(page, owner="和新红")
+
+    async def read_selected_contacts() -> tuple[ConversationRef | None, Conversation, Conversation]:
+        first_ref = await adapter.find_next_unread_thread()
+        first_context = await adapter.read_chat_context()
+        first["unread_count"] = 0
+        await adapter.find_next_unread_thread()
+        second_context = await adapter.read_chat_context()
+        return first_ref, first_context, second_context
+
+    first_ref, first_context, second_context = asyncio.run(read_selected_contacts())
+
+    assert first_ref is not None
+    assert first_context.candidate.name == "Candidate A"
+    assert second_context.candidate.name == "Candidate B"
+    assert page.context_reads == 2
+
+
 def test_job51_system_banner_does_not_block_ai_product_manager_direct_resume() -> None:
     """51job UI system banners must not replace the latest candidate message."""
 
@@ -2593,6 +2645,20 @@ def test_job51_cleanup_restores_saved_chat_scroll() -> None:
     assert result["scrollRestore"]["restored"] is True
 
 
+def test_job51_cleanup_without_overlay_does_not_sleep(monkeypatch) -> None:
+    page = ResumeScrollRestorePage()
+    sleep_calls: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(actions_resume_close.asyncio, "sleep", record_sleep)
+
+    asyncio.run(cleanup_resume_overlays(page))  # type: ignore[arg-type]
+
+    assert sleep_calls == []
+
+
 def test_job51_attachment_failure_falls_back_to_online_resume_download() -> None:
     """附件入口打不开但在线简历可用时，不应直接 blocked。"""
 
@@ -3155,6 +3221,28 @@ class GuardedPreflightClickPage(FakePage):
             if not self.app_download_blocker_installed:
                 self.app_download_popups += 1
         await super().handle_element_click(element)
+
+
+class CountingOpenedVerificationPage(FakePage):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.opened_state_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.opened_candidate_state":
+            self.opened_state_reads += 1
+        return await super().eval_js(script, arg)
+
+
+class ContextCountingJob51Page(FakePage):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.context_reads = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.read_chat_context":
+            self.context_reads += 1
+        return await super().eval_js(script, arg)
 
 
 class GuardedProcessingClickPage(GuardedPreflightClickPage):

@@ -93,16 +93,25 @@ async def inspect_resume_request_state(page: BrowserPage) -> ResumeRequestState:
 async def request_or_download_resume(
     page: BrowserPage,
     *,
+    candidate_name: str | None = None,
+    applied_position: str | None = None,
     memory: InMemoryResumeDownloadMemory | None = None,
 ) -> dict[str, object]:
     """优先保存真实简历；没有真实文件时回退为求简历动作。"""
 
     memory = memory or GLOBAL_RESUME_MEMORY
-    context = await _safe_eval_dict(page, "job51.read_chat_context")
-    if not context:
-        context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
-    candidate_name = str(context.get("name") or context.get("candidate_name") or "")
-    position = str(context.get("position") or context.get("appliedPosition") or "")
+    if candidate_name is None or applied_position is None:
+        context = await _safe_eval_dict(page, "job51.read_chat_context")
+        if not context:
+            context = await _safe_eval_dict(page, READ_CHAT_CONTEXT_JS)
+        if candidate_name is None:
+            candidate_name = str(context.get("name") or context.get("candidate_name") or "")
+        if applied_position is None:
+            applied_position = str(
+                context.get("position") or context.get("appliedPosition") or ""
+            )
+    candidate_name = candidate_name or ""
+    position = applied_position or ""
     payload = await _safe_eval_dict(page, "job51.resume_payload")
     if not payload:
         payload = await _safe_eval_dict(page, RESUME_PAYLOAD_JS)

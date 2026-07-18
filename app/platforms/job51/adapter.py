@@ -18,6 +18,7 @@ class Job51Adapter:
         self.owner = owner
         self.dry_run = is_dry_run(dry_run)
         self._pending_send_identity: dict[str, object] | None = None
+        self._conversation_snapshot: Conversation | None = None
 
     async def open_chat_page(self) -> None:
         await actions_chat.open_chat_page(self.page)
@@ -36,6 +37,7 @@ class Job51Adapter:
         *,
         exclude_ids: set[str] | None = None,
     ) -> ConversationRef | None:
+        self._conversation_snapshot = None
         return await actions_chat.find_next_thread(
             self.page,
             owner=self.owner,
@@ -43,7 +45,12 @@ class Job51Adapter:
         )
 
     async def read_chat_context(self) -> Conversation:
-        return await actions_chat.read_chat_context(self.page, owner=self.owner)
+        if self._conversation_snapshot is None:
+            self._conversation_snapshot = await actions_chat.read_chat_context(
+                self.page,
+                owner=self.owner,
+            )
+        return self._conversation_snapshot
 
     async def send_message(self, message: str) -> SendResult:
         if self.dry_run:
@@ -99,9 +106,14 @@ class Job51Adapter:
             "label": conversation.id,
             "latest_message": conversation.latest_message,
         }
-        result = await actions_resume.request_or_download_resume(self.page)
-        self._pending_send_identity = None
-        return result
+        try:
+            return await actions_resume.request_or_download_resume(
+                self.page,
+                candidate_name=conversation.candidate.name,
+                applied_position=conversation.candidate.applied_position,
+            )
+        finally:
+            self._pending_send_identity = None
 
     async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:
         return await invite_to_interview(

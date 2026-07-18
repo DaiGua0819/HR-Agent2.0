@@ -317,7 +317,8 @@ async def resume_overlay_state(page: BrowserPage) -> dict[str, object]:
 async def _close_attachment_preview(page: BrowserPage) -> dict[str, object]:
     for element in await page.query_all(selectors.ANNEX_CLOSE):
         result = await reliable_click_element(page, element, label="51job关闭附件预览")
-        await asyncio.sleep(1)
+        if result.get("ok"):
+            await asyncio.sleep(1)
         return {"closed": bool(result.get("ok")), "source": "attachment_preview", **result}
     return {"closed": False, "reason": "attachment_close_not_found"}
 
@@ -327,7 +328,8 @@ async def _close_online_resume(page: BrowserPage) -> dict[str, object]:
         result = await page.eval_js(CLOSE_ONLINE_RESUME_JS)
     except Exception as error:
         return {"closed": False, "reason": "online_resume_close_error", "error": str(error)}
-    await asyncio.sleep(1)
+    if isinstance(result, dict) and result.get("closed"):
+        await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
 
 
@@ -336,7 +338,8 @@ async def _close_export_dialog(page: BrowserPage) -> dict[str, object]:
         result = await page.eval_js(CLOSE_EXPORT_DIALOG_JS)
     except Exception as error:
         return {"closed": False, "reason": "export_close_error", "error": str(error)}
-    await asyncio.sleep(1)
+    if isinstance(result, dict) and result.get("closed"):
+        await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
 
 
@@ -345,7 +348,8 @@ async def _close_generic_blocker(page: BrowserPage) -> dict[str, object]:
         result = await page.eval_js(CLOSE_GENERIC_BLOCKERS_JS)
     except Exception as error:
         return {"closed": False, "reason": "generic_close_error", "error": str(error)}
-    await asyncio.sleep(1)
+    if isinstance(result, dict) and result.get("closed"):
+        await asyncio.sleep(1)
     return result if isinstance(result, dict) else {"closed": False, "reason": "bad_result"}
 
 

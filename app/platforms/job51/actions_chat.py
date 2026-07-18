@@ -210,6 +210,8 @@ async def find_next_thread(
             ),
         }
         click = await click_thread_by_state(page, state, expected=expected, row=row)
+        if click.get("ok") or click.get("verified"):
+            return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
         ready = bool(click.get("ok") or click.get("clicked")) or await wait_chat_ready(
             page,
             timeout_ms=6500,
