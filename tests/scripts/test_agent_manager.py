@@ -265,6 +265,114 @@ class AgentManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_guarded_run_skips_tolerated_contact_anomaly_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            exclusions_by_call: list[list[str]] = []
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                del method, timeout
+                query = parse_qs(urlparse(url).query)
+                exclusions_by_call.append(query.get("exclude_conversation_id", []))
+                call_number = len(exclusions_by_call)
+                if call_number == 1:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "candidate-detail-a",
+                        "selectedConversationId": "row-a",
+                        "nextAction": "request_resume_failed",
+                        "stage": "request_resume_action_failed",
+                    }
+                if call_number == 2:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "candidate-b",
+                        "selectedConversationId": "row-b",
+                        "nextAction": "request_resume",
+                        "stage": "resume_attachment_downloaded",
+                        "decision": {"result": {"downloaded": True}},
+                    }
+                return {"accepted": True, "processed": 0}
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=4,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["processed"], 2)
+            self.assertEqual(result["anomalies"], 1)
+            self.assertEqual(exclusions_by_call, [[], ["row-a"], ["row-a"]])
+
+    def test_guarded_run_stops_on_fifth_contact_anomaly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            call_count = 0
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                nonlocal call_count
+                del method, timeout
+                query = parse_qs(urlparse(url).query)
+                self.assertEqual(
+                    len(query.get("exclude_conversation_id", [])),
+                    call_count,
+                )
+                call_count += 1
+                return {
+                    "accepted": True,
+                    "processed": 1,
+                    "conversationId": f"candidate-{call_count}",
+                    "selectedConversationId": f"row-{call_count}",
+                    "nextAction": "request_resume_failed",
+                    "stage": "request_resume_action_failed",
+                }
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=4,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "stopped_on_anomaly")
+            self.assertEqual(result["processed"], 5)
+            self.assertEqual(result["anomalies"], 5)
+            self.assertEqual(call_count, 5)
+
     def test_owner_lanes_finish_current_contact_after_global_anomaly_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime_root = Path(directory) / "agent-manager"

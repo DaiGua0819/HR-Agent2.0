@@ -25,8 +25,18 @@ def create_worker_app(runtime: WorkerRuntime) -> FastAPI:
         return await runtime.status_payload()
 
     @router.post("/automation/{platform}/process-messages")
-    async def process_messages(platform: Platform) -> dict[str, object]:
-        return await runtime.process_messages(platform)
+    async def process_messages(
+        platform: Platform,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        payload = payload or {}
+        raw_exclude_ids = payload.get("excludeConversationIds")
+        exclude_ids = (
+            {str(item) for item in raw_exclude_ids if str(item)}
+            if isinstance(raw_exclude_ids, list)
+            else set()
+        )
+        return await runtime.process_messages(platform, exclude_ids=exclude_ids)
 
     @router.post("/automation/{platform}/drain-messages")
     async def drain_messages(

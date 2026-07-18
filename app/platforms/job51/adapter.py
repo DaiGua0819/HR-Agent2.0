@@ -100,8 +100,7 @@ class Job51Adapter:
             "latest_message": conversation.latest_message,
         }
         result = await actions_resume.request_or_download_resume(self.page)
-        if not result.get("needsAttachmentRequest"):
-            self._pending_send_identity = None
+        self._pending_send_identity = None
         return result
 
     async def invite_to_interview(self, payload: dict[str, object]) -> dict[str, object]:

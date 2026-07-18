@@ -42,7 +42,7 @@ from app.platforms.types import (
     SendResult,
 )
 
-SKIP_TERMS = ("平台推荐", "为你推荐的人才", "系统提示", "广告")
+SKIP_TERMS = ("平台推荐", "为你推荐的人才", "系统提示")
 REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 APP_DOWNLOAD_URL_PART = "app.51job.com/51job"
 _TIME_LINE_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")

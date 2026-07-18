@@ -36,12 +36,22 @@ class Dispatcher:
         worker = self.account_manager.worker_for_owner(owner)
         return WorkerClient(worker.base_url)
 
-    async def dispatch_process_unread(self, owner: str, platform: Platform) -> DispatchResult:
+    async def dispatch_process_unread(
+        self,
+        owner: str,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> DispatchResult:
         """派发某负责人某平台未读处理。"""
 
         self.account_manager.route_for_account(owner, platform)
         self.dispatch_log.append((owner, platform))
-        result = await self.client_for_owner(owner).process_messages(platform)
+        client = self.client_for_owner(owner)
+        if exclude_ids:
+            result = await client.process_messages(platform, exclude_ids=exclude_ids)
+        else:
+            result = await client.process_messages(platform)
         return DispatchResult(owner=owner, platform=platform, result=result)
 
     async def process_all(self) -> dict[str, object]:
@@ -96,10 +106,19 @@ class Dispatcher:
         return statuses
 
 
-async def dispatch_process_unread(owner: str, platform: Platform) -> dict[str, object]:
+async def dispatch_process_unread(
+    owner: str,
+    platform: Platform,
+    *,
+    exclude_ids: set[str] | None = None,
+) -> dict[str, object]:
     """兼容旧调用：派发未读处理任务。"""
 
-    result = await Dispatcher().dispatch_process_unread(owner, platform)
+    result = await Dispatcher().dispatch_process_unread(
+        owner,
+        platform,
+        exclude_ids=exclude_ids,
+    )
     return _result_payload(result)
 
 

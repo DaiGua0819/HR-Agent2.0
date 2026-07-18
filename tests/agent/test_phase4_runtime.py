@@ -110,6 +110,43 @@ def test_worker_returns_structured_platform_blocker_from_prepare_stage() -> None
     assert result["decision"]["failureReason"] == "boss_security_warning"
 
 
+def test_worker_process_messages_excludes_prior_contact_and_returns_selected_id() -> None:
+    runtime = ExcludingContactRuntime()
+
+    result = asyncio.run(
+        runtime.process_messages(Platform.JOB51, exclude_ids={"row-a"})
+    )
+
+    assert runtime.seen_inputs == [{"row-a"}]
+    assert result["processed"] == 1
+    assert result["conversationId"] == "candidate-detail-b"
+    assert result["selectedConversationId"] == "row-b"
+
+
+def test_control_plane_forwards_excluded_conversation_ids() -> None:
+    account_manager = AccountManager()
+    owner = account_manager.workers[0].owner
+    tracking_client = ExclusionTrackingWorkerClient()
+    dispatcher = Dispatcher(
+        account_manager=account_manager,
+        clients={owner: tracking_client},
+    )
+    app = create_app(dispatcher=dispatcher)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/automation/job51/process-messages",
+            params=[
+                ("owner", owner),
+                ("exclude_conversation_id", "row-a"),
+                ("exclude_conversation_id", "row-b"),
+            ],
+        )
+
+    assert response.status_code == 200
+    assert tracking_client.exclude_ids == {"row-a", "row-b"}
+
+
 def test_job51_generic_visible_attachment_href_downloads_for_any_owner() -> None:
     """51 通用可见附件 href 真实下载对任意账号生效，预览文字仍拒绝。"""
 
@@ -161,6 +198,20 @@ class TrackingWorkerClient:
 
     async def pause(self, platform: Platform) -> dict[str, Any]:
         return {"owner": self.owner, "platform": platform.value, "paused": True}
+
+
+class ExclusionTrackingWorkerClient:
+    def __init__(self) -> None:
+        self.exclude_ids: set[str] = set()
+
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        self.exclude_ids = set(exclude_ids or set())
+        return {"platform": platform.value, "processed": 0}
 
 
 class DuplicateContactRuntime(WorkerRuntime):
@@ -218,6 +269,50 @@ class BlockedPreparationRuntime(WorkerRuntime):
     def _adapter(self, platform: Platform) -> BlockedPreparationAdapter:
         _ = platform
         return BlockedPreparationAdapter()
+
+
+class ExcludingContactRuntime(WorkerRuntime):
+    def __init__(self) -> None:
+        super().__init__(owner="owner", port=8801, cdp_port=9222)
+        self.refs = [
+            ConversationRef(Platform.JOB51, "owner", "row-a"),
+            ConversationRef(Platform.JOB51, "owner", "row-b"),
+        ]
+        self.seen_inputs: list[set[str]] = []
+
+    async def start(self) -> None:
+        self.agent_ready = True
+
+    def _adapter(self, platform: Platform) -> object:
+        _ = platform
+        return object()
+
+    async def _prepare_message_adapter(self, adapter: object) -> None:
+        _ = adapter
+
+    async def _find_next_unread_thread(
+        self,
+        adapter: object,
+        seen: set[str],
+    ) -> ConversationRef | None:
+        _ = adapter
+        self.seen_inputs.append(set(seen))
+        return next(
+            (ref for ref in self.refs if ref.conversation_id not in seen),
+            None,
+        )
+
+    async def _run_current_conversation(self, adapter: object) -> dict[str, object]:
+        _ = adapter
+        return {
+            "conversation_id": "candidate-detail-b",
+            "next_action": "request_resume",
+            "stage": "resume_attachment_downloaded",
+        }
+
+    async def _graph_stage(self, state: dict[str, object]) -> str:
+        _ = state
+        return "rules_loaded"
 
 
 class BlockedPreparationAdapter:

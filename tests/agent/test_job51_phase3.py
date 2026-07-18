@@ -85,6 +85,9 @@ def test_job51_skip_rules_do_not_repeat_replied_or_platform_rows() -> None:
     assert should_skip_thread_label("张三 [送达] 销售管培生")
     assert should_skip_thread_label("李四 [已读] 电气工程师")
     assert should_skip_thread_label("[平台推荐] 以下是为你推荐的人才")
+    assert not should_skip_thread_label(
+        "王永闯 B端社交媒体运营\n兼具知名广告公司与头部甲方品牌经验"
+    )
     page = FakePage(
         conversations=[
             conversation(
@@ -2352,8 +2355,8 @@ def test_job51_online_resume_does_not_fetch_blob_without_visible_export_control(
     assert page.resume_requests == 1
 
 
-def test_job51_runner_sends_attachment_message_when_native_request_is_unavailable() -> None:
-    """The runner must finish the fallback when 51 exposes no native request control."""
+def test_job51_runner_does_not_send_attachment_message_when_native_request_is_unavailable() -> None:
+    """An unavailable online export must fail without sending a text fallback."""
 
     page = OnlineResumeWithoutNativeRequestPage(
         conversations=[
@@ -2370,16 +2373,16 @@ def test_job51_runner_sends_attachment_message_when_native_request_is_unavailabl
     state = asyncio.run(runner.run_current())
 
     result = state["decision"]["result"]
-    assert state["stage"] == "resume_consent_requested"
-    assert result["requested"] is True
-    assert result["textRequestSent"] is True
-    assert result["reason"] == "online_resume_not_exportable_attachment_message_sent"
-    assert page.sent_messages == ["在线简历暂时无法导出，方便发一份附件简历过来吗"]
+    assert state["stage"] == "request_resume_action_failed"
+    assert result["requested"] is False
+    assert "textRequestSent" not in result
+    assert result["reason"] == "online_resume_not_exportable_attachment_request_unavailable"
+    assert page.sent_messages == []
     assert page.resume_requests == 0
 
 
-def test_job51_runner_uses_single_candidate_common_phrase_in_new_greeting_view() -> None:
-    """New-greeting cards must request a resume without a normal chat input."""
+def test_job51_runner_does_not_send_common_phrase_in_new_greeting_view() -> None:
+    """New-greeting cards must not replace the removed attachment fallback."""
 
     page = NewGreetingOnlineResumeWithoutNativeRequestPage(
         conversations=[
@@ -2395,17 +2398,12 @@ def test_job51_runner_uses_single_candidate_common_phrase_in_new_greeting_view()
 
     state = asyncio.run(runner.run_current())
 
-    common_phrase = "我看不到您的详细信息，方便投一份简历吗？"
     result = state["decision"]["result"]
-    assert state["stage"] == "resume_consent_requested"
-    assert result["requested"] is True
-    assert result["textRequestSent"] is True
-    assert result["attachmentRequestSendResult"]["details"]["source"] == (
-        "new_greeting_common_phrase"
-    )
-    assert page.sent_messages == [common_phrase]
-    assert state["sent_messages"] == [common_phrase]
-    assert page.new_greeting_selection_cleared is True
+    assert state["stage"] == "request_resume_action_failed"
+    assert result["requested"] is False
+    assert "textRequestSent" not in result
+    assert page.sent_messages == []
+    assert state.get("sent_messages", []) == []
 
 
 def test_job51_new_greeting_direct_resume_prompt_allows_existing_common_phrase() -> None:
@@ -2417,8 +2415,8 @@ def test_job51_new_greeting_direct_resume_prompt_allows_existing_common_phrase()
     ]
 
 
-def test_job51_online_preview_fallback_does_not_escape_to_another_candidate() -> None:
-    """Closing an unusable preview must preserve the original conversation."""
+def test_job51_online_preview_failure_does_not_message_another_candidate() -> None:
+    """Closing an unusable preview must not send to either conversation."""
 
     target = conversation(
         "AI Product Manager",
@@ -2440,15 +2438,16 @@ def test_job51_online_preview_fallback_does_not_escape_to_another_candidate() ->
 
     state = asyncio.run(runner.run_current())
 
-    fallback = "在线简历暂时无法导出，方便发一份附件简历过来吗"
-    assert state["stage"] == "resume_consent_requested"
+    assert state["stage"] == "request_resume_action_failed"
     assert page.escape_presses == 0
-    assert target["messages"][-1] == {"sender": "me", "text": fallback}
+    assert target["messages"] == [
+        {"sender": "other", "text": "您好，我对职位很感兴趣"}
+    ]
     assert wrong["messages"] == [{"sender": "other", "text": "另一个候选人"}]
 
 
-def test_job51_resume_fallback_blocks_if_page_changes_candidate_after_close() -> None:
-    """The pre-preview identity must guard every fallback send after a page drift."""
+def test_job51_resume_failure_sends_nothing_if_page_changes_candidate_after_close() -> None:
+    """A page drift after preview cleanup must not produce any outgoing message."""
 
     target = conversation(
         "AI Product Manager",
@@ -2472,10 +2471,8 @@ def test_job51_resume_fallback_blocks_if_page_changes_candidate_after_close() ->
 
     result = state["decision"]["result"]
     assert state["stage"] == "request_resume_action_failed"
-    assert result["textRequestSent"] is False
-    assert result["attachmentRequestSendResult"]["details"]["reason"] == (
-        "candidate_identity_changed_before_send"
-    )
+    assert result["requested"] is False
+    assert "textRequestSent" not in result
     assert page.sent_messages == []
     assert target["messages"] == [
         {"sender": "other", "text": "您好，我对职位很感兴趣"}

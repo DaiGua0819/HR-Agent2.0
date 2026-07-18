@@ -17,7 +17,12 @@ class WorkerClientProtocol(Protocol):
     async def status(self) -> dict[str, Any]:
         """读取 worker 状态。"""
 
-    async def process_messages(self, platform: Platform) -> dict[str, Any]:
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
         """处理某平台未读消息。"""
 
     async def proactive_contact(
@@ -46,9 +51,17 @@ class WorkerClient:
             response.raise_for_status()
             return response.json()
 
-    async def process_messages(self, platform: Platform) -> dict[str, Any]:
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
         async with self._client(self.automation_timeout_seconds) as client:
-            response = await client.post(f"/automation/{platform.value}/process-messages")
+            response = await client.post(
+                f"/automation/{platform.value}/process-messages",
+                json={"excludeConversationIds": sorted(exclude_ids or set())},
+            )
             response.raise_for_status()
             return response.json()
 
@@ -88,8 +101,13 @@ class InProcessWorkerClient:
     async def status(self) -> dict[str, Any]:
         return await self.runtime.status_payload()
 
-    async def process_messages(self, platform: Platform) -> dict[str, Any]:
-        return await self.runtime.process_messages(platform)
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        return await self.runtime.process_messages(platform, exclude_ids=exclude_ids)
 
     async def proactive_contact(
         self, platform: Platform, payload: dict[str, Any] | None = None

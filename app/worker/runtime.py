@@ -60,7 +60,12 @@ class WorkerRuntime:
             self.conversation_repository, self.artifact_store = build_persistence_from_settings()
         self.agent_ready = True
 
-    async def process_messages(self, platform: Platform) -> dict[str, object]:
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> dict[str, object]:
         """串行处理某平台未读消息。"""
 
         async with self._lock:
@@ -72,7 +77,10 @@ class WorkerRuntime:
                 await self.start()
                 adapter = self._adapter(platform)
                 await self._prepare_message_adapter(adapter)
-                ref = await self._find_next_unread_thread(adapter, set())
+                ref = await self._find_next_unread_thread(
+                    adapter,
+                    {str(item) for item in exclude_ids or set() if str(item)},
+                )
                 if ref is None:
                     return {"accepted": True, "processed": 0, "platform": platform.value}
                 state = await self._run_current_conversation(adapter)
@@ -82,6 +90,7 @@ class WorkerRuntime:
                     "processed": 1,
                     "owner": self.owner,
                     "platform": platform.value,
+                    "selectedConversationId": ref.conversation_id,
                     **contact,
                     "dryRun": load_settings().dry_run,
                 }

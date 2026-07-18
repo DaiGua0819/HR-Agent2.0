@@ -766,6 +766,7 @@ def concise_result(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "processed": int(payload.get("processed") or 0),
         "conversationId": str(payload.get("conversationId") or ""),
+        "selectedConversationId": str(payload.get("selectedConversationId") or ""),
         "nextAction": str(payload.get("nextAction") or ""),
         "stage": str(payload.get("stage") or ""),
         "resultReason": str(result.get("reason") or ""),
@@ -926,6 +927,7 @@ def _run_guarded(
                     continue
 
                 count = 0
+                excluded_contact_ids: set[str] = set()
                 while max_contacts <= 0 or count < max_contacts:
                     if stop_event.is_set():
                         return
@@ -950,7 +952,15 @@ def _run_guarded(
                     if not claim_contact_dispatch():
                         return
 
-                    query = urllib.parse.urlencode({"owner": owner})
+                    query = urllib.parse.urlencode(
+                        [
+                            ("owner", owner),
+                            *(
+                                ("exclude_conversation_id", conversation_id)
+                                for conversation_id in sorted(excluded_contact_ids)
+                            ),
+                        ]
+                    )
                     url = (
                         f"http://127.0.0.1:{control_port}/automation/{platform}/"
                         f"process-messages?{query}"
@@ -976,10 +986,21 @@ def _run_guarded(
                     if classification.is_anomaly:
                         if exceeded:
                             return
+                        skipped_contact_id = str(
+                            summary.get("selectedConversationId")
+                            or summary.get("conversationId")
+                            or ""
+                        ).strip()
+                        if summary["processed"] > 0 and skipped_contact_id:
+                            excluded_contact_ids.add(skipped_contact_id)
+                            count += summary["processed"]
+                            if sleep_seconds > 0:
+                                stop_event.wait(sleep_seconds)
+                            continue
                         break
                     if summary["processed"] == 0:
                         break
-                    count += 1
+                    count += summary["processed"]
                     if sleep_seconds > 0:
                         stop_event.wait(sleep_seconds)
         except BaseException:

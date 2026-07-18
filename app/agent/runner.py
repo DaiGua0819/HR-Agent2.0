@@ -488,41 +488,9 @@ class ConversationRunner:
         return None, request_state
 
     async def _request_resume(self, state: GraphState) -> dict[str, Any]:
-        """Request a resume and finish explicit text fallbacks from platform adapters."""
+        """Request or download a resume without synthesizing text fallbacks."""
 
-        result = await self.adapter.request_resume()
-        if not result.get("needsAttachmentRequest"):
-            return result
-        message = str(result.get("attachmentRequestMessage") or "").strip()
-        if not message:
-            return result
-        send_result = await self.adapter.send_message(message)
-        sent = self._send_result_ok(send_result)
-        send_payload = (
-            asdict(send_result)
-            if is_dataclass(send_result)
-            else dict(send_result)
-            if isinstance(send_result, dict)
-            else {"value": str(send_result)}
-        )
-        sent_message = message
-        details = send_payload.get("details")
-        if isinstance(details, dict):
-            sent_message = str(details.get("sentMessage") or message).strip() or message
-        if sent:
-            append_sent(state, sent_message)
-        return {
-            **result,
-            "requested": sent,
-            "textRequestSent": sent,
-            "needsAttachmentRequest": not sent,
-            "reason": (
-                "online_resume_not_exportable_attachment_message_sent"
-                if sent
-                else str(result.get("reason") or "attachment_request_message_failed")
-            ),
-            "attachmentRequestSendResult": send_payload,
-        }
+        return await self.adapter.request_resume()
 
     async def _send_or_fail(
         self,

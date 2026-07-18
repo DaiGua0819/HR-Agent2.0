@@ -32,7 +32,15 @@ async def process_messages(
     """转发“处理某平台未读消息”到负责人 worker。"""
 
     dispatcher: Dispatcher = request.app.state.dispatcher
-    result = await dispatcher.dispatch_process_unread(owner, platform)
+    result = await dispatcher.dispatch_process_unread(
+        owner,
+        platform,
+        exclude_ids={
+            str(item)
+            for item in request.query_params.getlist("exclude_conversation_id")
+            if str(item)
+        },
+    )
     return {"accepted": True, "owner": result.owner, "platform": platform.value, **result.result}
 
 

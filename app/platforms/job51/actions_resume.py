@@ -50,7 +50,6 @@ ONLINE_RESUME_TOP_RIGHT_ENTRY_SELECTOR = (
     ".chat-new-header [class*='online']"
 )
 ONLINE_RESUME_LABEL = "\u5728\u7ebf\u7b80\u5386"
-ATTACHMENT_REQUEST_FALLBACK_MESSAGE = "在线简历暂时无法导出，方便发一份附件简历过来吗"
 
 __all__ = [
     "InMemoryResumeDownloadMemory",
@@ -589,8 +588,6 @@ async def _request_attachment_after_online_failure(
             if clicked
             else "online_resume_not_exportable_attachment_request_unavailable"
         ),
-        "needsAttachmentRequest": not clicked,
-        "attachmentRequestMessage": ATTACHMENT_REQUEST_FALLBACK_MESSAGE,
         "onlineResumeFailure": online_failure,
         "cleanup": cleanup,
     }
