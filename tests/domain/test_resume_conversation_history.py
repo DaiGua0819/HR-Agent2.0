@@ -91,6 +91,92 @@ def test_broken_or_ambiguous_resume_link_never_returns_messages(tmp_path: Path) 
     assert unlinked["messages"] == []
 
 
+def test_unlinked_resume_uses_unique_identity_session_with_messages(tmp_path: Path) -> None:
+    repository = ConversationRepository(tmp_path / "conversation.sqlite")
+    repository.save_session(_session())
+    repository.upsert_messages(
+        "session-1",
+        [ChatMessage(sender=MessageSender.CANDIDATE, text="hello")],
+    )
+
+    payload = ResumeConversationService(repository).get_for_resume(
+        Resume(
+            id="resume-2",
+            name="Li Le",
+            parsed_name="Li Le",
+            job_type="AI developer intern",
+            linked_platform="boss",
+            linked_owner="owner",
+        )
+    )
+
+    assert payload["matched"] is True
+    assert payload["matchMode"] == "unique_identity_fallback"
+    assert payload["conversation"]["sessionId"] == "session-1"
+    assert payload["messages"][0]["text"] == "hello"
+
+
+def test_unique_identity_fallback_accepts_canonical_job_alias(tmp_path: Path) -> None:
+    repository = ConversationRepository(tmp_path / "conversation.sqlite")
+    repository.save_session(
+        ConversationSession(
+            id="session-ai-pm",
+            platform="boss",
+            owner="owner",
+            candidate_name="Candidate",
+            position="AI产品经理",
+        )
+    )
+    repository.upsert_messages(
+        "session-ai-pm",
+        [ChatMessage(sender=MessageSender.CANDIDATE, text="resume sent")],
+    )
+
+    payload = ResumeConversationService(repository).get_for_resume(
+        Resume(
+            id="resume-ai-pm",
+            parsed_name="Candidate",
+            job_type="AI PM",
+            linked_platform="boss",
+            linked_owner="owner",
+        )
+    )
+
+    assert payload["matched"] is True
+    assert payload["conversation"]["sessionId"] == "session-ai-pm"
+
+
+def test_unique_identity_fallback_respects_owner_and_requires_messages(tmp_path: Path) -> None:
+    repository = ConversationRepository(tmp_path / "conversation.sqlite")
+    repository.save_session(_session("owner-a-session"))
+    repository.save_session(
+        ConversationSession(
+            **{
+                **_session("owner-b-session").__dict__,
+                "owner": "other-owner",
+            }
+        )
+    )
+    repository.upsert_messages(
+        "owner-b-session",
+        [ChatMessage(sender=MessageSender.CANDIDATE, text="wrong owner")],
+    )
+
+    payload = ResumeConversationService(repository).get_for_resume(
+        Resume(
+            id="resume-owner-a",
+            parsed_name="Li Le",
+            job_type="AI developer intern",
+            linked_platform="boss",
+            linked_owner="owner",
+        )
+    )
+
+    assert payload["matched"] is False
+    assert payload["reason"] == "conversation_not_linked"
+    assert payload["messages"] == []
+
+
 def test_conversation_history_is_limited_to_latest_200_messages(tmp_path: Path) -> None:
     repository = ConversationRepository(tmp_path / "conversation.sqlite")
     repository.save_session(_session())

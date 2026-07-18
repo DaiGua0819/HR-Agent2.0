@@ -22,9 +22,10 @@ from app.settings import AppSettings, load_settings
 class ConversationRepository:
     """读写会话身份、消息和候选人长期状态。"""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path, *, migrate: bool = True) -> None:
         self.database_path = Path(database_path)
-        run_migrations(self.database_path)
+        if migrate:
+            run_migrations(self.database_path)
 
     @classmethod
     def from_settings(cls, settings: AppSettings | None = None) -> ConversationRepository:
@@ -108,6 +109,37 @@ class ConversationRepository:
                 f"""
                 SELECT * FROM conversation_sessions
                 WHERE candidate_name = ?{position_clause}
+                ORDER BY updated_at DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
+    def find_resume_link_candidates(
+        self,
+        *,
+        candidate_name: str,
+        platform: str = "",
+        owner: str = "",
+    ) -> list[ConversationSession]:
+        """Find candidate sessions without weakening platform or owner evidence."""
+
+        name = candidate_name.strip()
+        if not name:
+            return []
+        clauses = ["candidate_name = ?"]
+        params: list[Any] = [name]
+        if platform.strip():
+            clauses.append("LOWER(platform) = LOWER(?)")
+            params.append(platform.strip())
+        if owner.strip():
+            clauses.append("owner = ?")
+            params.append(owner.strip())
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM conversation_sessions
+                WHERE {' AND '.join(clauses)}
                 ORDER BY updated_at DESC
                 """,
                 tuple(params),

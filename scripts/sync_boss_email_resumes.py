@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from app.db.engine import run_migrations
+from app.domain.conversation.matching import ConversationMatch, resolve_unique_conversation
+from app.domain.conversation.repository import ConversationRepository
 from app.domain.scoring.engine import POSITION_SCORING_VERSION, score_resume_for_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +80,11 @@ def run_sync(
     report = _empty_report(config, sync_time)
     source_rows = _load_source_rows(config.source_db)
     target_records = _target_records(config.target_db)
+    conversation_repository = (
+        ConversationRepository(config.target_db, migrate=False)
+        if config.target_db.exists()
+        else None
+    )
     prepared: list[dict[str, Any]] = []
     repairs: list[dict[str, Any]] = []
 
@@ -163,6 +170,17 @@ def run_sync(
             sync_time=sync_time,
             corrected=str(row["job_type"] or "") != target_job,
         )
+        link = _match_conversation(
+            conversation_repository,
+            payload=rewritten_payload,
+            target_job=target_job,
+        )
+        if link.session is not None:
+            report["linkedUnique"] += 1
+        elif link.reason == "conversation_ambiguous":
+            report["linkAmbiguous"] += 1
+        else:
+            report["linkMissing"] += 1
         prepared.append(
             {
                 "row": row,
@@ -171,6 +189,7 @@ def run_sync(
                 "score": score,
                 "source_pdf": source_pdf,
                 "target_pdf": target_pdf,
+                "link": link,
             }
         )
 
@@ -199,6 +218,8 @@ def run_sync(
         for item in prepared:
             row = item["row"]
             payload = item["payload"]
+            link = item["link"]
+            linked_session = link.session
             cursor = connection.execute(
                 _INSERT_SQL,
                 (
@@ -209,10 +230,10 @@ def run_sync(
                     item["score"],
                     sync_time,
                     _first_text(payload.get("name"), payload.get("candidateName")),
-                    "",
-                    "boss",
-                    _source_owner(payload),
-                    "",
+                    linked_session.id if linked_session else "",
+                    linked_session.platform if linked_session else "boss",
+                    linked_session.owner if linked_session else _source_owner(payload),
+                    linked_session.platform_conversation_id if linked_session else "",
                     "",
                 ),
             )
@@ -260,6 +281,9 @@ def _empty_report(config: BossEmailSyncConfig, sync_time: str) -> dict[str, Any]
         "wouldRepair": 0,
         "imported": 0,
         "repaired": 0,
+        "linkedUnique": 0,
+        "linkAmbiguous": 0,
+        "linkMissing": 0,
         "skippedNonBoss": 0,
         "skippedExisting": 0,
         "skippedLimit": 0,
@@ -324,6 +348,23 @@ def _source_owner(payload: dict[str, Any]) -> str:
         payload.get("accountName"),
         payload.get("sourceName"),
         payload.get("owner"),
+    )
+
+
+def _match_conversation(
+    repository: ConversationRepository | None,
+    *,
+    payload: dict[str, Any],
+    target_job: str,
+) -> ConversationMatch:
+    if repository is None:
+        return ConversationMatch(None, "none", "conversation_not_linked", 0)
+    return resolve_unique_conversation(
+        repository,
+        candidate_name=_first_text(payload.get("name"), payload.get("candidateName")),
+        position=target_job,
+        platform="boss",
+        owner=_source_owner(payload),
     )
 
 

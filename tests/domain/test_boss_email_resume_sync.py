@@ -7,6 +7,9 @@ import sqlite3
 from pathlib import Path
 
 from app.db.engine import run_migrations
+from app.domain.conversation.models import ConversationSession
+from app.domain.conversation.repository import ConversationRepository
+from app.platforms.types import ChatMessage, MessageSender
 from scripts.sync_boss_email_resumes import (
     BossEmailSyncConfig,
     infer_boss_email_job_type,
@@ -100,6 +103,55 @@ def test_boss_email_sync_imports_only_missing_boss_resume_with_current_time(
     assert Path(payload["pdfPath"]) == copied_pdf
     assert Path(payload["filePath"]) == copied_pdf
     assert copied_pdf.read_bytes() == b"%PDF-1.4\nboss-resume\n"
+
+
+def test_boss_email_sync_links_unique_candidate_conversation(tmp_path: Path) -> None:
+    source_db, source_uploads = _build_source_db(tmp_path)
+    target_db = tmp_path / "target.sqlite"
+    target_uploads = tmp_path / "target-uploads"
+    run_migrations(target_db)
+    target_job = infer_boss_email_job_type(
+        {"fileName": "mail_【AI_产品经理_杭州_20_-40K】Candidate.pdf"}
+    )
+    conversation_repository = ConversationRepository(target_db)
+    conversation_repository.save_session(
+        ConversationSession(
+            id="boss-session",
+            platform="boss",
+            owner="Boss Owner",
+            candidate_name="Candidate",
+            position=target_job,
+            platform_conversation_id="boss-conversation",
+        )
+    )
+    conversation_repository.upsert_messages(
+        "boss-session",
+        [ChatMessage(sender=MessageSender.CANDIDATE, text="resume accepted")],
+    )
+
+    report = run_sync(
+        BossEmailSyncConfig(
+            source_db=source_db,
+            source_upload_dir=source_uploads,
+            target_db=target_db,
+            target_upload_dir=target_uploads,
+            apply=True,
+            yes=True,
+        ),
+        now_iso="2026-07-13T08:00:00+00:00",
+    )
+
+    with sqlite3.connect(target_db) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM resumes WHERE id = ?", ("boss-resume",)
+        ).fetchone()
+
+    assert report["linkedUnique"] == 1
+    assert row["linked_session_id"] == "boss-session"
+    assert row["linked_platform"] == "boss"
+    assert row["linked_owner"] == "Boss Owner"
+    assert row["linked_platform_conversation_id"] == "boss-conversation"
 
 
 def test_boss_email_sync_skips_existing_target_resume(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.conversation.matching import resolve_unique_conversation
 from app.domain.conversation.models import ConversationMessageRecord, ConversationSession
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
@@ -25,9 +26,21 @@ class ResumeConversationService:
         limit: int = MAX_CONVERSATION_MESSAGES,
     ) -> dict[str, object]:
         session = self._linked_session(resume)
+        match_mode = "linked_session_id"
         if session is None:
-            reason = self._unmatched_reason(resume)
-            return _empty_payload(resume, reason)
+            if resume.linked_session_id:
+                return _empty_payload(resume, "conversation_not_linked")
+            match = resolve_unique_conversation(
+                self.repository,
+                candidate_name=(resume.parsed_name or resume.name or "").strip(),
+                position=(resume.job_type or resume.applied_position or "").strip(),
+                platform=(resume.linked_platform or resume.source_platform or "").strip(),
+                owner=(resume.linked_owner or resume.source_owner or "").strip(),
+            )
+            if match.session is None:
+                return _empty_payload(resume, match.reason)
+            session = match.session
+            match_mode = match.match_mode
 
         total = self.repository.count_messages(session.id)
         bounded_limit = max(1, min(int(limit), MAX_CONVERSATION_MESSAGES))
@@ -35,7 +48,7 @@ class ResumeConversationService:
         return {
             "resumeId": resume.id,
             "matched": True,
-            "matchMode": "linked_session_id",
+            "matchMode": match_mode,
             "reason": "",
             "candidate": _candidate_payload(resume),
             "conversation": _session_payload(session, total=total, limit=bounded_limit),
@@ -46,18 +59,6 @@ class ResumeConversationService:
         if not resume.linked_session_id:
             return None
         return self.repository.get_session(resume.linked_session_id)
-
-    def _unmatched_reason(self, resume: Resume) -> str:
-        if resume.linked_session_id:
-            return "conversation_not_linked"
-        name = (resume.parsed_name or resume.name or "").strip()
-        position = (resume.job_type or resume.applied_position or "").strip()
-        candidates = self.repository.search_by_candidate_name(
-            candidate_name=name,
-            position=position,
-        )
-        return "conversation_ambiguous" if len(candidates) > 1 else "conversation_not_linked"
-
 
 def _empty_payload(resume: Resume, reason: str) -> dict[str, object]:
     return {
