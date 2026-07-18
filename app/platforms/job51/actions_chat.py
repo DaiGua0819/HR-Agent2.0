@@ -768,8 +768,12 @@ async def _send_new_greeting_common_phrase(
 
 
 def _new_greeting_phrase_candidates(message: str) -> list[str]:
-    phrases = [" ".join(str(message or "").split())]
-    if "在线简历" in message and "附件简历" in message:
+    requested_phrase = " ".join(str(message or "").split())
+    phrases = [requested_phrase]
+    is_resume_request = "简历" in requested_phrase and any(
+        term in requested_phrase for term in ("发", "投", "看看")
+    )
+    if is_resume_request:
         phrases.append(_NEW_GREETING_RESUME_REQUEST_PHRASE)
     return list(dict.fromkeys(phrase for phrase in phrases if phrase))
 

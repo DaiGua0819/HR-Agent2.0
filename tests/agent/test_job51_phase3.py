@@ -18,6 +18,7 @@ from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.job51 import actions_resume_close
 from app.platforms.job51 import dom_scripts as job51_dom_scripts
 from app.platforms.job51.actions_chat import (
+    _new_greeting_phrase_candidates,
     _normalize_unread_rows,
     click_thread_by_state,
     find_next_thread,
@@ -1597,6 +1598,40 @@ def test_direct_resume_candidate_rejection_skips_without_requesting_resume() -> 
     assert page.resume_requests == 0
 
 
+def test_candidate_saying_position_is_not_suitable_is_rejected() -> None:
+    """“这个职位不太适合我”是明确拒绝，不得进入 screening_unclear。"""
+
+    state, page = run_case(
+        conversation(
+            "运营A",
+            [{"sender": "other", "text": "抱歉，这个职位不太适合我，谢谢您的赏识。"}],
+        )
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "candidate_rejected"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_our_unsuitable_text_does_not_reject_candidate() -> None:
+    """Only candidate messages may trigger the unsuitable-candidate decision."""
+
+    state, page = run_case(
+        conversation(
+            "运营A",
+            [
+                {"sender": "me", "text": "这个职位可能不太合适"},
+                {"sender": "other", "text": "您好，我对岗位很感兴趣"},
+            ],
+        )
+    )
+
+    assert state["stage"] != "candidate_rejected"
+    assert state["next_action"] == "request_resume"
+    assert page.resume_requests == 1
+
+
 def test_ai_basic_rejects_single_rest_without_downloading_existing_attachment() -> None:
     """AI 基础条件拒绝要先跳过，不能因页面已有附件简历而下载。"""
 
@@ -2021,6 +2056,15 @@ def test_job51_resume_cleanup_scripts_do_not_treat_normal_popovers_as_overlays()
     assert "[class*='popover']" not in actions_resume_close.CLOSE_GENERIC_BLOCKERS_JS
 
 
+def test_job51_online_resume_close_targets_visible_preview_close_control() -> None:
+    """The online preview must close via its own `.con-close`, not page-wide text."""
+
+    script = actions_resume_close.CLOSE_ONLINE_RESUME_JS
+    assert ".con-close" in script
+    assert "root.querySelectorAll" in script
+    assert '"button, a, [role=\'button\'], i, svg, use, span, div"' not in script
+
+
 def test_job51_cleanup_resume_overlays_reports_remaining_overlay() -> None:
     """If a resume overlay cannot be closed, processing must see it in diagnostics."""
 
@@ -2289,6 +2333,15 @@ def test_job51_runner_uses_single_candidate_common_phrase_in_new_greeting_view()
     assert page.sent_messages == [common_phrase]
     assert state["sent_messages"] == [common_phrase]
     assert page.new_greeting_selection_cleared is True
+
+
+def test_job51_new_greeting_direct_resume_prompt_allows_existing_common_phrase() -> None:
+    """Direct resume prompts may use the account's equivalent safe common phrase."""
+
+    assert _new_greeting_phrase_candidates("你好，方便发一份简历过来吗") == [
+        "你好，方便发一份简历过来吗",
+        "我看不到您的详细信息，方便投一份简历吗？",
+    ]
 
 
 def test_job51_online_preview_fallback_does_not_escape_to_another_candidate() -> None:

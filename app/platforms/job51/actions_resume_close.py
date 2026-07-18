@@ -23,50 +23,32 @@ CLOSE_ONLINE_RESUME_JS = r"""
     return style.display !== "none" && style.visibility !== "hidden" &&
       rect.width > 0 && rect.height > 0;
   };
-  const clickable = (el) => {
-    let node = el;
-    for (let depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
-      if (!visible(node)) continue;
-      const tag = node.tagName ? node.tagName.toLowerCase() : "";
-      const role = attr(node, "role");
-      const cursor = getComputedStyle(node).cursor || "";
-      if (tag === "button" || tag === "a" || role === "button" || cursor === "pointer") {
-        return node;
-      }
-    }
-    return el;
-  };
-  const looksLikeResume = Array.from(document.querySelectorAll(
-    "#IMResumePrint, #sensor_imresume_download"
-  )).some(visible);
-  if (!looksLikeResume) {
+  const roots = Array.from(document.querySelectorAll("#IMResumePrint")).filter(visible);
+  const sensor = Array.from(document.querySelectorAll("#sensor_imresume_download"))
+    .find(visible);
+  if (!roots.length && !sensor) {
     return { closed: false, reason: "not_online_resume_view" };
   }
-  const nodes = Array.from(document.querySelectorAll(
-    "#sensor_imresume_close, .resume-close, .imresume-close, .container-close, " +
-    ".el-dialog__headerbtn, .el-icon-close, [title='关闭'], [aria-label='关闭'], " +
-    "[aria-label='close'], button, a, [role='button'], i, svg, use, span, div"
-  )).filter(visible).map((el) => {
-    const target = clickable(el);
-    const rect = target.getBoundingClientRect();
-    const label = [
-      text(target), attr(target, "id"), attr(target, "class"), attr(target, "title"),
-      attr(target, "aria-label"), attr(el, "class"), attr(el, "xlink:href")
-    ].join(" ");
-    return { el: target, rect, label };
-  }).filter((item, index, arr) => {
-    return arr.findIndex((other) => other.el === item.el) === index;
-  });
-  const semantic = nodes.find((item) => {
-    return /关闭|close|el-icon-close|container-close|imresume-close|resume-close/i
-      .test(item.label);
-  });
-  const topRight = nodes.filter((item) => {
-    const r = item.rect;
-    return r.top >= 0 && r.top < 180 && r.right > window.innerWidth - 220 &&
-      r.width >= 10 && r.width <= 90 && r.height >= 10 && r.height <= 90;
-  }).sort((a, b) => b.rect.right - a.rect.right || a.rect.top - b.rect.top);
-  const target = semantic ? semantic.el : (topRight[0] && topRight[0].el);
+  const root = roots[0] || null;
+  const sensorScope = !root && sensor
+    ? sensor.closest(".pop, .con, [class*='resume'], [class*='Resume']")
+    : null;
+  const closeSelector = [
+    ".con-close",
+    "#sensor_imresume_close",
+    ".resume-close",
+    ".imresume-close",
+    ".container-close",
+    ".el-dialog__headerbtn",
+    ".el-icon-close",
+    "[title='关闭']",
+    "[aria-label='关闭']",
+    "[aria-label='close']",
+  ].join(", ");
+  const controls = root
+    ? Array.from(root.querySelectorAll(closeSelector))
+    : (sensorScope ? Array.from(sensorScope.querySelectorAll(closeSelector)) : []);
+  const target = controls.find(visible);
   if (!target) {
     return { closed: false, reason: "online_resume_close_not_found" };
   }
@@ -75,7 +57,7 @@ CLOSE_ONLINE_RESUME_JS = r"""
     attr(target, "aria-label")
   ].join(" ").replace(/\s+/g, " ").trim();
   target.click();
-  return { closed: true, label, source: semantic ? "semantic_close" : "top_right_close" };
+  return { closed: true, label, source: "preview_explicit_close" };
 }
 """
 

@@ -242,8 +242,24 @@ INSPECT_RESUME_REQUEST_STATE_JS = r"""
   const itemTexts = messageItems.map((node) => visibleText(node)).join("\n");
   const chatText = [messageText, itemTexts].join("\n");
   const hasFileName = /\.(pdf|doc|docx|wps|rtf)(\s|$|[?）)\]])/i.test(chatText);
-  const pendingResumeConsent =
+  const consentPrompt =
     /(?:对方|牛人|候选人).{0,12}(?:想|申请|请求).{0,12}(?:发送|发).{0,12}(?:附件)?简历.{0,12}(?:是否同意|同意)/.test(chatText);
+  const compactText = (node) => visibleText(node).replace(/\s+/g, "");
+  const consentActionable = Array.from(
+    document.querySelectorAll("span.card-btn, a.btn, button, [role='button'], .btn")
+  ).some((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const enabled =
+      !node.classList.contains("disabled") &&
+      !node.hasAttribute("disabled") &&
+      node.getAttribute("aria-disabled") !== "true" &&
+      style.pointerEvents !== "none";
+    return compactText(node) === "同意" && enabled &&
+      style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  });
+  const pendingResumeConsent = Boolean(consentPrompt && consentActionable);
   const hasResumeCard =
     !pendingResumeConsent &&
     /(?:已发送|发送|上传|收到|预览).{0,12}(?:简历|附件)|(?:简历|附件).{0,12}(?:已发送|预览|下载)/.test(chatText);
@@ -252,7 +268,7 @@ INSPECT_RESUME_REQUEST_STATE_JS = r"""
   return {
     hasResumeAttachment: Boolean(hasFileName || hasResumeCard),
     alreadyRequested: Boolean(alreadyRequested),
-    pendingResumeConsent: Boolean(pendingResumeConsent),
+    pendingResumeConsent: Boolean(consentPrompt && consentActionable),
     summary: chatText.slice(-500),
     source: "boss_chat_message_dom",
   };

@@ -762,6 +762,8 @@ def _candidate_rejected_conversation(text: str) -> bool:
     reject_terms = (
         "职位不太合适",
         "岗位不太合适",
+        "不太合适",
+        "不太适合",
         "职位不合适",
         "岗位不合适",
         "不太匹配",

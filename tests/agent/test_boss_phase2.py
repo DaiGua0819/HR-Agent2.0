@@ -11,13 +11,19 @@ from pathlib import Path
 from app.agent.graph import build_recruit_graph
 from app.agent.judgement import judge_candidate_reply
 from app.agent.proactive.thresholds import evaluate_proactive_threshold
-from app.agent.rules import find_knowledge_answer, find_knowledge_answers, load_chat_rules
+from app.agent.rules import (
+    find_knowledge_answer,
+    find_knowledge_answers,
+    load_chat_rules,
+    looks_like_question,
+)
 from app.agent.runner import ConversationRunner
 from app.agent.screening import analyze_position_screening
 from app.browser.fake_page import FakeElement, FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.boss import actions as boss_actions
+from app.platforms.boss import dom_scripts as boss_dom_scripts
 from app.platforms.boss.adapter import BossAdapter
 from app.platforms.types import ResumeRequestState
 from app.platforms.zhilian.adapter import ZhilianAdapter
@@ -556,6 +562,16 @@ def test_ai_basic_acceptance_with_interview_question_answers_then_requests_resum
     assert page.resume_requests == 1
 
 
+def test_loaded_rules_use_qualified_online_interview_answer() -> None:
+    answer = find_knowledge_answer(
+        "可以线上面试吗",
+        load_chat_rules(),
+        position="AI应用开发实习生",
+    )
+
+    assert answer == "面试基本都是线上，公司膨润土应用技术和销售岗位终面需要到面"
+
+
 def test_ai_basic_acceptance_with_resume_offer_question_requests_resume() -> None:
     rules = load_chat_rules()
     phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
@@ -630,6 +646,11 @@ def test_screening_unknown_question_asks_configured_question() -> None:
 
     assert state["next_action"] == "ask_screening"
     assert page.sent_messages == ["你好，方便问下你之前做过化工原料外贸销售吗"]
+
+
+def test_boss_rhetorical_hr_attack_is_not_a_business_question() -> None:
+    assert looks_like_question("真不敢想你这个人事是怎么当上的") is False
+    assert looks_like_question("这个岗位怎么安排面试") is True
 
 
 def test_specific_question_pattern_wins_over_position_boost() -> None:
@@ -979,6 +1000,61 @@ def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     assert page.resume_consent_clicked is True
     assert page.resume_button_clicked is False
     assert page.dom_click_scripts_called == []
+
+
+def test_boss_resume_state_requires_actionable_consent_button() -> None:
+    script = boss_dom_scripts.INSPECT_RESUME_REQUEST_STATE_JS
+
+    assert "consentActionable" in script
+    assert 'classList.contains("disabled")' in script
+    assert 'pointerEvents !== "none"' in script
+    assert "pendingResumeConsent: Boolean(consentPrompt && consentActionable)" in script
+
+
+def test_boss_resume_consent_rect_excludes_disabled_button() -> None:
+    script = boss_actions.actions_resume._BOSS_RESUME_CONSENT_RECT_JS
+
+    assert 'classList.contains("disabled")' in script
+    assert 'pointerEvents !== "none"' in script
+
+
+def test_boss_resume_consent_preserves_failed_mouse_click_diagnostics(monkeypatch) -> None:
+    async def fake_safe_eval(page, script, arg=None):
+        _ = page, script, arg
+        return {
+            "found": True,
+            "source": "boss_resume_consent_rect",
+            "x": 826.0,
+            "y": 98.0,
+            "width": 111.0,
+            "height": 34.0,
+        }
+
+    async def fake_mouse_click(page, rect, **kwargs):
+        _ = page, rect, kwargs
+        return {
+            "ok": False,
+            "reason": "resume_consent_still_pending",
+            "target": {"x": 881.5, "y": 115.0},
+        }
+
+    async def fake_find_button(page, selector, expected_text):
+        _ = page, selector, expected_text
+        return None
+
+    monkeypatch.setattr(boss_actions.actions_resume, "_safe_eval_dict", fake_safe_eval)
+    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
+    monkeypatch.setattr(
+        boss_actions.actions_resume,
+        "_find_button_by_text",
+        fake_find_button,
+    )
+
+    result = asyncio.run(boss_actions.actions_resume._click_resume_consent(FakePage()))
+
+    assert result["clicked"] is False
+    assert result["reason"] == "resume_consent_still_pending"
+    assert result["humanizedClick"]["target"] == {"x": 881.5, "y": 115.0}
 
 
 def test_boss_resume_consent_accepts_attachment_state_change_when_click_is_unverified(

@@ -177,15 +177,16 @@ async def _validate_stale_resume_request_cancel(
 
 async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
     rect = await _safe_eval_dict(page, _BOSS_RESUME_CONSENT_RECT_JS)
+    rect_click: dict[str, object] = {}
     if rect.get("found"):
-        result = await boss_click_rect(
+        rect_click = await boss_click_rect(
             page,
             rect,
             label="BOSS同意接收简历",
             verify=lambda: _resume_consent_accepted(page),
         )
-        if result.get("ok"):
-            return {"clicked": True, "humanizedClick": result, "rect": rect}
+        if rect_click.get("ok"):
+            return {"clicked": True, "humanizedClick": rect_click, "rect": rect}
     consent = await _find_button_by_text(
         page,
         selectors.REQUEST_RESUME_BUTTON,
@@ -194,8 +195,11 @@ async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
     if consent is None:
         return {
             "clicked": False,
-            "reason": rect.get("reason") or "resume_consent_button_not_found",
+            "reason": rect_click.get("reason")
+            or rect.get("reason")
+            or "resume_consent_button_not_found",
             "rect": rect,
+            "humanizedClick": rect_click,
         }
     result = await boss_click_element(
         page,
@@ -502,6 +506,14 @@ _BOSS_RESUME_CONSENT_RECT_JS = r"""
     return style.display !== "none" && style.visibility !== "hidden" &&
       rect.width > 0 && rect.height > 0;
   };
+  const actionable = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    return !el.classList.contains("disabled") &&
+      !el.hasAttribute("disabled") &&
+      el.getAttribute("aria-disabled") !== "true" &&
+      style.pointerEvents !== "none";
+  };
   const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
   const containers = Array.from(document.querySelectorAll(
     ".message-item, .conversation-message, .chat-message-list, .custom-card, " +
@@ -515,7 +527,7 @@ _BOSS_RESUME_CONSENT_RECT_JS = r"""
     )));
   }
   const matches = candidates
-    .filter((el) => visible(el) && text(el) === "同意")
+    .filter((el) => visible(el) && actionable(el) && text(el) === "同意")
     .sort((a, b) => {
       const priority = (el) => el.matches("span.card-btn") ? 0 : el.matches("a.btn") ? 1 : 2;
       return priority(a) - priority(b);

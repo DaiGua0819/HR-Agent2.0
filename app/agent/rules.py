@@ -346,6 +346,13 @@ def looks_like_question(text: str) -> bool:
     """识别候选人是否在提问。"""
 
     value = text.strip()
+    compact = "".join(value.lower().split())
+    if (
+        "真不敢想" in compact
+        and "怎么当" in compact
+        and any(role in compact for role in ("人事", "hr"))
+    ):
+        return False
     return bool(
         value and ("?" in value or "？" in value or any(k in value for k in QUESTION_TERMS))
     )
