@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import zipfile
 
@@ -1155,6 +1156,19 @@ def test_job51_identity_click_failure_reports_visible_row_diagnostics() -> None:
     assert "visibleRows" in script
     assert "positionConflicts" in script
     assert "rowSample" in script
+
+
+def test_job51_identity_click_scrolls_only_the_conversation_list_when_needed() -> None:
+    script = job51_dom_scripts.CLICK_THREAD_BY_IDENTITY_JS
+    fallback_source = inspect.getsource(click_thread_by_state)
+
+    assert "scrollIntoView" not in script
+    assert "scrollIntoView" not in fallback_source
+    assert "#conversation-list" in script
+    assert "list.scrollTop" in script
+    assert "rowRect.top < listRect.top" in script
+    assert "rowRect.bottom > listRect.bottom" in script
+    assert "list.scrollTop" in fallback_source
 
 
 def test_job51_once_runner_fallback_passes_expected_identity(monkeypatch) -> None:
@@ -2557,14 +2571,26 @@ def test_job51_attachment_preview_retries_dom_fallback_when_legacy_click_not_ver
     assert page.top_right_clicked is True
 
 
-def test_job51_attachment_dom_script_prefers_message_card_before_header_annex() -> None:
-    """真实页右上角附件可能卡加载，DOM fallback 应先点聊天卡片。"""
+def test_job51_attachment_dom_script_prefers_header_and_preserves_chat_scroll() -> None:
+    """DOM fallback 优先固定头部入口，消息卡片滚动必须可恢复。"""
 
     script = job51_dom_scripts.CLICK_ATTACHMENT_RESUME_JS
 
     assert "messageCandidates" in script
     assert "headerCandidates" in script
-    assert script.index("messageCandidates") < script.index("headerCandidates")
+    assert "headerCandidates[0] || messageCandidates[0]" in script
+    assert "scrollIntoView" not in script
+    assert "__job51ResumeChatScrollRestore" in script
+    assert "container.scrollTop" in script
+
+
+def test_job51_cleanup_restores_saved_chat_scroll() -> None:
+    page = ResumeScrollRestorePage()
+
+    result = asyncio.run(cleanup_resume_overlays(page))  # type: ignore[arg-type]
+
+    assert page.restore_calls == 1
+    assert result["scrollRestore"]["restored"] is True
 
 
 def test_job51_attachment_failure_falls_back_to_online_resume_download() -> None:
@@ -3159,6 +3185,24 @@ class GuardedProcessingClickPage(GuardedPreflightClickPage):
             self.guarded_dom_clicks += 1
             return {"clicked": True, "source": "fake_guarded_dom_click"}
         return await super().eval_js(script, arg)
+
+
+class ResumeScrollRestorePage:
+    def __init__(self) -> None:
+        self.restore_calls = 0
+
+    async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
+        _ = selector
+        return []
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        _ = arg
+        if script == actions_resume_close.OVERLAY_STATE_JS:
+            return {"remaining": []}
+        if "job51_restore_resume_chat_scroll" in script:
+            self.restore_calls += 1
+            return {"restored": True, "source": "saved_chat_scroll"}
+        return {"closed": False, "reason": "close_not_found"}
 
 
 class StubbornResumeOverlayPage:

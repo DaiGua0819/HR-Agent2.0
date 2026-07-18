@@ -293,7 +293,26 @@ async def click_thread_by_state(
           }) || rows.find((row) => expected.label && compact(text(row)) === compact(expected.label))
             || (expected.allowIndexFallback ? rows[Number(expected.index || 0)] : null);
           if (!target) return { clicked: false, reason: "thread_row_not_found" };
-          target.scrollIntoView({ block: "center", inline: "nearest" });
+          const list = target.closest("#conversation-list") ||
+            document.querySelector("#conversation-list");
+          let scroll = { scrolled: false };
+          if (list) {
+            const rowRect = target.getBoundingClientRect();
+            const listRect = list.getBoundingClientRect();
+            const padding = 8;
+            let delta = 0;
+            if (rowRect.top < listRect.top + padding) {
+              delta = rowRect.top - listRect.top - padding;
+            } else if (rowRect.bottom > listRect.bottom - padding) {
+              delta = rowRect.bottom - listRect.bottom + padding;
+            }
+            if (delta) {
+              const before = Number(list.scrollTop || 0);
+              list.scrollTop = before + delta;
+              list.dispatchEvent(new Event("scroll", { bubbles: true }));
+              scroll = { scrolled: true, before, after: Number(list.scrollTop || 0) };
+            }
+          }
           const clickTarget = target.querySelector(".conversation-item") ||
             target.querySelector(".item-content") || target.querySelector(".info") || target;
           for (const type of ["mouseover", "mousemove", "mousedown", "mouseup", "click"]) {
@@ -303,7 +322,7 @@ async def click_thread_by_state(
               view: window,
             }));
           }
-          return { clicked: true, source: "dom_click", label: text(target) };
+          return { clicked: true, source: "dom_click", label: text(target), scroll };
         }
         """,
         payload,

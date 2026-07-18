@@ -474,7 +474,26 @@ CLICK_THREAD_BY_IDENTITY_JS = r"""
       })),
     };
   }
-  target.row.scrollIntoView({ block: "center", inline: "nearest" });
+  const list = target.row.closest("#conversation-list") ||
+    document.querySelector("#conversation-list");
+  let scroll = { scrolled: false };
+  if (list) {
+    const rowRect = target.row.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    const padding = 8;
+    let delta = 0;
+    if (rowRect.top < listRect.top + padding) {
+      delta = rowRect.top - listRect.top - padding;
+    } else if (rowRect.bottom > listRect.bottom - padding) {
+      delta = rowRect.bottom - listRect.bottom + padding;
+    }
+    if (delta) {
+      const before = Number(list.scrollTop || 0);
+      list.scrollTop = before + delta;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+      scroll = { scrolled: true, before, after: Number(list.scrollTop || 0) };
+    }
+  }
   const clickTarget = target.row.querySelector(".conversation-item") ||
     target.row.querySelector(".item-content") || target.row.querySelector(".info") || target.row;
   for (const type of ["mouseover", "mousemove", "mousedown", "mouseup", "click"]) {
@@ -493,6 +512,7 @@ CLICK_THREAD_BY_IDENTITY_JS = r"""
     name: target.name,
     position: target.position,
     latestMessage: target.latestMessage,
+    scroll,
   };
 }
 """
@@ -1237,15 +1257,47 @@ CLICK_ATTACHMENT_RESUME_JS = r"""
   const headerCandidates = candidates.filter((item) => {
     return item.closest(".chat-user-operate, .chat-new-header");
   }).filter(matchesAttachment);
-  const target = messageCandidates[0] || headerCandidates[0] ||
+  const target = headerCandidates[0] || messageCandidates[0] ||
     candidates.find(matchesAttachment) || candidates[0];
   if (!target) return { clicked: false, reason: "attachment_button_not_found" };
-  target.scrollIntoView({ block: "center", inline: "nearest" });
+  let scroll = { scrolled: false };
+  if (!target.closest(".chat-user-operate, .chat-new-header")) {
+    let container = target.parentElement;
+    while (container && container !== document.body) {
+      const style = getComputedStyle(container);
+      if (/auto|scroll/.test(style.overflowY || "") &&
+          container.scrollHeight > container.clientHeight) {
+        break;
+      }
+      container = container.parentElement;
+    }
+    if (container && container !== document.body) {
+      const targetRect = target.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const before = Number(container.scrollTop || 0);
+      let delta = 0;
+      if (targetRect.top < containerRect.top + 8) {
+        delta = targetRect.top - containerRect.top - 8;
+      } else if (targetRect.bottom > containerRect.bottom - 8) {
+        delta = targetRect.bottom - containerRect.bottom + 8;
+      }
+      if (delta) {
+        window.__job51ResumeChatScrollRestore = { container, scrollTop: before };
+        container.scrollTop = before + delta;
+        container.dispatchEvent(new Event("scroll", { bubbles: true }));
+        scroll = {
+          scrolled: true,
+          before,
+          after: Number(container.scrollTop || 0),
+        };
+      }
+    }
+  }
   target.click();
   const source = target.closest(".chat-user-operate, .chat-new-header")
     ? "top_right_attachment"
     : "dom_attachment_card";
-  return { clicked: true, label: text(target), source };
+  return { clicked: true, label: text(target), source, scroll };
 }
 """
 

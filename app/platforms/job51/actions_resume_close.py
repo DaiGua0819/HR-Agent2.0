@@ -191,6 +191,31 @@ OVERLAY_STATE_JS = r"""
 """
 
 
+RESTORE_RESUME_CHAT_SCROLL_JS = r"""
+() => {
+  /* job51_restore_resume_chat_scroll */
+  const state = window.__job51ResumeChatScrollRestore;
+  window.__job51ResumeChatScrollRestore = null;
+  if (!state || !state.container) {
+    return { restored: false, reason: "saved_chat_scroll_missing" };
+  }
+  const container = state.container;
+  if (!document.contains(container)) {
+    return { restored: false, reason: "saved_chat_container_detached" };
+  }
+  const before = Number(container.scrollTop || 0);
+  container.scrollTop = Number(state.scrollTop || 0);
+  container.dispatchEvent(new Event("scroll", { bubbles: true }));
+  return {
+    restored: true,
+    source: "saved_chat_scroll",
+    before,
+    after: Number(container.scrollTop || 0),
+  };
+}
+"""
+
+
 async def close_resume_preview(page: BrowserPage) -> dict[str, object]:
     """关闭附件/在线简历预览层，动作后至少等待 1 秒。"""
 
@@ -269,7 +294,18 @@ async def cleanup_resume_overlays(page: BrowserPage) -> dict[str, object]:
         actions.append({"name": "overlay_state", "attempt": attempt, **state})
         if not remaining:
             break
-    return {"closed": closed, "actions": actions, "remaining": remaining}
+    scroll_restore = (
+        await _restore_resume_chat_scroll(page)
+        if not remaining
+        else {"restored": False, "reason": "resume_overlay_still_visible"}
+    )
+    actions.append({"name": "chat_scroll_restore", **scroll_restore})
+    return {
+        "closed": closed,
+        "actions": actions,
+        "remaining": remaining,
+        "scrollRestore": scroll_restore,
+    }
 
 
 async def resume_overlay_state(page: BrowserPage) -> dict[str, object]:
@@ -319,6 +355,18 @@ async def _overlay_state(page: BrowserPage) -> dict[str, object]:
     except Exception as error:
         return {"remaining": [], "error": str(error)}
     return result if isinstance(result, dict) else {"remaining": []}
+
+
+async def _restore_resume_chat_scroll(page: BrowserPage) -> dict[str, object]:
+    try:
+        result = await page.eval_js(RESTORE_RESUME_CHAT_SCROLL_JS)
+    except Exception as error:
+        return {"restored": False, "reason": "chat_scroll_restore_error", "error": str(error)}
+    return (
+        result
+        if isinstance(result, dict)
+        else {"restored": False, "reason": "chat_scroll_restore_bad_result"}
+    )
 
 
 async def _wait_overlay_transition(
