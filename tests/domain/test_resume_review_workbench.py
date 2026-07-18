@@ -36,6 +36,14 @@ def test_review_migration_creates_tables(tmp_path: Path) -> None:
 
     assert {"decision_at", "pushed_at"} <= columns
 
+    with connect(database) as connection:
+        assignment_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(resume_assignments)")
+        }
+
+    assert "completion_action" in assignment_columns
+
 
 def test_review_migration_backfills_action_times_from_events_and_assignments(
     tmp_path: Path,
@@ -71,7 +79,7 @@ def test_review_migration_backfills_action_times_from_events_and_assignments(
               id, resume_id, from_user_id, assigned_to_user_id, status,
               source_decision_id, note, created_at, updated_at
             ) VALUES (
-              'assignment-1', 'resume-1', 'member-1', 'shared-admin-inbox', 'pending',
+              'assignment-1', 'resume-1', 'member-1', 'shared-admin-inbox', 'completed',
               'state-1', '', '2026-07-12T00:00:00+00:00',
               '2026-07-12T00:00:00+00:00'
             )
@@ -85,9 +93,13 @@ def test_review_migration_backfills_action_times_from_events_and_assignments(
         row = connection.execute(
             "SELECT decision_at, pushed_at FROM resume_review_states WHERE id = 'state-1'"
         ).fetchone()
+        assignment = connection.execute(
+            "SELECT completion_action FROM resume_assignments WHERE id = 'assignment-1'"
+        ).fetchone()
 
     assert row["decision_at"] == "2026-07-11T00:00:00+00:00"
     assert row["pushed_at"] == "2026-07-12T00:00:00+00:00"
+    assert assignment["completion_action"] == "review_decision"
 
     with connect(database) as connection:
         tables = {
@@ -249,6 +261,7 @@ def test_shared_admin_queue_is_completed_once_by_any_admin(tmp_path: Path) -> No
     assert completed["completedAssignment"]["status"] == "completed"
     assert completed["completedAssignment"]["completedByUserId"] == "feishu:admin-a"
     assert completed["completedAssignment"]["completedByUserName"] == "管理员甲"
+    assert completed["completedAssignment"]["completionAction"] == "review_decision"
     assert service.shared_admin_queue() == []
 
     duplicate_completion = service.set_decision(
@@ -259,6 +272,83 @@ def test_shared_admin_queue_is_completed_once_by_any_admin(tmp_path: Path) -> No
         is_admin=True,
     )
     assert duplicate_completion["completedAssignment"] is None
+
+
+def test_successful_interview_invite_moves_pending_task_to_processed(
+    tmp_path: Path,
+) -> None:
+    """A live interview action should complete the shared task with an audit reason."""
+
+    resume_repo, service = _service(tmp_path)
+    _save_resume(resume_repo)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+        decision="suitable",
+    )
+    service.push_to_admin(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+    )
+
+    completed = service.complete_interview_invite(
+        resume_id="resume-1",
+        user_id="feishu:admin-a",
+        user_name="管理员甲",
+    )
+
+    assert completed["status"] == "completed"
+    assert completed["completionAction"] == "interview_invited"
+    assert completed["completedByUserId"] == "feishu:admin-a"
+    assert completed["completedByUserName"] == "管理员甲"
+    assert completed["completedAt"]
+    assert service.shared_admin_queue() == []
+    processed = service.shared_admin_queue(status="completed")
+    assert len(processed) == 1
+    assert processed[0]["assignment"]["completionAction"] == "interview_invited"
+
+
+def test_admin_queue_endpoint_can_page_completed_interview_tasks(
+    tmp_path: Path,
+) -> None:
+    """The processed tab should read completed assignments from the queue API."""
+
+    app, service = _app_with_review_service(tmp_path)
+    service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+        decision="suitable",
+    )
+    service.push_to_admin(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+    )
+    service.complete_interview_invite(
+        resume_id="resume-1",
+        user_id="feishu:admin-a",
+        user_name="管理员甲",
+    )
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        pending = client.get("/api/resume-review/queue")
+        processed = client.get(
+            "/api/resume-review/queue",
+            params={"status": "completed", "page": 1, "page_size": 10},
+        )
+
+    assert pending.status_code == 200
+    assert pending.json()["total"] == 0
+    assert processed.status_code == 200
+    assert processed.json()["total"] == 1
+    assignment = processed.json()["items"][0]["assignment"]
+    assert assignment["completionAction"] == "interview_invited"
+    assert assignment["completedByUserName"] == "管理员甲"
+    assert assignment["completedAt"]
 
 
 def test_reviewer_decisions_include_persisted_names_and_historical_fallback(tmp_path: Path) -> None:

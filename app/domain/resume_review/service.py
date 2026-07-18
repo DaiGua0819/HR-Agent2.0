@@ -99,6 +99,7 @@ class ResumeReviewService:
                 shared_inbox_user_id=self.shared_admin_inbox,
                 completed_by_user_id=user_id,
                 completed_by_user_name=user_name,
+                completion_action="review_decision",
             )
             if is_admin
             else None
@@ -111,6 +112,24 @@ class ResumeReviewService:
             else None,
             "eventId": event_id,
         }
+
+    def complete_interview_invite(
+        self,
+        *,
+        resume_id: str,
+        user_id: str,
+        user_name: str = "",
+    ) -> dict[str, object]:
+        """Complete a shared task after a verified live interview action."""
+
+        assignment = self.repository.complete_shared_assignment(
+            resume_id=resume_id,
+            shared_inbox_user_id=self.shared_admin_inbox,
+            completed_by_user_id=user_id,
+            completed_by_user_name=user_name,
+            completion_action="interview_invited",
+        )
+        return _assignment_payload(assignment)
 
     def push_to_admin(
         self,
@@ -263,10 +282,17 @@ class ResumeReviewService:
 
         return self.reviewer_decisions_for_resumes(resume_ids)
 
-    def shared_admin_queue(self) -> list[dict[str, object]]:
-        """Return the one pending inbox shared by every administrator."""
+    def shared_admin_queue(
+        self,
+        *,
+        status: str = "pending",
+    ) -> list[dict[str, object]]:
+        """Return pending or completed tasks from the shared administrator inbox."""
 
-        assignments = self.repository.list_assignments(self.shared_admin_inbox)
+        assignments = self.repository.list_assignments(
+            self.shared_admin_inbox,
+            status=status,
+        )
         records = self.resume_repository.get_many(
             [assignment.resume_id for assignment in assignments]
         )
@@ -347,6 +373,7 @@ def _assignment_payload(assignment: ReviewAssignment | None) -> dict[str, object
         "fromUserId": assignment.from_user_id,
         "assignedToUserId": assignment.assigned_to_user_id,
         "status": assignment.status,
+        "completionAction": assignment.completion_action,
         "sourceDecisionId": assignment.source_decision_id,
         "note": assignment.note,
         "completedByUserId": assignment.completed_by_user_id,

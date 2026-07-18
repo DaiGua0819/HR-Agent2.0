@@ -13,6 +13,8 @@ const state = {
   jobType: "",
   resumeJobFacets: [],
   queueJobFacets: [],
+  processedJobFacets: [],
+  processedTotal: 0,
   queueSummaryLoaded: false,
   queueVersion: "",
   queueTotal: 0,
@@ -93,7 +95,7 @@ const SUMMARY_PANEL_DEFAULT_WIDTH = 276;
 const SUMMARY_PANEL_MIN_WIDTH = 180;
 const SUMMARY_PANEL_MAX_WIDTH = 460;
 const SUMMARY_PANEL_MIN_PREVIEW_WIDTH = 380;
-const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["needs_more_info", "待补充"], ["queue", "待我处理"]];
+const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["queue", "待我处理"], ["processed", "已处理"]];
 const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
 const INTERVIEW_STATUS_LABELS = {
   synced: "已同步",
@@ -460,7 +462,7 @@ const isMemberUser = () => (state.user?.roles || []).includes("member") && !(sta
 const isAdminUser = () => Boolean((state.user?.roles || []).some((role) => ["admin", "super_admin"].includes(role)));
 function visibleStatusTabs() {
   if (!isMemberUser()) return tabs;
-  return tabs.filter(([key]) => !["undecided", "needs_more_info", "queue"].includes(key));
+  return tabs.filter(([key]) => !["undecided", "queue", "processed"].includes(key));
 }
 function visibleJobTypes() {
   const values = state.user?.resumeScope?.jobTypes || [];
@@ -737,6 +739,7 @@ function setView(view) {
 }
 function loadCurrentResumeCollection(options = {}) {
   if (state.tab === "queue") return loadQueue();
+  if (state.tab === "processed") return loadProcessed();
   return loadResumes(options);
 }
 async function loadUser() {
@@ -836,6 +839,7 @@ function buildTabs() {
       clearResumePrefetchCache();
       buildJobTabs();
       if (state.tab === "queue") return loadQueue();
+      if (state.tab === "processed") return loadProcessed();
       loadResumes({ fromFilter: true });
     };
   });
@@ -851,19 +855,21 @@ function buildJobTabs() {
     return;
   }
   const isQueue = state.tab === "queue";
-  const facets = isQueue ? state.queueJobFacets : state.resumeJobFacets;
-  const countsLoaded = !isQueue || state.queueSummaryLoaded;
+  const isProcessed = state.tab === "processed";
+  const isAssignmentCollection = isQueue || isProcessed;
+  const facets = isQueue ? state.queueJobFacets : isProcessed ? state.processedJobFacets : state.resumeJobFacets;
+  const countsLoaded = isProcessed || !isQueue || state.queueSummaryLoaded;
   const counts = new Map();
   (facets || []).forEach((item) => {
     const job = canonicalResumeJobType(item.jobType);
     if (!job) return;
     counts.set(job, Math.max(counts.get(job) || 0, Number(item.count || 0)));
   });
-  const allCount = isQueue
-    ? state.queueTotal
+  const allCount = isAssignmentCollection
+    ? (isProcessed ? state.processedTotal : state.queueTotal)
     : [...counts.values()].reduce((sum, count) => sum + Number(count || 0), 0);
   const countLabel = (count) => countsLoaded ? String(count || 0) : "...";
-  const allLabel = isQueue ? "待处理全部" : "全部简历";
+  const allLabel = isQueue ? "待处理全部" : isProcessed ? "已处理全部" : "全部简历";
   const buttons = [["", `${allLabel} (${countLabel(allCount)})`]].concat(
     jobs.map((job) => [job, `${displayResumeJobType(job)} (${countLabel(counts.get(canonicalResumeJobType(job)))})`]),
   );
@@ -876,6 +882,7 @@ function buildJobTabs() {
       $("filters").job_type.value = state.jobType;
       state.page = 1;
       if (state.tab === "queue") return loadQueue();
+      if (state.tab === "processed") return loadProcessed();
       loadResumes({ fromFilter: true, preferCache: true });
     };
   });
@@ -1144,6 +1151,7 @@ async function refreshCachedResumeList(cacheKey, requestSequence, fromFilter) {
 }
 async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
   if (state.tab === "queue") return loadQueue();
+  if (state.tab === "processed") return loadProcessed();
   buildTabs();
   const cacheKey = resumeListCacheKey(state.page);
   const cached = preferCache || fromFilter ? state.resumePageCache.get(cacheKey) : null;
@@ -1251,7 +1259,13 @@ async function refreshQueueSummary({ forceList = false } = {}) {
   }
 }
 async function loadQueue({ preserveSelection = false } = {}) {
-  state.tab = "queue";
+  return loadAssignmentCollection("pending", "queue", { preserveSelection });
+}
+async function loadProcessed({ preserveSelection = false } = {}) {
+  return loadAssignmentCollection("completed", "processed", { preserveSelection });
+}
+async function loadAssignmentCollection(status, tab, { preserveSelection = false } = {}) {
+  state.tab = tab;
   buildTabs();
   const requestSequence = (state.resumeListRequestSequence += 1);
   if (state.resumeListAbortController) {
@@ -1265,14 +1279,15 @@ async function loadQueue({ preserveSelection = false } = {}) {
       page: String(state.page || 1),
       page_size: String(state.pageSize || 10),
     });
+    params.set("status", status);
     if (state.jobType) params.set("job_type", state.jobType);
     const data = await api(`/api/resume-review/queue?${params}`, { signal: controller.signal });
-    if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
-    applySharedQueueData(data, { preserveSelection });
+    if (requestSequence !== state.resumeListRequestSequence || state.tab !== tab) return null;
+    applySharedQueueData(data, { preserveSelection, collection: tab });
     return data;
   } catch (error) {
     if (error?.name === "AbortError") return null;
-    if (requestSequence !== state.resumeListRequestSequence || state.tab !== "queue") return null;
+    if (requestSequence !== state.resumeListRequestSequence || state.tab !== tab) return null;
     if (!preserveSelection) {
       applySharedQueueData({
         items: [],
@@ -1280,33 +1295,39 @@ async function loadQueue({ preserveSelection = false } = {}) {
         page: 1,
         pageSize: state.pageSize || 10,
         pages: 0,
-        jobFacets: state.queueJobFacets,
+        jobFacets: tab === "processed" ? state.processedJobFacets : state.queueJobFacets,
         queueTotal: state.queueTotal,
-      });
-      $("queueList").innerHTML = `<div class="empty-inline">待处理队列读取失败，请稍后重试。</div>`;
+      }, { collection: tab });
+      $("queueList").innerHTML = `<div class="empty-inline">${tab === "processed" ? "已处理列表" : "待处理队列"}读取失败，请稍后重试。</div>`;
     }
-    state.queueVersion = "";
+    if (tab === "queue") state.queueVersion = "";
     console.debug("shared review queue failed", error);
     return null;
   } finally {
     if (state.resumeListAbortController === controller) state.resumeListAbortController = null;
   }
 }
-function applySharedQueueData(data, { preserveSelection = false } = {}) {
+function applySharedQueueData(data, { preserveSelection = false, collection = "queue" } = {}) {
   const items = data.items || [];
   state.resumes = items.map((item) => ({ ...item.resume, assignment: item.assignment })).filter(Boolean);
   state.total = Number(data.total || 0);
   state.page = Number(data.page || 1);
   state.pageSize = Number(data.pageSize || 10);
   state.pages = Number(data.pages || 0);
-  state.queueJobFacets = data.jobFacets || [];
-  const facetTotal = state.queueJobFacets.reduce(
+  const facets = data.jobFacets || [];
+  if (collection === "processed") state.processedJobFacets = facets;
+  else state.queueJobFacets = facets;
+  const facetTotal = facets.reduce(
     (sum, item) => sum + Number(item.count || 0),
     0,
   );
-  state.queueTotal = Number(data.queueTotal ?? facetTotal);
-  state.queueVersion = data.version || state.queueVersion;
-  state.queueSummaryLoaded = Boolean(data.version || state.queueSummaryLoaded);
+  if (collection === "queue") {
+    state.queueTotal = Number(data.queueTotal ?? facetTotal);
+    state.queueVersion = data.version || state.queueVersion;
+    state.queueSummaryLoaded = Boolean(data.version || state.queueSummaryLoaded);
+  } else {
+    state.processedTotal = Number(data.queueTotal ?? facetTotal);
+  }
   if (!preserveSelection && state.selectedId && !state.resumes.some((resume) => resume.id === state.selectedId)) {
     closeResumeConversation({ immediate: true });
     state.selectedId = "";
@@ -1314,7 +1335,7 @@ function applySharedQueueData(data, { preserveSelection = false } = {}) {
   }
   buildTabs();
   buildJobTabs();
-  renderQueueCountIndicators();
+  if (collection === "queue") renderQueueCountIndicators();
   renderRows();
   renderMiniList();
   renderPagination();
@@ -1353,7 +1374,8 @@ function renderMiniList() {
       const review = resume.reviewState || {};
       const readStatus = review.readStatus === "viewed" ? "viewed" : "unread";
       const readLabel = readStatus === "viewed" ? "已读" : "未读";
-      const decision = labelDecision(review.decision);
+      const completionAction = assignmentCompletionAction(resume);
+      const decision = completionAction === "interview_invited" ? "已约面试" : labelDecision(review.decision);
       const imported = resumeListCompactImportDate(resume);
       const major = resumeListMajor(resume) || "暂未提取到";
       const memberDecisionBadge = memberDecisionBadgeMarkup(resume);
@@ -1364,7 +1386,7 @@ function renderMiniList() {
             <strong>${escapeHtml(resumeName(resume))}</strong>
             <span class="candidate-card__score ${scoreLabel === "--" ? "candidate-card__score--empty" : ""}" title="简历评分">${escapeHtml(scoreLabel)}</span>
             <span class="candidate-card__heading-status">
-              <span class="${tsTagClass(review.decision)}">${escapeHtml(decision)}</span>
+              ${assignmentStatusBadgeMarkup(resume, review, decision)}
               ${memberDecisionBadge}
             </span>
           </span>
@@ -1395,6 +1417,40 @@ function renderMiniList() {
   bindReviewerDecisionPopovers();
   bindDockEffect($("miniList"), ".candidate-card", { maxScale: 1.08, radius: 120, marginFactor: 8, vertical: true });
   requestAnimationFrame(scrollSelectedCandidateIntoView);
+}
+function resumeAssignment(resume) {
+  return resume?.assignment || {};
+}
+function assignmentCompletionAction(resume) {
+  const assignment = resumeAssignment(resume);
+  return assignment.completionAction || assignment.completion_action || "";
+}
+function assignmentCompletedAt(resume) {
+  const assignment = resumeAssignment(resume);
+  return assignment.completedAt || assignment.completed_at || "";
+}
+function assignmentCompletedByName(resume) {
+  const assignment = resumeAssignment(resume);
+  const name = assignment.completedByUserName || assignment.completed_by_user_name;
+  if (name) return String(name);
+  const userId = String(assignment.completedByUserId || assignment.completed_by_user_id || "");
+  return `历史账号（${userId.slice(-4) || "未知"}）`;
+}
+function assignmentStatusBadgeMarkup(resume, review, label) {
+  const completionAction = assignmentCompletionAction(resume);
+  if (completionAction !== "interview_invited") {
+    return `<span class="${tsTagClass(review.decision)}">${escapeHtml(label)}</span>`;
+  }
+  return `<span class="${tsTagClass("suitable")} processed-assignment-badge" tabindex="0" data-processed-resume-id="${escapeHtml(resume.id)}">已约面试</span>`;
+}
+function processedAssignmentPopoverMarkup(resume) {
+  const time = reviewerDecisionDate(assignmentCompletedAt(resume), true);
+  return `
+    <section class="reviewer-decision-popover__group">
+      <strong>已约面试</strong>
+      <span>${escapeHtml(assignmentCompletedByName(resume))}${time ? ` · ${escapeHtml(time)}` : ""}</span>
+    </section>
+  `;
 }
 function reviewerDecisions(resume) {
   const decisions = resume?.reviewerDecisions || resume?.reviewer_decisions || resume?.memberReviewStates || resume?.member_review_states || [];
@@ -1464,12 +1520,16 @@ function reviewerDecisionResume(resumeId) {
 }
 function showReviewerDecisionPopover(badge) {
   const root = $("reviewerDecisionPopoverRoot");
-  const resume = reviewerDecisionResume(badge?.dataset?.reviewerResumeId || "");
+  const resume = reviewerDecisionResume(
+    badge?.dataset?.reviewerResumeId || badge?.dataset?.processedResumeId || "",
+  );
   if (!root || !badge || !resume) return;
   if (reviewerDecisionPopoverHideTimer) clearTimeout(reviewerDecisionPopoverHideTimer);
   reviewerDecisionPopoverHideTimer = null;
   activeReviewerDecisionBadge = badge;
-  root.innerHTML = reviewerDecisionPopoverMarkup(resume);
+  root.innerHTML = badge.dataset.processedResumeId
+    ? processedAssignmentPopoverMarkup(resume)
+    : reviewerDecisionPopoverMarkup(resume);
   root.hidden = false;
   positionReviewerDecisionPopover();
 }
@@ -1501,7 +1561,7 @@ function scheduleReviewerDecisionPopoverHide() {
   reviewerDecisionPopoverHideTimer = setTimeout(hideReviewerDecisionPopover, 100);
 }
 function bindReviewerDecisionPopovers() {
-  document.querySelectorAll("[data-reviewer-resume-id]").forEach((badge) => {
+  document.querySelectorAll("[data-reviewer-resume-id], [data-processed-resume-id]").forEach((badge) => {
     badge.addEventListener("mouseenter", () => showReviewerDecisionPopover(badge));
     badge.addEventListener("mouseleave", scheduleReviewerDecisionPopoverHide);
     badge.addEventListener("focus", () => showReviewerDecisionPopover(badge));
@@ -1539,6 +1599,10 @@ function reviewerDecisionTimelineMarkup(resume) {
     timeline.unsuitable ? `<p>不合适时间：${escapeHtml(timeline.unsuitable)}</p>` : "",
     timeline.pushed ? `<p>推送时间：${escapeHtml(timeline.pushed)}</p>` : "",
   ].join("");
+}
+function processedAssignmentTimelineMarkup(resume) {
+  const processedAt = reviewerDecisionDate(assignmentCompletedAt(resume));
+  return processedAt ? `<p>处理时间：${escapeHtml(processedAt)}</p>` : "";
 }
 function scrollSelectedCandidateIntoView() {
   const list = $("miniList");
@@ -1598,7 +1662,8 @@ function renderQueuePagination() {
       const nextPage = current + Number(button.dataset.queuePageMove || 0);
       if (nextPage < 1 || nextPage > pages) return;
       state.page = nextPage;
-      loadQueue();
+      if (state.tab === "processed") loadProcessed();
+      else loadQueue();
     };
   });
 }
@@ -1715,6 +1780,9 @@ async function openResume(id) {
   if (requestSequence !== state.resumeContextRequestSequence) return;
   if (state.selectedId !== id) return;
   state.context = context;
+  if (resume?.assignment && state.context?.resume) {
+    state.context.resume.assignment = resume.assignment;
+  }
   state.resumeContextCache.set(id, state.context);
   renderContext();
   return;
@@ -2360,11 +2428,12 @@ function renderContext() {
   renderResumePreview(context);
   const memberDecisionMarkup = memberDecisionSummaryMarkup(resume);
   const reviewerDecisionTimeline = reviewerDecisionTimelineMarkup(resume);
+  const processedAssignmentTimeline = processedAssignmentTimelineMarkup(resume);
   $("summaryCards").innerHTML = `
     <div class="summary-card ts-summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
       <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}${schoolTierMarkup}</p>
-      <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p>${reviewerDecisionTimeline}</div>
+      <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p>${reviewerDecisionTimeline}${processedAssignmentTimeline}</div>
     <div class="summary-card ts-summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
     ${memberDecisionMarkup}
@@ -2463,6 +2532,11 @@ async function confirmInterviewInvite() {
       "selectedSessionId": preflight.sourceSessionId || "",
     }),
   });
+  if (payload?.accepted && payload?.completedAssignment) {
+    resume.assignment = payload.completedAssignment;
+    state.resumeContextCache.delete(resumeId);
+    if (isAdminUser()) await refreshQueueSummary();
+  }
   state.interviewSelection = { resume, preflight, live: payload };
   renderInterviewDetail();
 }

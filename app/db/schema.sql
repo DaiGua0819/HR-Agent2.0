@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS resume_assignments (
   from_user_id TEXT NOT NULL,
   assigned_to_user_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
+  completion_action TEXT NOT NULL DEFAULT '',
   source_decision_id TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',
   completed_by_user_id TEXT NOT NULL DEFAULT '',

@@ -14,6 +14,8 @@ from app.domain.conversation.identity import resolve_or_create_session
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
+from app.domain.resume_review.repository import ResumeReviewRepository
+from app.domain.resume_review.service import ResumeReviewService
 from app.features.interview_invite.service import (
     InterviewInviteError,
     InterviewInviteService,
@@ -126,6 +128,61 @@ def test_interview_invite_api_uses_injected_service() -> None:
             "selected_session_id": "s1",
         }
     ]
+
+
+def test_live_interview_invite_completes_pending_admin_assignment(
+    tmp_path: Path,
+) -> None:
+    """Only an accepted live invite should move the shared task to processed."""
+
+    database = tmp_path / "interview-completion.sqlite"
+    resume_repo = ResumeRepository(database)
+    resume_repo.save(
+        Resume(
+            id="resume-1",
+            name="候选人甲",
+            job_type="AI产品经理",
+            payload={"rawText": "候选人甲 AI产品经理"},
+        )
+    )
+    review_service = ResumeReviewService(
+        ResumeReviewRepository(database),
+        resume_repository=resume_repo,
+    )
+    review_service.set_decision(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+        decision="suitable",
+    )
+    review_service.push_to_admin(
+        resume_id="resume-1",
+        user_id="feishu:member-a",
+        user_name="成员甲",
+    )
+    app = create_app()
+    app.state.resume_repository = resume_repo
+    app.state.resume_review_service = review_service
+    app.state.interview_invite_service = FakeInviteService()
+    app.state.auth_session_store_path = tmp_path / "auth.sqlite"
+
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        preflight = client.post(
+            "/api/interview/invite",
+            json={"resumeId": "resume-1", "dryRun": True},
+        )
+        live = client.post(
+            "/api/interview/invite",
+            json={"resumeId": "resume-1", "dryRun": False, "confirmLive": True},
+        )
+
+    assert preflight.status_code == 200
+    assert "completedAssignment" not in preflight.json()
+    assert live.status_code == 200
+    assert live.json()["completedAssignment"]["completionAction"] == "interview_invited"
+    assert review_service.shared_admin_queue() == []
+    assert len(review_service.shared_admin_queue(status="completed")) == 1
 
 
 def test_worker_runtime_invite_calls_platform_adapter_dry_run() -> None:

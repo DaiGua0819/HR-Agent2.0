@@ -240,17 +240,25 @@ class ResumeReviewRepository:
             connection.commit()
         return assignment
 
-    def list_assignments(self, user_id: str) -> list[ReviewAssignment]:
-        """列出某用户的待处理任务。"""
+    def list_assignments(
+        self,
+        user_id: str,
+        *,
+        status: str = "pending",
+    ) -> list[ReviewAssignment]:
+        """List pending or completed assignments for one inbox."""
+
+        if status not in {"pending", "completed"}:
+            raise ValueError("invalid_assignment_status")
 
         with connect(self.database_path) as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM resume_assignments
-                WHERE assigned_to_user_id = ? AND status = 'pending'
+                WHERE assigned_to_user_id = ? AND status = ?
                 ORDER BY updated_at DESC
                 """,
-                (user_id,),
+                (user_id, status),
             ).fetchall()
         return [_assignment_from_row(row) for row in rows]
 
@@ -261,6 +269,7 @@ class ResumeReviewRepository:
         shared_inbox_user_id: str,
         completed_by_user_id: str,
         completed_by_user_name: str,
+        completion_action: str = "review_decision",
     ) -> ReviewAssignment | None:
         """Atomically complete the one shared pending task for a resume."""
 
@@ -287,6 +296,7 @@ class ResumeReviewRepository:
                 """
                 UPDATE resume_assignments
                 SET status = 'completed',
+                    completion_action = ?,
                     completed_by_user_id = ?,
                     completed_by_user_name = ?,
                     completed_at = ?,
@@ -294,6 +304,7 @@ class ResumeReviewRepository:
                 WHERE id = ? AND status = 'pending'
                 """,
                 (
+                    completion_action,
                     completed_by_user_id,
                     completed_by_user_name,
                     now,
@@ -401,6 +412,7 @@ def _assignment_from_row(row: sqlite3.Row) -> ReviewAssignment:
         from_user_id=row["from_user_id"],
         assigned_to_user_id=row["assigned_to_user_id"],
         status=row["status"],
+        completion_action=row["completion_action"],
         source_decision_id=row["source_decision_id"],
         note=row["note"],
         completed_by_user_id=row["completed_by_user_id"],
@@ -418,6 +430,7 @@ def _assignment_audit_payload(assignment: ReviewAssignment) -> dict[str, object]
         "fromUserId": assignment.from_user_id,
         "assignedToUserId": assignment.assigned_to_user_id,
         "status": assignment.status,
+        "completionAction": assignment.completion_action,
         "completedByUserId": assignment.completed_by_user_id,
         "completedByUserName": assignment.completed_by_user_name,
         "completedAt": assignment.completed_at,

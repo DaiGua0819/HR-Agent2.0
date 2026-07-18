@@ -54,6 +54,7 @@ class ReviewAssignment:
     from_user_id: str
     assigned_to_user_id: str
     status: str
+    completion_action: str = ""
     source_decision_id: str = ""
     note: str = ""
     completed_by_user_id: str = ""

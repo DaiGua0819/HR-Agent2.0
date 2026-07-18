@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from app.api.routes.auth import require_session_payload
+from app.api.routes.auth import current_user_id, require_session_payload
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.service import InterviewCenterService
@@ -237,12 +237,26 @@ async def send_interview_invite(
 
     _assert_can_invite(request)
     try:
-        return await _invite_service(request).invite(
+        result = await _invite_service(request).invite(
             payload.resume_id,
             dry_run=payload.dry_run,
             confirm_live=payload.confirm_live,
             selected_session_id=payload.selected_session_id,
         )
+        if not payload.dry_run and bool(result.get("accepted")):
+            session = require_session_payload(request)
+            user = session.get("user")
+            user_name = str(user.get("name") or "") if isinstance(user, dict) else ""
+            review_service = getattr(request.app.state, "resume_review_service", None)
+            if review_service is not None:
+                completed = review_service.complete_interview_invite(
+                    resume_id=payload.resume_id,
+                    user_id=current_user_id(request),
+                    user_name=user_name,
+                )
+                if completed:
+                    result["completedAssignment"] = completed
+        return result
     except InterviewInviteError as exc:
         status = 404 if exc.reason == "resume_not_found" else 400
         raise HTTPException(status_code=status, detail=exc.reason) from exc

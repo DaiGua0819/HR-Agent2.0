@@ -95,6 +95,12 @@ def run_migrations(database_path: str | Path | None = None) -> None:
         _add_column_if_missing(
             connection,
             "resume_assignments",
+            "completion_action",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
+            "resume_assignments",
             "completed_by_user_id",
             "TEXT NOT NULL DEFAULT ''",
         )
@@ -111,6 +117,7 @@ def run_migrations(database_path: str | Path | None = None) -> None:
             "TEXT NOT NULL DEFAULT ''",
         )
         _backfill_review_action_times(connection)
+        _backfill_assignment_completion_actions(connection)
         _migrate_interview_sessions_if_present(connection)
         connection.commit()
 
@@ -182,6 +189,16 @@ def _backfill_review_action_times(connection: sqlite3.Connection) -> None:
           updated_at
         )
         WHERE pushed_at = '' AND assigned_to != ''
+        """
+    )
+
+
+def _backfill_assignment_completion_actions(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        UPDATE resume_assignments
+        SET completion_action = 'review_decision'
+        WHERE status = 'completed' AND completion_action = ''
         """
     )
 

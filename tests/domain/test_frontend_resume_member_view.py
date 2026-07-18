@@ -177,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260718-review-action-times" in html
+    assert "/assets/app.js?v=20260718-processed-interviews" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -211,7 +211,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260718-review-action-times" in html
+    assert "20260718-processed-interviews" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -267,7 +267,8 @@ def test_member_resume_library_has_dock_job_filters_below_status_tabs() -> None:
     assert "resumeScope" in script and "jobFacets" in script
     assert "visibleStatusTabs()" in script
     assert '["undecided", "待判断"]' not in script
-    assert '!["undecided", "needs_more_info", "queue"].includes(key)' in script
+    assert '["needs_more_info", "待补充"]' not in script
+    assert '!["undecided", "queue", "processed"].includes(key)' in script
     assert ".ts-filter-tags-panel" in styles
     assert ".filter-tag" in styles
     assert "bindDockEffect($(\"jobTabs\")" not in script
@@ -345,7 +346,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260718-review-action-times" in html
+    assert "20260718-processed-interviews" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -505,7 +506,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260718-review-action-times" in html
+    assert "20260718-processed-interviews" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -828,7 +829,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260718-review-action-times" in html
+    assert "/assets/app.js?v=20260718-processed-interviews" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1224,7 +1225,8 @@ def test_shared_queue_uses_resume_request_abort_and_sequence_guards() -> None:
     assert "state.resumeListRequestSequence += 1" in queue_block
     assert "signal: controller.signal" in queue_block
     assert "requestSequence !== state.resumeListRequestSequence" in queue_block
-    assert 'state.tab !== "queue"' in queue_block
+    assert 'loadAssignmentCollection("pending", "queue"' in queue_block
+    assert "state.tab !== tab" in queue_block
 
 
 def test_queue_job_facets_are_separate_from_full_resume_facets() -> None:
@@ -1251,13 +1253,12 @@ def test_queue_job_facets_are_separate_from_full_resume_facets() -> None:
 
     assert "resumeJobFacets" in state_block
     assert "queueJobFacets" in state_block
+    assert "processedJobFacets" in state_block
     assert "queueSummaryLoaded" in state_block
-    assert (
-        "const facets = isQueue ? state.queueJobFacets : state.resumeJobFacets;"
-        in job_tabs_block
-    )
+    assert "isProcessed ? state.processedJobFacets : state.resumeJobFacets" in job_tabs_block
     assert "state.resumeJobFacets = data.jobFacets || [];" in list_block
-    assert "state.queueJobFacets = data.jobFacets || [];" in queue_block
+    assert 'if (collection === "processed") state.processedJobFacets = facets;' in queue_block
+    assert "else state.queueJobFacets = facets;" in queue_block
     assert "state.queueTotal = Number(data.queueTotal" in queue_block
     assert "state.queueVersion = data.version || state.queueVersion;" in queue_block
     assert "buildJobTabs();" in queue_block
@@ -1424,7 +1425,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260718-review-action-times" in html
+    assert "20260718-processed-interviews" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1761,7 +1762,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260715-score-capsule-left" in html
+    assert "/assets/styles.css?v=20260718-processed-interviews" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
@@ -1851,3 +1852,23 @@ def test_interview_button_uses_preflight_then_live_confirmation() -> None:
     assert '"selectedSessionId": sessionId' in script
     assert "data-select-interview-session" in script
     assert "确认发起约面试" in script
+
+
+def test_processed_interview_assignments_have_tab_badge_and_timeline() -> None:
+    """Completed interview tasks should remain inspectable with operator and time."""
+
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert '["processed", "已处理"]' in script
+    assert "async function loadProcessed" in script
+    assert 'loadAssignmentCollection("completed", "processed"' in script
+    assert 'params.set("status", status)' in script
+    assert "processedJobFacets" in script
+    assert "processedTotal" in script
+    assert 'completionAction === "interview_invited"' in script
+    assert "已约面试" in script
+    assert "data-processed-resume-id" in script
+    assert "completedByUserName" in script
+    assert "completedAt" in script
+    assert "处理时间：" in script
+    assert "payload?.completedAssignment" in script

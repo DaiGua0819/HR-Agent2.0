@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -139,17 +139,18 @@ async def push_to_admin(
 @router.get("/api/resume-review/queue")
 async def review_queue(
     request: Request,
+    status: Literal["pending", "completed"] = "pending",
     job_type: str = "",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, Any]:
-    """返回当前用户的待处理队列。"""
+    """Return pending or completed tasks from the shared administrator inbox."""
 
     session = require_session_payload(request)
     if not _session_is_admin(session):
         raise HTTPException(status_code=403, detail="admin_queue_forbidden")
     service = _review_service(request)
-    items = _filter_visible_queue(service.shared_admin_queue(), session)
+    items = _filter_visible_queue(service.shared_admin_queue(status=status), session)
     summary = _queue_summary_from_items(items)
     canonical_job_type = canonical_resume_job_type(job_type)
     filtered_items = [
