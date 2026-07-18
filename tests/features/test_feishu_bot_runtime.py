@@ -20,7 +20,7 @@ from app.features.feishu_bot.runtime_control import (
     AgentManagerSubprocessClient,
     RecruitmentRuntimeController,
 )
-from app.settings import AppSettings
+from app.settings import PROJECT_ROOT, AppSettings
 from scripts.run_feishu_bot import build_parser, launch_detached_bot
 
 
@@ -69,6 +69,9 @@ def test_settings_default_to_disabled_dedicated_non_secret_profile(
     assert settings.feishu_bot_codex_api_key_env == ""
     assert settings.feishu_bot_runtime_control_enabled is False
     assert settings.parsed_feishu_bot_runtime_control_skip_targets == ()
+    assert settings.resolved_feishu_bot_agent_manager_path == (
+        PROJECT_ROOT / "scripts" / "agent_manager.py"
+    )
     assert "secret" not in settings.feishu_bot_profile.lower()
     dumped = settings.model_dump()
     assert "feishu_bot_app_secret" not in dumped

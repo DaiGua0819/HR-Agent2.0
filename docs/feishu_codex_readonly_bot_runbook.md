@@ -14,7 +14,7 @@
 - `暂停处理程序`
 - `查看处理状态`
 
-`启动处理程序` 使用权威 `agent_manager.py` 执行 `start --adopt-running`，随后按 topology 中的固定顺序处理消息。运行参数由本地环境固定，不能通过飞书修改。
+`启动处理程序` 使用权威 `agent_manager.py` 执行 `start --adopt-running`。不同负责人使用各自独立的 Worker 并行处理；同一负责人内部仍按 topology 的平台顺序串行处理。运行参数由本地环境固定，不能通过飞书修改。
 
 当前 `scripts/manage_feishu_bot.ps1` 通过 `FEISHU_BOT_RUNTIME_CONTROL_SKIP_TARGETS` 固定跳过 `宋峰峰:job51`，沿用该账号暂不处理 51job 的业务约束。跳过目标会出现在结束汇报中；飞书消息不能增加、删除或覆盖跳过项。
 

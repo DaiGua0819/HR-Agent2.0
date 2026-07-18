@@ -229,14 +229,7 @@ class AppSettings(BaseSettings):
         validation_alias="FEISHU_BOT_RUNTIME_CONTROL_ENABLED",
     )
     feishu_bot_agent_manager_path: Path = Field(
-        default_factory=lambda: (
-            Path.home()
-            / ".codex"
-            / "skills"
-            / "recruit-agent-manager"
-            / "scripts"
-            / "agent_manager.py"
-        ),
+        default=Path("scripts/agent_manager.py"),
         validation_alias="FEISHU_BOT_AGENT_MANAGER_PATH",
     )
     feishu_bot_agent_manager_topology_path: Path = Field(
