@@ -955,6 +955,7 @@ def _run_guarded(
                     query = urllib.parse.urlencode(
                         [
                             ("owner", owner),
+                            ("batch_id", run_id),
                             *(
                                 ("exclude_conversation_id", conversation_id)
                                 for conversation_id in sorted(excluded_contact_ids)

@@ -22,6 +22,7 @@ class WorkerClientProtocol(Protocol):
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> dict[str, Any]:
         """处理某平台未读消息。"""
 
@@ -56,11 +57,15 @@ class WorkerClient:
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> dict[str, Any]:
         async with self._client(self.automation_timeout_seconds) as client:
             response = await client.post(
                 f"/automation/{platform.value}/process-messages",
-                json={"excludeConversationIds": sorted(exclude_ids or set())},
+                json={
+                    "excludeConversationIds": sorted(exclude_ids or set()),
+                    "batchId": batch_id,
+                },
             )
             response.raise_for_status()
             return response.json()
@@ -106,8 +111,13 @@ class InProcessWorkerClient:
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> dict[str, Any]:
-        return await self.runtime.process_messages(platform, exclude_ids=exclude_ids)
+        return await self.runtime.process_messages(
+            platform,
+            exclude_ids=exclude_ids,
+            batch_id=batch_id,
+        )
 
     async def proactive_contact(
         self, platform: Platform, payload: dict[str, Any] | None = None

@@ -273,6 +273,7 @@ class AgentManagerTests(unittest.TestCase):
                 "owners": [{"owner": "owner"}],
             }
             exclusions_by_call: list[list[str]] = []
+            batch_ids_by_call: list[str] = []
 
             def fake_http_json(
                 url: str, *, method: str, timeout: float
@@ -280,6 +281,7 @@ class AgentManagerTests(unittest.TestCase):
                 del method, timeout
                 query = parse_qs(urlparse(url).query)
                 exclusions_by_call.append(query.get("exclude_conversation_id", []))
+                batch_ids_by_call.append(query.get("batch_id", [""])[0])
                 call_number = len(exclusions_by_call)
                 if call_number == 1:
                     return {
@@ -322,6 +324,8 @@ class AgentManagerTests(unittest.TestCase):
             self.assertEqual(result["processed"], 2)
             self.assertEqual(result["anomalies"], 1)
             self.assertEqual(exclusions_by_call, [[], ["row-a"], ["row-a"]])
+            self.assertTrue(batch_ids_by_call[0])
+            self.assertEqual(len(set(batch_ids_by_call)), 1)
 
     def test_guarded_run_stops_on_fifth_contact_anomaly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

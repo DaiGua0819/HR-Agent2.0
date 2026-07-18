@@ -44,6 +44,7 @@ class WorkerRuntime:
     events: list[dict[str, object]] = field(default_factory=list)
     conversation_repository: ConversationRepository | None = None
     artifact_store: ResumeArtifactStore | None = None
+    _prepared_message_batches: dict[Platform, str] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def start(self) -> None:
@@ -65,6 +66,7 @@ class WorkerRuntime:
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> dict[str, object]:
         """串行处理某平台未读消息。"""
 
@@ -76,12 +78,27 @@ class WorkerRuntime:
                     return {"accepted": False, "paused": True, "platform": platform.value}
                 await self.start()
                 adapter = self._adapter(platform)
-                await self._prepare_message_adapter(adapter)
+                normalized_batch_id = str(batch_id or "").strip()
+                reused_preparation = bool(
+                    normalized_batch_id
+                    and self._prepared_message_batches.get(platform) == normalized_batch_id
+                )
+                if not reused_preparation:
+                    await self._prepare_message_adapter(adapter)
+                    if normalized_batch_id:
+                        self._prepared_message_batches[platform] = normalized_batch_id
                 ref = await self._find_next_unread_thread(
                     adapter,
                     {str(item) for item in exclude_ids or set() if str(item)},
                 )
+                if ref is None and reused_preparation:
+                    await self._prepare_message_adapter(adapter)
+                    ref = await self._find_next_unread_thread(
+                        adapter,
+                        {str(item) for item in exclude_ids or set() if str(item)},
+                    )
                 if ref is None:
+                    self._clear_prepared_message_batch(platform, normalized_batch_id)
                     return {"accepted": True, "processed": 0, "platform": platform.value}
                 state = await self._run_current_conversation(adapter)
                 contact = await self._contact_payload(state, fallback_id=ref.conversation_id)
@@ -95,7 +112,11 @@ class WorkerRuntime:
                     "dryRun": load_settings().dry_run,
                 }
             except WorkerPreparationBlocked as error:
+                self._clear_prepared_message_batch(platform, str(batch_id or "").strip())
                 return self._preparation_blocked_payload(platform, str(error))
+            except BaseException:
+                self._clear_prepared_message_batch(platform, str(batch_id or "").strip())
+                raise
             finally:
                 self.events.append({"event": "finish", "platform": platform.value})
                 self.agent_busy = False
@@ -209,6 +230,7 @@ class WorkerRuntime:
         """暂停某平台自动化。"""
 
         self.paused.add(platform)
+        self._prepared_message_batches.pop(platform, None)
         return {"paused": True, "owner": self.owner, "platform": platform.value}
 
     async def interview_invite(self, payload: dict[str, Any] | None = None) -> dict[str, object]:
@@ -299,6 +321,10 @@ class WorkerRuntime:
         seen: set[str],
     ):
         return await adapter.find_next_unread_thread(exclude_ids=set(seen))
+
+    def _clear_prepared_message_batch(self, platform: Platform, batch_id: str) -> None:
+        if batch_id and self._prepared_message_batches.get(platform) == batch_id:
+            self._prepared_message_batches.pop(platform, None)
 
     async def _run_current_conversation(self, adapter: Any) -> dict[str, object]:
         return await ConversationRunner(

@@ -42,16 +42,19 @@ class Dispatcher:
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> DispatchResult:
         """派发某负责人某平台未读处理。"""
 
         self.account_manager.route_for_account(owner, platform)
         self.dispatch_log.append((owner, platform))
         client = self.client_for_owner(owner)
+        kwargs: dict[str, Any] = {}
         if exclude_ids:
-            result = await client.process_messages(platform, exclude_ids=exclude_ids)
-        else:
-            result = await client.process_messages(platform)
+            kwargs["exclude_ids"] = exclude_ids
+        if batch_id:
+            kwargs["batch_id"] = batch_id
+        result = await client.process_messages(platform, **kwargs)
         return DispatchResult(owner=owner, platform=platform, result=result)
 
     async def process_all(self) -> dict[str, object]:

@@ -36,7 +36,11 @@ def create_worker_app(runtime: WorkerRuntime) -> FastAPI:
             if isinstance(raw_exclude_ids, list)
             else set()
         )
-        return await runtime.process_messages(platform, exclude_ids=exclude_ids)
+        return await runtime.process_messages(
+            platform,
+            exclude_ids=exclude_ids,
+            batch_id=str(payload.get("batchId") or ""),
+        )
 
     @router.post("/automation/{platform}/drain-messages")
     async def drain_messages(

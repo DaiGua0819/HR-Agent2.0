@@ -54,6 +54,43 @@ def test_reliable_click_records_success_on_fake_page() -> None:
     assert page.reliable_actions[-1]["label"] == "选择未读"
 
 
+def test_reliable_click_without_verifier_clicks_once_and_succeeds() -> None:
+    """可选校验缺省时，点击成功本身就是完成条件。"""
+
+    page = FakePage()
+
+    result = asyncio.run(
+        reliable_click(
+            page,
+            ".menu-item-all",
+            label="全部职位",
+            profile=TEST_PROFILE,
+        )
+    )
+
+    assert result["ok"] is True
+    assert page.clicks == [".menu-item-all"]
+
+
+def test_reliable_click_element_without_verifier_clicks_once_and_succeeds() -> None:
+    """元素点击未配置校验时不得因为重试产生重复副作用。"""
+
+    page = FakePage()
+    element = FakeElement(page, "button:confirm", "确定")
+
+    result = asyncio.run(
+        reliable_click_element(
+            page,
+            element,
+            label="确认",
+            profile=TEST_PROFILE,
+        )
+    )
+
+    assert result["ok"] is True
+    assert page.clicks == ["button:confirm"]
+
+
 def test_reliable_click_element_preverifies_before_retry_without_duplicate_click() -> None:
     """第一次点击已生效但验证延迟时，重试前验证成功就不再点击。"""
 

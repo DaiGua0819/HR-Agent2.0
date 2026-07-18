@@ -123,6 +123,38 @@ def test_worker_process_messages_excludes_prior_contact_and_returns_selected_id(
     assert result["selectedConversationId"] == "row-b"
 
 
+def test_worker_reuses_message_preparation_within_same_batch() -> None:
+    runtime = BatchPreparationRuntime(["row-a", "row-b"])
+
+    first = asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-a"))
+    second = asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-a"))
+
+    assert first["selectedConversationId"] == "row-a"
+    assert second["selectedConversationId"] == "row-b"
+    assert runtime.prepare_calls == 1
+
+
+def test_worker_refreshes_once_before_declaring_same_batch_drained() -> None:
+    runtime = BatchPreparationRuntime(["row-a"])
+
+    asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-a"))
+    drained = asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-a"))
+
+    assert drained["processed"] == 0
+    assert runtime.prepare_calls == 2
+    assert runtime.find_calls == 3
+
+
+def test_worker_prepares_again_for_new_batch() -> None:
+    runtime = BatchPreparationRuntime(["row-a", "row-b"])
+
+    asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-a"))
+    second = asyncio.run(runtime.process_messages(Platform.JOB51, batch_id="batch-b"))
+
+    assert second["selectedConversationId"] == "row-b"
+    assert runtime.prepare_calls == 2
+
+
 def test_control_plane_forwards_excluded_conversation_ids() -> None:
     account_manager = AccountManager()
     owner = account_manager.workers[0].owner
@@ -140,11 +172,13 @@ def test_control_plane_forwards_excluded_conversation_ids() -> None:
                 ("owner", owner),
                 ("exclude_conversation_id", "row-a"),
                 ("exclude_conversation_id", "row-b"),
+                ("batch_id", "run-123"),
             ],
         )
 
     assert response.status_code == 200
     assert tracking_client.exclude_ids == {"row-a", "row-b"}
+    assert tracking_client.batch_id == "run-123"
 
 
 def test_job51_generic_visible_attachment_href_downloads_for_any_owner() -> None:
@@ -183,7 +217,14 @@ class TrackingWorkerClient:
     async def status(self) -> dict[str, Any]:
         return {"owner": self.owner, "status": "ready"}
 
-    async def process_messages(self, platform: Platform) -> dict[str, Any]:
+    async def process_messages(
+        self,
+        platform: Platform,
+        *,
+        exclude_ids: set[str] | None = None,
+        batch_id: str = "",
+    ) -> dict[str, Any]:
+        _ = exclude_ids, batch_id
         self.tracker.active += 1
         self.tracker.max_active = max(self.tracker.max_active, self.tracker.active)
         await asyncio.sleep(0)
@@ -203,14 +244,17 @@ class TrackingWorkerClient:
 class ExclusionTrackingWorkerClient:
     def __init__(self) -> None:
         self.exclude_ids: set[str] = set()
+        self.batch_id = ""
 
     async def process_messages(
         self,
         platform: Platform,
         *,
         exclude_ids: set[str] | None = None,
+        batch_id: str = "",
     ) -> dict[str, Any]:
         self.exclude_ids = set(exclude_ids or set())
+        self.batch_id = batch_id
         return {"platform": platform.value, "processed": 0}
 
 
@@ -308,6 +352,57 @@ class ExcludingContactRuntime(WorkerRuntime):
             "conversation_id": "candidate-detail-b",
             "next_action": "request_resume",
             "stage": "resume_attachment_downloaded",
+        }
+
+    async def _graph_stage(self, state: dict[str, object]) -> str:
+        _ = state
+        return "rules_loaded"
+
+
+class BatchPreparationRuntime(WorkerRuntime):
+    def __init__(self, conversation_ids: list[str]) -> None:
+        super().__init__(owner="owner", port=8801, cdp_port=9222)
+        self.refs = [
+            ConversationRef(Platform.JOB51, "owner", conversation_id)
+            for conversation_id in conversation_ids
+        ]
+        self.prepare_calls = 0
+        self.find_calls = 0
+        self.current_ref = ""
+
+    async def start(self) -> None:
+        self.agent_ready = True
+
+    def _adapter(self, platform: Platform) -> object:
+        _ = platform
+        return object()
+
+    async def _prepare_message_adapter(self, adapter: object) -> None:
+        _ = adapter
+        self.prepare_calls += 1
+
+    async def _find_next_unread_thread(
+        self,
+        adapter: object,
+        seen: set[str],
+    ) -> ConversationRef | None:
+        _ = adapter
+        self.find_calls += 1
+        ref = next(
+            (item for item in self.refs if item.conversation_id not in seen),
+            None,
+        )
+        if ref is not None:
+            self.refs.remove(ref)
+            self.current_ref = ref.conversation_id
+        return ref
+
+    async def _run_current_conversation(self, adapter: object) -> dict[str, object]:
+        _ = adapter
+        return {
+            "conversation_id": f"detail-{self.current_ref}",
+            "next_action": "wait",
+            "stage": "handled",
         }
 
     async def _graph_stage(self, state: dict[str, object]) -> str:

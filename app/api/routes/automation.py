@@ -28,6 +28,7 @@ async def process_messages(
     platform: Platform,
     owner: str,
     request: Request,
+    batch_id: str = "",
 ) -> dict[str, object]:
     """转发“处理某平台未读消息”到负责人 worker。"""
 
@@ -40,6 +41,7 @@ async def process_messages(
             for item in request.query_params.getlist("exclude_conversation_id")
             if str(item)
         },
+        batch_id=batch_id,
     )
     return {"accepted": True, "owner": result.owner, "platform": platform.value, **result.result}
 
