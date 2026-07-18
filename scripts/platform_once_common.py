@@ -30,9 +30,9 @@ from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.zhilian import actions as zhilian_actions
 from app.platforms.zhilian import selectors as zhilian_selectors
 from app.platforms.zhilian.adapter import ZhilianAdapter
-from app.settings import load_settings
+from app.settings import DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS, load_settings
 
-PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 180
+PLATFORM_CANDIDATE_TIMEOUT_SECONDS = DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS
 JOB51_CLEANUP_TIMEOUT_SECONDS = 12
 
 
@@ -80,6 +80,7 @@ async def _main_async(platform: Platform) -> None:
             platform,
             args.limit,
             max_anomalies=args.max_anomalies,
+            candidate_timeout_seconds=settings.platform_candidate_timeout_seconds,
         )
         _print_summary(platform, summaries, live=live)
     finally:
@@ -184,6 +185,7 @@ async def _process(
     limit: int,
     *,
     max_anomalies: int = -1,
+    candidate_timeout_seconds: float = PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:
     conversation_repository, artifact_store = build_persistence_from_settings()
     if platform == Platform.ZHILIAN:
@@ -193,6 +195,7 @@ async def _process(
             conversation_repository=conversation_repository,
             artifact_store=artifact_store,
             max_anomalies=max_anomalies,
+            candidate_timeout_seconds=candidate_timeout_seconds,
         )
 
     summaries: list[dict[str, Any]] = []
@@ -290,7 +293,7 @@ async def _process(
                         conversation_repository=conversation_repository,
                         artifact_store=artifact_store,
                     ).run_current(),
-                    timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
+                    timeout=candidate_timeout_seconds,
                 )
             except TimeoutError:
                 summaries.append(
@@ -302,7 +305,7 @@ async def _process(
                         reliable_actions=getattr(adapter.page, "reliable_actions", [])[
                             before_actions:
                         ],
-                        extra={"timeoutSeconds": PLATFORM_CANDIDATE_TIMEOUT_SECONDS},
+                        extra={"timeoutSeconds": candidate_timeout_seconds},
                     )
                 )
                 seen.update(row_keys)
@@ -483,6 +486,7 @@ async def _process_zhilian(
     conversation_repository: Any,
     artifact_store: Any,
     max_anomalies: int = -1,
+    candidate_timeout_seconds: float = PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -509,7 +513,7 @@ async def _process_zhilian(
                     conversation_repository=conversation_repository,
                     artifact_store=artifact_store,
                 ).run_current(),
-                timeout=PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
+                timeout=candidate_timeout_seconds,
             )
         except TimeoutError:
             summaries.append(
@@ -519,7 +523,7 @@ async def _process_zhilian(
                     stage="candidate_timeout",
                     reason="candidate_processing_timeout",
                     reliable_actions=getattr(adapter.page, "reliable_actions", [])[before_actions:],
-                    extra={"timeoutSeconds": PLATFORM_CANDIDATE_TIMEOUT_SECONDS},
+                    extra={"timeoutSeconds": candidate_timeout_seconds},
                 )
             )
             seen.add(ref.conversation_id)

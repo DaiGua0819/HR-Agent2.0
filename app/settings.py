@@ -13,13 +13,15 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.constants import Platform
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
+DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 180
+MIN_PLATFORM_CANDIDATE_TIMEOUT_SECONDS = 30
 
 
 class WorkerConfig(BaseModel):
@@ -159,6 +161,10 @@ class AppSettings(BaseSettings):
         default="normal",
         validation_alias="BOSS_HUMANIZED_PROFILE",
     )
+    platform_candidate_timeout_seconds: int = Field(
+        default=DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS,
+        validation_alias="PLATFORM_CANDIDATE_TIMEOUT_SECONDS",
+    )
     database_path: Path = Field(
         default=Path("data/resumes.sqlite"),
         validation_alias="DATABASE_PATH",
@@ -276,6 +282,17 @@ class AppSettings(BaseSettings):
     open_order: list[AccountOpenOrder] = Field(default_factory=list)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
+
+    @field_validator("platform_candidate_timeout_seconds", mode="before")
+    @classmethod
+    def validate_platform_candidate_timeout_seconds(cls, value: object) -> int:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS
+        if parsed < MIN_PLATFORM_CANDIDATE_TIMEOUT_SECONDS:
+            return DEFAULT_PLATFORM_CANDIDATE_TIMEOUT_SECONDS
+        return parsed
 
     def resolve_path(self, value: Path) -> Path:
         """解析项目内相对路径；env 中的绝对路径保持原样。"""

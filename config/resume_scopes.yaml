@@ -31,7 +31,17 @@ members:
       - 张怀滨
     jobGroups:
       - strategic_direct
-  - names:
-      - 菜花
+  - openIds:
+      - ou_acadfb85356a318fb1fc168be8fbfb75
     jobTypes:
+      - AI产品经理
+  - openIds:
+      - ou_64e5196c8a8c4563ffa1659415188e98
+    jobTypes:
+      - AI智能体解决方案负责人
+      - AI产品经理
+  - openIds:
+      - ou_e14f45b5432a8a67e091916e43503a14
+    jobTypes:
+      - AI智能体解决方案负责人
       - AI产品经理

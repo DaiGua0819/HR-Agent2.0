@@ -48,3 +48,51 @@ def test_env_example_documents_interview_center_feishu_keys() -> None:
         "FEISHU_AI_PRODUCT_MANAGER_TABLE_ID=",
     ):
         assert key in content
+
+
+def test_platform_candidate_timeout_defaults_to_180_seconds(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("PLATFORM_CANDIDATE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(settings_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings_module, "CONFIG_DIR", tmp_path / "config")
+    settings_module.load_settings.cache_clear()
+
+    loaded = settings_module.load_settings()
+
+    settings_module.load_settings.cache_clear()
+    assert loaded.platform_candidate_timeout_seconds == 180
+
+
+def test_platform_candidate_timeout_accepts_server_override(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PLATFORM_CANDIDATE_TIMEOUT_SECONDS", "90")
+    monkeypatch.setattr(settings_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings_module, "CONFIG_DIR", tmp_path / "config")
+    settings_module.load_settings.cache_clear()
+
+    loaded = settings_module.load_settings()
+
+    settings_module.load_settings.cache_clear()
+    assert loaded.platform_candidate_timeout_seconds == 90
+
+
+def test_platform_candidate_timeout_invalid_values_fall_back_to_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(settings_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(settings_module, "CONFIG_DIR", tmp_path / "config")
+
+    for value in ("not-a-number", "0", "29"):
+        monkeypatch.setenv("PLATFORM_CANDIDATE_TIMEOUT_SECONDS", value)
+        settings_module.load_settings.cache_clear()
+        loaded = settings_module.load_settings()
+        assert loaded.platform_candidate_timeout_seconds == 180
+
+    settings_module.load_settings.cache_clear()
+
+
+def test_env_example_documents_platform_candidate_timeout() -> None:
+    env_example = settings_module.PROJECT_ROOT / ".env.example"
+
+    assert "PLATFORM_CANDIDATE_TIMEOUT_SECONDS=180" in env_example.read_text(
+        encoding="utf-8"
+    )

@@ -161,7 +161,7 @@ def test_caihua_member_only_reads_ai_product_manager_resumes(monkeypatch) -> Non
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
-    app = _app_for_member("ou_caihua", "菜花")
+    app = _app_for_member("ou_acadfb85356a318fb1fc168be8fbfb75", "菜花")
 
     with TestClient(app) as client:
         _feishu_login(client)
@@ -177,6 +177,70 @@ def test_caihua_member_only_reads_ai_product_manager_resumes(monkeypatch) -> Non
     assert listed.json()["jobFacets"] == [{"jobType": "AI产品经理", "count": 1}]
     assert forbidden_operation.status_code == 403
     assert forbidden_finance.status_code == 403
+
+
+def test_caihua_scope_is_bound_to_open_id_instead_of_display_name(monkeypatch) -> None:
+    """The verified Feishu identity keeps access after a rename; a same-name account gets none."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    load_settings.cache_clear()
+    renamed_app = _app_for_member(
+        "ou_acadfb85356a318fb1fc168be8fbfb75",
+        "菜花的新名字",
+    )
+    same_name_app = _app_for_member("ou_not_caihua", "菜花")
+
+    with TestClient(renamed_app) as client:
+        _feishu_login(client)
+        renamed_scope = client.get("/api/auth/me")
+        renamed_resumes = client.get("/api/resumes")
+
+    with TestClient(same_name_app) as client:
+        _feishu_login(client)
+        same_name_scope = client.get("/api/auth/me")
+        same_name_resumes = client.get("/api/resumes")
+
+    load_settings.cache_clear()
+    assert renamed_scope.json()["resumeScope"]["jobTypes"] == ["AI产品经理"]
+    assert [item["id"] for item in renamed_resumes.json()["items"]] == [
+        "resume-ai-product-manager"
+    ]
+    assert same_name_scope.json()["resumeScope"]["jobTypes"] == []
+    assert same_name_resumes.json()["items"] == []
+
+
+def test_digital_members_only_read_ai_solution_and_product_manager_resumes(
+    monkeypatch,
+) -> None:
+    """Wang Jie and Jingzhe receive the same two-role scope by verified open_id."""
+
+    monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
+    expected_jobs = ["AI智能体解决方案负责人", "AI产品经理"]
+    identities = [
+        ("ou_64e5196c8a8c4563ffa1659415188e98", "王杰的新名字"),
+        ("ou_e14f45b5432a8a67e091916e43503a14", "惊蛰的新名字"),
+    ]
+
+    for open_id, display_name in identities:
+        load_settings.cache_clear()
+        app = _app_for_member(open_id, display_name)
+        with TestClient(app) as client:
+            _feishu_login(client)
+            me = client.get("/api/auth/me")
+            listed = client.get("/api/resumes")
+            forbidden_operation = client.get("/api/resumes/resume-operation")
+            forbidden_finance = client.get("/api/resumes/resume-finance")
+
+        assert me.status_code == 200
+        assert me.json()["resumeScope"]["jobTypes"] == expected_jobs
+        assert {item["id"] for item in listed.json()["items"]} == {
+            "resume-ai",
+            "resume-ai-product-manager",
+        }
+        assert forbidden_operation.status_code == 403
+        assert forbidden_finance.status_code == 403
+
+    load_settings.cache_clear()
 
 
 def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: Path) -> None:

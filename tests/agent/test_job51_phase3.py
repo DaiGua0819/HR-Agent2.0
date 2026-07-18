@@ -1314,6 +1314,79 @@ def test_job51_candidate_timeout_allows_slow_online_resume_downloads() -> None:
     assert platform_once_common.PLATFORM_CANDIDATE_TIMEOUT_SECONDS >= 180
 
 
+def test_job51_process_uses_configured_candidate_timeout(monkeypatch) -> None:
+    """The live runner must pass the configured timeout into each candidate task."""
+
+    class Adapter:
+        page = type("Page", (), {"reliable_actions": []})()
+
+    class Row:
+        async def text(self) -> str:
+            return "Target Candidate\nAI PM\nhello"
+
+    class Runner:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _ = args, kwargs
+
+        async def run_current(self) -> dict[str, object]:
+            return {}
+
+    row_state = {
+        "index": 0,
+        "id": "target-row",
+        "label": "Target Candidate\nAI PM\nhello",
+        "name": "Target Candidate",
+        "position": "AI PM",
+        "latest_message": "hello",
+    }
+    captured_timeouts: list[float] = []
+
+    async def fake_states(adapter, platform):  # type: ignore[no-untyped-def]
+        _ = adapter, platform
+        return [row_state]
+
+    async def fake_find_row(adapter, platform, state):  # type: ignore[no-untyped-def]
+        _ = adapter, platform, state
+        return Row()
+
+    async def fake_open(adapter, state):  # type: ignore[no-untyped-def]
+        _ = adapter, state
+        return {"ok": True}
+
+    async def fake_cleanup(page, *, phase: str):  # type: ignore[no-untyped-def]
+        _ = page, phase
+        return {"remaining": []}
+
+    async def fake_wait_for(awaitable, timeout):  # type: ignore[no-untyped-def]
+        captured_timeouts.append(timeout)
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        "scripts.platform_once_common.build_persistence_from_settings",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(platform_once_common, "_candidate_row_states", fake_states)
+    monkeypatch.setattr(platform_once_common, "_find_candidate_row", fake_find_row)
+    monkeypatch.setattr(platform_once_common, "_open_job51_thread", fake_open)
+    monkeypatch.setattr(platform_once_common, "_cleanup_job51", fake_cleanup)
+    monkeypatch.setattr(platform_once_common, "ConversationRunner", Runner)
+    monkeypatch.setattr(platform_once_common.asyncio, "wait_for", fake_wait_for)
+
+    summaries = asyncio.run(
+        _process(
+            Adapter(),
+            Platform.JOB51,
+            1,
+            candidate_timeout_seconds=90,
+        )
+    )
+
+    assert captured_timeouts == [90]
+    assert summaries[0]["stage"] == "candidate_timeout"
+    assert summaries[0]["decision"]["timeoutSeconds"] == 90
+
+
 def test_job51_open_retries_same_target_when_right_header_stays_old(monkeypatch) -> None:
     """If the first click leaves the old header open, retry the same target once."""
 
