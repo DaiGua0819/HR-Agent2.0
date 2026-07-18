@@ -1412,6 +1412,18 @@ function reviewerDecisionDisplayName(item) {
 function reviewerDecisionPushed(item) {
   return Boolean(item?.assignedTo || item?.assigned_to);
 }
+function reviewerDecisionDisplayTime(item) {
+  if (reviewerDecisionPushed(item)) {
+    return item?.pushedAt || item?.pushed_at || item?.updatedAt || item?.updated_at || "";
+  }
+  return item?.decisionAt || item?.decision_at || item?.updatedAt || item?.updated_at || "";
+}
+function reviewerDecisionDate(value, compact = false) {
+  const normalized = String(value || "").replace(/\//g, "-");
+  const match = normalized.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  return compact ? `${match[2]}-${match[3]}` : `${match[1]}-${match[2]}-${match[3]}`;
+}
 function reviewerDecisionGroups(resume) {
   const states = reviewerDecisions(resume).filter((item) => ["suitable", "unsuitable"].includes(item?.decision));
   return [
@@ -1436,7 +1448,10 @@ function reviewerDecisionPopoverMarkup(resume) {
     .map((group) => `
       <section class="reviewer-decision-popover__group">
         <strong>${escapeHtml(group.label)}</strong>
-        ${group.items.map((item) => `<span>${escapeHtml(reviewerDecisionDisplayName(item))}${reviewerDecisionPushed(item) ? " · 已推送" : ""}</span>`).join("")}
+        ${group.items.map((item) => {
+          const time = reviewerDecisionDate(reviewerDecisionDisplayTime(item), true);
+          return `<span>${escapeHtml(reviewerDecisionDisplayName(item))}${time ? ` · ${escapeHtml(time)}` : ""}${reviewerDecisionPushed(item) ? " · 已推送" : ""}</span>`;
+        }).join("")}
       </section>
     `)
     .join("");
@@ -1508,6 +1523,22 @@ function memberDecisionSummaryMarkup(resume) {
     })
     .join("");
   return `<div class="summary-card ts-summary-card member-decision-list"><h3>成员判断</h3>${rows}</div>`;
+}
+function reviewerDecisionTimelineMarkup(resume) {
+  const timeline = { suitable: "", unsuitable: "", pushed: "" };
+  reviewerDecisions(resume).forEach((item) => {
+    const decisionDate = reviewerDecisionDate(item?.decisionAt || item?.decision_at || item?.updatedAt || item?.updated_at);
+    const pushedDate = reviewerDecisionDate(item?.pushedAt || item?.pushed_at);
+    if (["suitable", "unsuitable"].includes(item?.decision) && decisionDate > timeline[item.decision]) {
+      timeline[item.decision] = decisionDate;
+    }
+    if (pushedDate > timeline.pushed) timeline.pushed = pushedDate;
+  });
+  return [
+    timeline.suitable ? `<p>合适时间：${escapeHtml(timeline.suitable)}</p>` : "",
+    timeline.unsuitable ? `<p>不合适时间：${escapeHtml(timeline.unsuitable)}</p>` : "",
+    timeline.pushed ? `<p>推送时间：${escapeHtml(timeline.pushed)}</p>` : "",
+  ].join("");
 }
 function scrollSelectedCandidateIntoView() {
   const list = $("miniList");
@@ -2328,11 +2359,12 @@ function renderContext() {
   $("previewTitle").textContent = `${resumeName(resume)} · ${resumeJob(resume)}`;
   renderResumePreview(context);
   const memberDecisionMarkup = memberDecisionSummaryMarkup(resume);
+  const reviewerDecisionTimeline = reviewerDecisionTimelineMarkup(resume);
   $("summaryCards").innerHTML = `
     <div class="summary-card ts-summary-card"><h3>候选人</h3>
       <p>姓名：${escapeHtml(resumeName(resume))}</p><p>岗位：${escapeHtml(resumeJob(resume))}</p>
       <p>电话：${escapeHtml(resume.phone || "")}</p><p>学历：${escapeHtml(resumeEducationLine(resume))}${schoolTierMarkup}</p>
-      <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p></div>
+      <p>入库时间：${escapeHtml(resumeImportTime(resume))}</p>${reviewerDecisionTimeline}</div>
     <div class="summary-card ts-summary-card"><h3>评分</h3>
       <p>分数：${escapeHtml(context.score?.value ?? "暂无")}</p><p>等级：${escapeHtml(context.score?.grade || "暂无")}</p></div>
     ${memberDecisionMarkup}

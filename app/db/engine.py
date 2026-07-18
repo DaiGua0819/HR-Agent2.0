@@ -82,6 +82,18 @@ def run_migrations(database_path: str | Path | None = None) -> None:
         )
         _add_column_if_missing(
             connection,
+            "resume_review_states",
+            "decision_at",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
+            "resume_review_states",
+            "pushed_at",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            connection,
             "resume_assignments",
             "completed_by_user_id",
             "TEXT NOT NULL DEFAULT ''",
@@ -98,6 +110,7 @@ def run_migrations(database_path: str | Path | None = None) -> None:
             "completed_at",
             "TEXT NOT NULL DEFAULT ''",
         )
+        _backfill_review_action_times(connection)
         _migrate_interview_sessions_if_present(connection)
         connection.commit()
 
@@ -138,6 +151,39 @@ def _add_column_if_missing(
     columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _backfill_review_action_times(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        UPDATE resume_review_states
+        SET decision_at = COALESCE(
+          (
+            SELECT MIN(event.created_at)
+            FROM resume_review_events AS event
+            WHERE event.resume_id = resume_review_states.resume_id
+              AND event.user_id = resume_review_states.user_id
+              AND event.event_type = 'decision_changed'
+          ),
+          updated_at
+        )
+        WHERE decision_at = '' AND decision != 'undecided'
+        """
+    )
+    connection.execute(
+        """
+        UPDATE resume_review_states
+        SET pushed_at = COALESCE(
+          (
+            SELECT MIN(assignment.created_at)
+            FROM resume_assignments AS assignment
+            WHERE assignment.source_decision_id = resume_review_states.id
+          ),
+          updated_at
+        )
+        WHERE pushed_at = '' AND assigned_to != ''
+        """
+    )
 
 
 def _migrate_interview_sessions_if_present(connection: sqlite3.Connection) -> None:

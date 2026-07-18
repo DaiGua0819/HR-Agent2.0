@@ -39,6 +39,8 @@ class ReviewState:
     note: str = ""
     assigned_to: str = ""
     viewed_at: str = ""
+    decision_at: str = ""
+    pushed_at: str = ""
     created_at: str = ""
     updated_at: str = ""
 

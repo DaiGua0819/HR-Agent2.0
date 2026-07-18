@@ -278,6 +278,8 @@ CREATE TABLE IF NOT EXISTS resume_review_states (
   note TEXT NOT NULL DEFAULT '',
   assigned_to TEXT NOT NULL DEFAULT '',
   viewed_at TEXT NOT NULL DEFAULT '',
+  decision_at TEXT NOT NULL DEFAULT '',
+  pushed_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(user_id, resume_id)

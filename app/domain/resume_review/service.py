@@ -72,6 +72,7 @@ class ResumeReviewService:
             raise ValueError("invalid_review_decision")
         before = self.repository.get_state(resume_id, user_id)
         assigned_to = before.assigned_to if before and decision == DECISION_SUITABLE else ""
+        decision_at = _now()
         state = self.repository.upsert_state(
             resume_id=resume_id,
             user_id=user_id,
@@ -81,7 +82,9 @@ class ResumeReviewService:
             reason_tags=reason_tags or [],
             note=note,
             assigned_to=assigned_to,
-            viewed_at=(before.viewed_at if before and before.viewed_at else _now()),
+            viewed_at=(before.viewed_at if before and before.viewed_at else decision_at),
+            decision_at=decision_at,
+            pushed_at=(before.pushed_at if before and assigned_to else ""),
         )
         event_id = self.repository.append_event(
             resume_id=resume_id,
@@ -123,6 +126,7 @@ class ResumeReviewService:
         if before is None or before.decision != DECISION_SUITABLE:
             raise ValueError("resume_not_suitable_for_push")
         assigned_to = self.shared_admin_inbox
+        pushed_at = before.pushed_at or _now()
         state = self.repository.upsert_state(
             resume_id=resume_id,
             user_id=user_id,
@@ -132,7 +136,9 @@ class ResumeReviewService:
             reason_tags=before.reason_tags,
             note=note if note else before.note,
             assigned_to=assigned_to,
-            viewed_at=(before.viewed_at if before.viewed_at else _now()),
+            viewed_at=(before.viewed_at if before.viewed_at else pushed_at),
+            decision_at=before.decision_at or before.updated_at or pushed_at,
+            pushed_at=pushed_at,
         )
         assignment = self.repository.create_assignment(
             resume_id=resume_id,
@@ -319,6 +325,8 @@ def _state_payload(state: ReviewState | None) -> dict[str, object]:
         "note": state.note,
         "assignedTo": state.assigned_to,
         "viewedAt": state.viewed_at,
+        "decisionAt": state.decision_at,
+        "pushedAt": state.pushed_at,
         "createdAt": state.created_at,
         "updatedAt": state.updated_at,
     }

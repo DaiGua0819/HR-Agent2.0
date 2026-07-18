@@ -29,6 +29,67 @@ def test_review_migration_creates_tables(tmp_path: Path) -> None:
     run_migrations(database)
 
     with connect(database) as connection:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(resume_review_states)")
+        }
+
+    assert {"decision_at", "pushed_at"} <= columns
+
+
+def test_review_migration_backfills_action_times_from_events_and_assignments(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "review-times.sqlite"
+    run_migrations(database)
+    with connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO resume_review_states (
+              id, user_id, user_name, resume_id, read_status, decision, reason_tags,
+              note, assigned_to, viewed_at, decision_at, pushed_at, created_at, updated_at
+            ) VALUES (
+              'state-1', 'member-1', '成员甲', 'resume-1', 'viewed', 'suitable', '[]',
+              '', 'shared-admin-inbox', '', '', '',
+              '2026-07-10T00:00:00+00:00', '2026-07-12T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO resume_review_events (
+              id, resume_id, user_id, event_type, before_json, after_json, created_at
+            ) VALUES (
+              'event-1', 'resume-1', 'member-1', 'decision_changed', '{}', '{}',
+              '2026-07-11T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO resume_assignments (
+              id, resume_id, from_user_id, assigned_to_user_id, status,
+              source_decision_id, note, created_at, updated_at
+            ) VALUES (
+              'assignment-1', 'resume-1', 'member-1', 'shared-admin-inbox', 'pending',
+              'state-1', '', '2026-07-12T00:00:00+00:00',
+              '2026-07-12T00:00:00+00:00'
+            )
+            """
+        )
+        connection.commit()
+
+    run_migrations(database)
+
+    with connect(database) as connection:
+        row = connection.execute(
+            "SELECT decision_at, pushed_at FROM resume_review_states WHERE id = 'state-1'"
+        ).fetchone()
+
+    assert row["decision_at"] == "2026-07-11T00:00:00+00:00"
+    assert row["pushed_at"] == "2026-07-12T00:00:00+00:00"
+
+    with connect(database) as connection:
         tables = {
             row["name"]
             for row in connection.execute(
@@ -72,14 +133,20 @@ def test_suitable_decision_waits_for_explicit_admin_push(tmp_path: Path) -> None
 
     assert result["state"]["decision"] == "suitable"
     assert result["state"]["assignedTo"] == ""
+    assert result["state"]["decisionAt"]
+    assert result["state"]["pushedAt"] == ""
     assert result["assignment"] is None
     assert service.shared_admin_queue() == []
 
+    decision_at = result["state"]["decisionAt"]
     pushed = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
     duplicate = service.push_to_admin(resume_id="resume-1", user_id="viewer-1")
     queue = service.shared_admin_queue()
 
     assert pushed["assignment"]["assignedToUserId"] == SHARED_ADMIN_INBOX
+    assert pushed["state"]["decisionAt"] == decision_at
+    assert pushed["state"]["pushedAt"]
+    assert duplicate["state"]["pushedAt"] == pushed["state"]["pushedAt"]
     assert duplicate["assignment"]["id"] == pushed["assignment"]["id"]
     assert len(queue) == 1
     assert queue[0]["resume"]["id"] == "resume-1"
@@ -383,9 +450,11 @@ def test_admin_resume_list_includes_member_review_decisions(tmp_path: Path) -> N
             "decision": "unsuitable",
             "reasonTags": ["暂不匹配"],
             "note": "经验不符",
-            "assignedTo": "",
-            "viewedAt": service.state_for_resume("resume-1", "local-member").viewed_at,
-            "createdAt": service.state_for_resume("resume-1", "local-member").created_at,
+                "assignedTo": "",
+                "viewedAt": service.state_for_resume("resume-1", "local-member").viewed_at,
+                "decisionAt": service.state_for_resume("resume-1", "local-member").decision_at,
+                "pushedAt": service.state_for_resume("resume-1", "local-member").pushed_at,
+                "createdAt": service.state_for_resume("resume-1", "local-member").created_at,
             "updatedAt": service.state_for_resume("resume-1", "local-member").updated_at,
         }
     ]

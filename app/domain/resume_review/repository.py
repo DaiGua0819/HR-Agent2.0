@@ -80,6 +80,8 @@ class ResumeReviewRepository:
         note: str | None = None,
         assigned_to: str | None = None,
         viewed_at: str | None = None,
+        decision_at: str | None = None,
+        pushed_at: str | None = None,
     ) -> ReviewState:
         """更新审阅状态，未存在时创建。"""
 
@@ -100,6 +102,16 @@ class ResumeReviewRepository:
             if viewed_at is not None
             else (current.viewed_at if current else "")
         )
+        next_decision_at = (
+            decision_at
+            if decision_at is not None
+            else (current.decision_at if current else "")
+        )
+        next_pushed_at = (
+            pushed_at
+            if pushed_at is not None
+            else (current.pushed_at if current else "")
+        )
         state = ReviewState(
             id=current.id if current else uuid4().hex,
             user_id=user_id,
@@ -115,6 +127,8 @@ class ResumeReviewRepository:
             note=note if note is not None else (current.note if current else ""),
             assigned_to=next_assigned_to,
             viewed_at=next_viewed_at,
+            decision_at=next_decision_at,
+            pushed_at=next_pushed_at,
             created_at=current.created_at if current else now,
             updated_at=now,
         )
@@ -123,9 +137,9 @@ class ResumeReviewRepository:
                 """
                 INSERT INTO resume_review_states (
                   id, user_id, user_name, resume_id, read_status, decision, reason_tags,
-                  note, assigned_to, viewed_at, created_at, updated_at
+                  note, assigned_to, viewed_at, decision_at, pushed_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, resume_id) DO UPDATE SET
                   user_name = excluded.user_name,
                   read_status = excluded.read_status,
@@ -134,6 +148,8 @@ class ResumeReviewRepository:
                   note = excluded.note,
                   assigned_to = excluded.assigned_to,
                   viewed_at = excluded.viewed_at,
+                  decision_at = excluded.decision_at,
+                  pushed_at = excluded.pushed_at,
                   updated_at = excluded.updated_at
                 """,
                 _state_params(state),
@@ -352,6 +368,8 @@ def _state_params(state: ReviewState) -> tuple[object, ...]:
         state.note,
         state.assigned_to,
         state.viewed_at,
+        state.decision_at,
+        state.pushed_at,
         state.created_at,
         state.updated_at,
     )
@@ -369,6 +387,8 @@ def _state_from_row(row: sqlite3.Row) -> ReviewState:
         note=row["note"],
         assigned_to=row["assigned_to"],
         viewed_at=row["viewed_at"],
+        decision_at=row["decision_at"],
+        pushed_at=row["pushed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
