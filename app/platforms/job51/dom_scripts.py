@@ -57,6 +57,44 @@ CLICK_UNREAD_FILTER_JS = r"""
 }
 """
 
+POSITION_FILTER_STATE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      rect.width > 0 && rect.height > 0;
+  };
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const target = Array.from(document.querySelectorAll(".menu-item-all")).find(visible);
+  if (!target) {
+    return { ready: false, selected: false, reason: "all_positions_control_not_found" };
+  }
+  const candidates = [target, target.parentElement].filter(Boolean);
+  const selectedByState = candidates.some((item) => {
+    const cls = String(item.className || "").toLowerCase();
+    const aria = String(item.getAttribute && item.getAttribute("aria-selected") || "");
+    const data = String(item.getAttribute && item.getAttribute("data-selected") || "");
+    return /(^|\s)(is-active|active|selected|checked)(\s|$)/.test(cls) ||
+      aria === "true" || data === "true" ||
+      Boolean(item.querySelector && item.querySelector("input:checked, .is-checked"));
+  });
+  const current = Array.from(document.querySelectorAll(
+    ".position-menu .menu-item_content_short, .position-menu [class*='selected']"
+  )).find(visible);
+  const currentLabel = text(current);
+  const selected = selectedByState || /全部职位|全部岗位/.test(currentLabel);
+  return {
+    ready: true,
+    selected,
+    label: text(target),
+    currentLabel,
+    source: selectedByState ? "control_state" : "selected_label",
+  };
+}
+"""
+
 READ_UNREAD_ROWS_JS = r"""
 () => {
   const visible = (el) => {

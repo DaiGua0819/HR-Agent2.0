@@ -170,6 +170,27 @@ def test_job51_open_chat_page_installs_app_blocker_before_filter_click() -> None
     assert page.app_download_popups == 0
 
 
+def test_job51_all_positions_selection_is_idempotent() -> None:
+    page = FakePage(all_positions_selected=True)
+
+    result = asyncio.run(select_positions(page))
+
+    assert result["selected"] is True
+    assert result["changed"] is False
+    assert page.clicks == []
+
+
+def test_job51_all_positions_selection_reports_real_change() -> None:
+    page = FakePage(all_positions_selected=False)
+
+    result = asyncio.run(select_positions(page))
+
+    assert result["selected"] is True
+    assert result["changed"] is True
+    assert page.all_positions_selected is True
+    assert page.clicks == [".menu-item-all"]
+
+
 def test_job51_find_next_thread_verifies_opened_candidate() -> None:
     """51job 点开未读行后校验当前聊天区身份，避免虚拟列表误读上一个人。"""
 

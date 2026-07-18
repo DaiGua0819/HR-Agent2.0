@@ -549,7 +549,7 @@ class FakePage:
             self.selected_recommend_index = int(element.attrs["index"])
         elif "未读" in element.text_value:
             self.unread_selected = True
-        elif "全部职位" in element.text_value:
+        elif any(label in element.text_value for label in ("全部职位", "全部岗位")):
             self.all_positions_selected = True
         elif "AI淘金" in element.text_value:
             self.recommend_traditional_mode = True

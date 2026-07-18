@@ -28,6 +28,7 @@ from app.platforms.job51.dom_scripts import (
     NEW_GREETING_REPLY_STATE_JS,
     NEW_GREETING_SELECTION_STATE_JS,
     OPENED_CANDIDATE_STATE_JS,
+    POSITION_FILTER_STATE_JS,
     READ_CHAT_CONTEXT_JS,
     READ_UNREAD_ROWS_JS,
     VERIFY_NEW_GREETING_REPLY_JS,
@@ -86,12 +87,32 @@ async def select_positions(
 
     await install_app_download_blocker(page)
     selector = selectors.POSITION_MENU if target_position else selectors.ALL_POSITION_MENU
-    click = await reliable_click(page, selector, label="51job职位筛选")
+    before = await _position_filter_state(page) if not target_position else {}
+    if not target_position and before.get("selected"):
+        return {
+            "selected": True,
+            "changed": False,
+            "label": "全部岗位",
+            "mode": "all",
+            "before": before,
+            "state": before,
+        }
+    click = await reliable_click(
+        page,
+        selector,
+        label="51job职位筛选",
+        verify=(lambda: _verify_all_positions_selected(page)) if not target_position else None,
+    )
     clicked = bool(click.get("ok"))
+    state = await _position_filter_state(page) if not target_position else {}
     return {
-        "selected": clicked,
+        "selected": bool(state.get("selected")) if not target_position else clicked,
+        "changed": clicked,
         "label": target_position or "全部岗位",
         "mode": "target" if target_position else "all",
+        "before": before,
+        "state": state,
+        "action": click,
     }
 
 
@@ -590,6 +611,33 @@ async def _safe_eval_dict(
     except Exception:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+async def _position_filter_state(page: BrowserPage) -> dict[str, object]:
+    if bool(getattr(page, "all_positions_selected", False)):
+        return {
+            "ready": True,
+            "selected": True,
+            "label": "全部岗位",
+            "source": "fake_page",
+        }
+    raw = await _safe_eval_dict(page, "job51.position_filter_state")
+    if not raw:
+        raw = await _safe_eval_dict(page, POSITION_FILTER_STATE_JS)
+    return raw or {
+        "ready": False,
+        "selected": False,
+        "reason": "position_state_unknown",
+    }
+
+
+async def _verify_all_positions_selected(page: BrowserPage) -> dict[str, object]:
+    state = await _position_filter_state(page)
+    return {
+        "verified": bool(state.get("selected")),
+        "reason": "" if state.get("selected") else "all_positions_not_selected",
+        "state": state,
+    }
 
 
 def _message_from_raw(item: dict[str, object]) -> ChatMessage:
