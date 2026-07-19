@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -121,6 +122,19 @@ def subprocess_environment(base: dict[str, str] | None = None) -> dict[str, str]
     environment["PYTHONUTF8"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
     return environment
+
+
+def configure_standard_streams() -> None:
+    """Keep candidate text printable on Windows regardless of the active code page."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            continue
 
 
 def classify_result(payload: dict[str, Any]) -> Classification:
@@ -767,6 +781,7 @@ def concise_result(payload: dict[str, Any]) -> dict[str, Any]:
         "processed": int(payload.get("processed") or 0),
         "conversationId": str(payload.get("conversationId") or ""),
         "selectedConversationId": str(payload.get("selectedConversationId") or ""),
+        "selectedProcessingKey": str(payload.get("selectedProcessingKey") or ""),
         "nextAction": str(payload.get("nextAction") or ""),
         "stage": str(payload.get("stage") or ""),
         "resultReason": str(result.get("reason") or ""),
@@ -984,11 +999,15 @@ def _run_guarded(
                         classification=classification,
                         summary=summary,
                     )
+                    processed_key = str(summary.get("selectedProcessingKey") or "").strip()
+                    if summary["processed"] > 0 and processed_key:
+                        excluded_contact_ids.add(processed_key)
                     if classification.is_anomaly:
                         if exceeded:
                             return
                         skipped_contact_id = str(
-                            summary.get("selectedConversationId")
+                            processed_key
+                            or summary.get("selectedConversationId")
                             or summary.get("conversationId")
                             or ""
                         ).strip()
@@ -1529,6 +1548,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_standard_streams()
     args = build_parser().parse_args(argv)
     topology = load_topology(args.topology)
     try:

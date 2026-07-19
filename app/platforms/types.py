@@ -43,6 +43,7 @@ class ConversationRef:
     platform: Platform
     owner: str
     conversation_id: str
+    processing_key: str = ""
 
 
 @dataclass(frozen=True)

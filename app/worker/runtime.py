@@ -108,6 +108,7 @@ class WorkerRuntime:
                     "owner": self.owner,
                     "platform": platform.value,
                     "selectedConversationId": ref.conversation_id,
+                    "selectedProcessingKey": ref.processing_key,
                     **contact,
                     "dryRun": load_settings().dry_run,
                 }

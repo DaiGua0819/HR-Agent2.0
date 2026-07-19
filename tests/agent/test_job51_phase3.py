@@ -227,6 +227,48 @@ def test_job51_find_next_thread_does_not_repeat_successful_identity_verification
     assert page.opened_state_reads == 1
 
 
+def test_job51_processing_key_ignores_badge_changes_and_tracks_new_messages() -> None:
+    first = conversation(
+        "AI应用开发实习生",
+        [{"sender": "other", "text": "请问岗位还在招聘吗"}],
+        label="3\n方友朋 AI应用开发实习生\n13:36\n请问岗位还在招聘吗",
+    )
+    first["name"] = "方友朋"
+    same_message = {
+        **first,
+        "label": "1\n方友朋 AI应用开发实习生\n13:36\n请问岗位还在招聘吗",
+    }
+    repeated_text_later = {
+        **first,
+        "label": "1\n方友朋 AI应用开发实习生\n13:50\n请问岗位还在招聘吗",
+    }
+    new_message = {
+        **first,
+        "label": "1\n方友朋 AI应用开发实习生\n13:50\n可以接受",
+        "latest_message": "可以接受",
+        "messages": [{"sender": "other", "text": "可以接受"}],
+    }
+
+    first_ref = asyncio.run(find_next_thread(FakePage(conversations=[first]), owner="宋峰峰"))
+    same_ref = asyncio.run(
+        find_next_thread(FakePage(conversations=[same_message]), owner="宋峰峰")
+    )
+    repeated_later_ref = asyncio.run(
+        find_next_thread(FakePage(conversations=[repeated_text_later]), owner="宋峰峰")
+    )
+    new_ref = asyncio.run(
+        find_next_thread(FakePage(conversations=[new_message]), owner="宋峰峰")
+    )
+
+    assert first_ref is not None
+    assert same_ref is not None
+    assert repeated_later_ref is not None
+    assert new_ref is not None
+    assert first_ref.processing_key == same_ref.processing_key
+    assert first_ref.processing_key != repeated_later_ref.processing_key
+    assert first_ref.processing_key != new_ref.processing_key
+
+
 def test_job51_find_next_thread_uses_parsed_row_identity_when_attrs_missing() -> None:
     """Real 51job rows expose name/job in parsed state, not as DOM attributes."""
 
@@ -1572,6 +1614,7 @@ def test_job51_unread_row_state_preserves_candidate_identity_fields() -> None:
             "name": "Alice",
             "position": "AI Intern",
             "latest_message": "hello",
+            "latest_time": "9:32",
             "unread_count": 3,
         }
     ]

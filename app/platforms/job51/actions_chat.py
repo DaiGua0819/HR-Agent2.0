@@ -131,6 +131,7 @@ async def read_unread_conversations(page: BrowserPage, *, owner: str) -> list[Co
                 platform=Platform.JOB51,
                 owner=owner,
                 conversation_id=str(state.get("id") or label),
+                processing_key=_state_identity_key(state),
             )
         )
     return refs
@@ -211,14 +212,24 @@ async def find_next_thread(
         }
         click = await click_thread_by_state(page, state, expected=expected, row=row)
         if click.get("ok") or click.get("verified"):
-            return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
+            return ConversationRef(
+                Platform.JOB51,
+                owner,
+                str(expected["id"]),
+                processing_key=identity_key,
+            )
         ready = bool(click.get("ok") or click.get("clicked")) or await wait_chat_ready(
             page,
             timeout_ms=6500,
         )
         opened = await verify_opened_candidate(page, expected, chat_ready=ready)
         if opened.get("opened"):
-            return ConversationRef(Platform.JOB51, owner, str(expected["id"]))
+            return ConversationRef(
+                Platform.JOB51,
+                owner,
+                str(expected["id"]),
+                processing_key=identity_key,
+            )
         failed_open_keys.add(identity_key)
     return None
 
@@ -1268,12 +1279,17 @@ def _state_identity_key(state: dict[str, object]) -> str:
         or state.get("message")
         or ""
     )
+    latest_time = _compact_identity_text(
+        state.get("latest_time")
+        or state.get("latestTime")
+        or _infer_latest_time_from_label(str(state.get("label") or ""))
+    )
     row_id = _compact_identity_text(state.get("id"))
     label = _compact_identity_text(state.get("label"))
-    if name or position or latest:
-        return "|".join(("identity", name, position, latest))
     if row_id:
-        return f"id|{row_id}"
+        return "|".join(("id", row_id, "message", latest, latest_time))
+    if name or position or latest:
+        return "|".join(("identity", name, position, latest, latest_time))
     return f"label|{label}"
 
 
@@ -1307,6 +1323,13 @@ def _infer_latest_message_from_label(label: str) -> str:
             continue
         candidates.append(line)
     return candidates[-1] if len(candidates) >= 2 else ""
+
+
+def _infer_latest_time_from_label(label: str) -> str:
+    return next(
+        (line for line in _identity_label_lines(label) if _TIME_LINE_PATTERN.match(line)),
+        "",
+    )
 
 
 def _identity_label_lines(label: str) -> list[str]:
@@ -1401,10 +1424,13 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
             or item.get("message")
             or ""
         )
+        latest_time = str(item.get("latest_time") or item.get("latestTime") or "")
         if not name:
             name = _infer_name_from_label(label)
         if not latest_message:
             latest_message = _infer_latest_message_from_label(label)
+        if not latest_time:
+            latest_time = _infer_latest_time_from_label(label)
         rows.append(
             {
                 "index": _safe_int(item.get("index")),
@@ -1413,6 +1439,7 @@ def _normalize_unread_rows(value: object) -> list[dict[str, object]]:
                 "name": name,
                 "position": str(item.get("position") or item.get("jobName") or ""),
                 "latest_message": latest_message,
+                "latest_time": latest_time,
                 "unread_count": unread_count,
             }
         )

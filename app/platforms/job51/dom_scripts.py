@@ -139,6 +139,9 @@ READ_UNREAD_ROWS_JS = r"""
       const name = text(row.querySelector(".username, .username-text"));
       const position = text(row.querySelector(".jobname"));
       const latestMessage = text(row.querySelector(".last-message, .msg, .message"));
+      const latestTime = text(row.querySelector(
+        ".time, .last-time, .item-time, [class*='message-time'], [class*='update-time']"
+      ));
       return {
         index,
         id: attr(row, "id") || attr(row, "data-id") || attr(row, "data-uid") || "",
@@ -146,6 +149,7 @@ READ_UNREAD_ROWS_JS = r"""
         name,
         position,
         latestMessage,
+        latestTime,
         unreadCount: count || (unreadState ? 1 : 0),
       };
     }),

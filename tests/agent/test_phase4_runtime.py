@@ -121,6 +121,7 @@ def test_worker_process_messages_excludes_prior_contact_and_returns_selected_id(
     assert result["processed"] == 1
     assert result["conversationId"] == "candidate-detail-b"
     assert result["selectedConversationId"] == "row-b"
+    assert result["selectedProcessingKey"] == "snapshot-b"
 
 
 def test_worker_reuses_message_preparation_within_same_batch() -> None:
@@ -319,8 +320,18 @@ class ExcludingContactRuntime(WorkerRuntime):
     def __init__(self) -> None:
         super().__init__(owner="owner", port=8801, cdp_port=9222)
         self.refs = [
-            ConversationRef(Platform.JOB51, "owner", "row-a"),
-            ConversationRef(Platform.JOB51, "owner", "row-b"),
+            ConversationRef(
+                Platform.JOB51,
+                "owner",
+                "row-a",
+                processing_key="snapshot-a",
+            ),
+            ConversationRef(
+                Platform.JOB51,
+                "owner",
+                "row-b",
+                processing_key="snapshot-b",
+            ),
         ]
         self.seen_inputs: list[set[str]] = []
 

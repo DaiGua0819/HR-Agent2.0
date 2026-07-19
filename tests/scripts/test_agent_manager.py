@@ -13,6 +13,26 @@ from scripts import agent_manager
 
 
 class AgentManagerTests(unittest.TestCase):
+    def test_configure_standard_streams_uses_utf8_when_supported(self) -> None:
+        class ReconfigurableStream:
+            def __init__(self) -> None:
+                self.options: dict[str, object] = {}
+
+            def reconfigure(self, **kwargs: object) -> None:
+                self.options = dict(kwargs)
+
+        stdout = ReconfigurableStream()
+        stderr = ReconfigurableStream()
+
+        with (
+            patch.object(agent_manager.sys, "stdout", stdout),
+            patch.object(agent_manager.sys, "stderr", stderr),
+        ):
+            agent_manager.configure_standard_streams()
+
+        self.assertEqual(stdout.options, {"encoding": "utf-8", "errors": "backslashreplace"})
+        self.assertEqual(stderr.options, {"encoding": "utf-8", "errors": "backslashreplace"})
+
     def test_classifies_send_failure_as_anomaly(self) -> None:
         result = agent_manager.classify_result(
             {
@@ -326,6 +346,119 @@ class AgentManagerTests(unittest.TestCase):
             self.assertEqual(exclusions_by_call, [[], ["row-a"], ["row-a"]])
             self.assertTrue(batch_ids_by_call[0])
             self.assertEqual(len(set(batch_ids_by_call)), 1)
+
+    def test_guarded_run_excludes_every_processed_message_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            exclusions_by_call: list[list[str]] = []
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                del method, timeout
+                query = parse_qs(urlparse(url).query)
+                exclusions_by_call.append(query.get("exclude_conversation_id", []))
+                call_number = len(exclusions_by_call)
+                if call_number == 1:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "candidate-a",
+                        "selectedConversationId": "row-a",
+                        "selectedProcessingKey": "candidate-a:message-1",
+                        "nextAction": "request_resume",
+                        "stage": "resume_attachment_downloaded",
+                    }
+                if call_number == 2:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "candidate-a",
+                        "selectedConversationId": "row-a",
+                        "selectedProcessingKey": "candidate-a:message-2",
+                        "nextAction": "ask_screening",
+                        "stage": "screening_question_sent",
+                    }
+                return {"accepted": True, "processed": 0}
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=0,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["processed"], 2)
+            self.assertEqual(
+                exclusions_by_call,
+                [
+                    [],
+                    ["candidate-a:message-1"],
+                    ["candidate-a:message-1", "candidate-a:message-2"],
+                ],
+            )
+
+    def test_guarded_run_does_not_exclude_normal_legacy_contact_without_snapshot_key(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            exclusions_by_call: list[list[str]] = []
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                del method, timeout
+                query = parse_qs(urlparse(url).query)
+                exclusions_by_call.append(query.get("exclude_conversation_id", []))
+                if len(exclusions_by_call) == 1:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "stable-contact-a",
+                        "selectedConversationId": "stable-contact-a",
+                        "nextAction": "answer_question",
+                        "stage": "knowledge_hit",
+                    }
+                return {"accepted": True, "processed": 0}
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "boss")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=0,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["processed"], 1)
+            self.assertEqual(exclusions_by_call, [[], []])
 
     def test_guarded_run_stops_on_fifth_contact_anomaly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
