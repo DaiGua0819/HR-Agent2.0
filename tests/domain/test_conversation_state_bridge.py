@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.db.engine import connect, run_migrations
+from app.domain.conversation.dedup import recent_messages_fingerprint
 from app.domain.conversation.identity import resolve_or_create_session
 from app.domain.conversation.models import CandidateStatus
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.artifacts import ResumeArtifactStore, parse_pending_artifacts
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
+from app.evaluation.decision_log import InMemoryDecisionSink
 from app.features.interview_center.service import InterviewCenterService
 from app.platforms.boss.adapter import BossAdapter
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.types import Candidate, ChatMessage, Conversation, MessageSender
+
+from scripts import agent_manager
 
 
 def test_migration_adds_conversation_and_resume_bridge_tables(tmp_path: Path) -> None:
@@ -44,6 +51,7 @@ def test_migration_adds_conversation_and_resume_bridge_tables(tmp_path: Path) ->
         "conversation_sessions",
         "conversation_messages",
         "candidate_status",
+        "message_processing_snapshots",
         "resume_artifacts",
     } <= tables
     assert {
@@ -54,6 +62,208 @@ def test_migration_adds_conversation_and_resume_bridge_tables(tmp_path: Path) ->
         "linked_platform_conversation_id",
         "source_artifact_id",
     } <= resume_columns
+
+
+def test_migration_rebuilds_legacy_processing_snapshots_by_canonical_key(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "legacy-processing-snapshots.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE message_processing_snapshots (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              owner TEXT NOT NULL,
+              platform TEXT NOT NULL,
+              provisional_processing_key TEXT NOT NULL,
+              canonical_processing_key TEXT NOT NULL DEFAULT '',
+              canonical_session_id TEXT NOT NULL DEFAULT '',
+              latest_message_fingerprint TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL,
+              action TEXT NOT NULL DEFAULT '',
+              stage TEXT NOT NULL DEFAULT '',
+              error_reasons TEXT NOT NULL DEFAULT '[]',
+              retryable INTEGER NOT NULL DEFAULT 0,
+              attempt_count INTEGER NOT NULL DEFAULT 1,
+              processed_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(owner, platform, provisional_processing_key)
+            );
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO message_processing_snapshots (
+              owner, platform, provisional_processing_key,
+              canonical_processing_key, canonical_session_id,
+              latest_message_fingerprint, status, stage, retryable,
+              attempt_count, processed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "owner",
+                    "job51",
+                    "candidate-a:09:00",
+                    "session|conv-a|message|fingerprint-1",
+                    "conv-a",
+                    "fingerprint-1",
+                    "failed_retryable",
+                    "download_not_captured",
+                    1,
+                    1,
+                    "2026-07-19T00:00:00+00:00",
+                    "2026-07-19T00:00:01+00:00",
+                ),
+                (
+                    "owner",
+                    "job51",
+                    "candidate-a:09:01",
+                    "session|conv-a|message|fingerprint-1",
+                    "conv-a",
+                    "fingerprint-1",
+                    "failed_retryable",
+                    "download_not_captured",
+                    1,
+                    2,
+                    "2026-07-19T00:00:02+00:00",
+                    "2026-07-19T00:00:03+00:00",
+                ),
+            ],
+        )
+
+    run_migrations(database)
+
+    with connect(database) as connection:
+        rows = connection.execute(
+            """
+            SELECT snapshot_key, provisional_processing_key, attempt_count,
+                   processed_at, updated_at
+            FROM message_processing_snapshots
+            """
+        ).fetchall()
+        connection.execute(
+            """
+            INSERT INTO message_processing_snapshots (
+              owner, platform, snapshot_key, provisional_processing_key,
+              canonical_processing_key, canonical_session_id,
+              latest_message_fingerprint, status, processed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "owner",
+                "job51",
+                "session|conv-a|message|fingerprint-2",
+                "candidate-a:09:01",
+                "session|conv-a|message|fingerprint-2",
+                "conv-a",
+                "fingerprint-2",
+                "completed",
+                "2026-07-19T00:01:00+00:00",
+                "2026-07-19T00:01:00+00:00",
+            ),
+        )
+        snapshot_count = connection.execute(
+            "SELECT COUNT(*) FROM message_processing_snapshots"
+        ).fetchone()[0]
+
+    assert [tuple(row) for row in rows] == [
+        (
+            "session|conv-a|message|fingerprint-1",
+            "candidate-a:09:01",
+            3,
+            "2026-07-19T00:00:00+00:00",
+            "2026-07-19T00:00:03+00:00",
+        )
+    ]
+    assert snapshot_count == 2
+
+
+def test_processing_snapshot_migration_is_safe_for_concurrent_workers(
+    tmp_path: Path,
+) -> None:
+    for attempt in range(30):
+        database = tmp_path / f"concurrent-snapshot-migration-{attempt}.sqlite"
+        with sqlite3.connect(database) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE message_processing_snapshots (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  owner TEXT NOT NULL,
+                  platform TEXT NOT NULL,
+                  provisional_processing_key TEXT NOT NULL,
+                  canonical_processing_key TEXT NOT NULL DEFAULT '',
+                  canonical_session_id TEXT NOT NULL DEFAULT '',
+                  latest_message_fingerprint TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL,
+                  action TEXT NOT NULL DEFAULT '',
+                  stage TEXT NOT NULL DEFAULT '',
+                  error_reasons TEXT NOT NULL DEFAULT '[]',
+                  retryable INTEGER NOT NULL DEFAULT 0,
+                  attempt_count INTEGER NOT NULL DEFAULT 1,
+                  processed_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  UNIQUE(owner, platform, provisional_processing_key)
+                );
+                """
+            )
+        start = threading.Barrier(2)
+
+        def migrate(
+            current_database: Path = database,
+            barrier: threading.Barrier = start,
+        ) -> None:
+            barrier.wait(timeout=5)
+            agent_manager.ensure_processing_snapshot_table(current_database)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(migrate) for _ in range(2)]
+            for future in futures:
+                future.result()
+
+        with connect(database) as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(message_processing_snapshots)"
+                ).fetchall()
+            }
+        assert "snapshot_key" in columns
+
+
+def test_conversation_repository_loads_durable_processing_exclusions(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "processing-exclusions.sqlite"
+    repository = ConversationRepository(database)
+    with connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO message_processing_snapshots (
+              owner, platform, snapshot_key, provisional_processing_key,
+              canonical_processing_key, status, retryable, attempt_count,
+              processed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'completed', 0, 1, ?, ?)
+            """,
+            (
+                "owner",
+                "job51",
+                "session|conv-a|message|fingerprint-1",
+                "candidate-a:message-1",
+                "session|conv-a|message|fingerprint-1",
+                "2026-07-19T00:00:00+00:00",
+                "2026-07-19T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+
+    assert repository.processing_snapshot_exclusions(
+        owner="owner",
+        platform="job51",
+    ) == {
+        "candidate-a:message-1",
+        "session|conv-a|message|fingerprint-1",
+    }
 
 
 def test_identity_includes_position_and_recent_message_fallback(tmp_path: Path) -> None:
@@ -200,6 +410,436 @@ def test_artifact_parse_extracts_docx_text(tmp_path: Path) -> None:
     assert resume is not None
     assert resume.parsed_name == "仲献平"
     assert "AI 产品经理" in str(resume.payload.get("rawText") or "")
+
+
+def test_artifact_store_reuses_business_identity_when_dynamic_pdf_hash_changes(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "dynamic-pdf.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("dynamic-one", "胡泽群", "AI产品经理", ["第一版简历"]),
+    ).session
+    first_file = tmp_path / "first.pdf"
+    second_file = tmp_path / "second.pdf"
+    first_file.write_bytes(b"%PDF-1.7\nwatermark-one\n%%EOF")
+    second_file.write_bytes(b"%PDF-1.7\nwatermark-two\n%%EOF")
+
+    first = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="胡泽群",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="hash-one",
+        source_kind="online_resume",
+    )
+    second = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="胡泽群",
+        position="AI产品经理",
+        file_path=second_file,
+        file_hash="hash-two",
+        source_kind="online_resume",
+    )
+
+    assert second.id == first.id
+    assert len(store.list_pending()) == 1
+
+
+def test_artifact_store_serializes_concurrent_downloads_for_same_session(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "concurrent-download.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("concurrent", "胡泽群", "AI产品经理", ["发送简历"]),
+    ).session
+    files = [tmp_path / "concurrent-one.pdf", tmp_path / "concurrent-two.pdf"]
+    files[0].write_bytes(b"%PDF-1.7\nconcurrent-one\n%%EOF")
+    files[1].write_bytes(b"%PDF-1.7\nconcurrent-two\n%%EOF")
+
+    def record(index: int):  # noqa: ANN202
+        return store.record_download(
+            session_id=session.id,
+            platform=Platform.JOB51.value,
+            owner="宋峰峰",
+            platform_conversation_id="concurrent",
+            candidate_name_from_platform="胡泽群",
+            position="AI产品经理",
+            file_path=files[index],
+            file_hash=f"concurrent-hash-{index}",
+            source_kind="online_resume",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        artifacts = list(executor.map(record, (0, 1)))
+
+    assert artifacts[0].id == artifacts[1].id
+    assert len(store.list_pending()) == 1
+
+
+def test_artifact_store_keeps_same_name_separate_across_different_jobs(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "different-jobs.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("same-platform-id", "张伟", "AI产品经理", ["第一份简历"]),
+    ).session
+    second_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("same-platform-id", "张伟", "B端社交媒体运营", ["第二份简历"]),
+    ).session
+    first_file = tmp_path / "job-one.pdf"
+    second_file = tmp_path / "job-two.pdf"
+    first_file.write_bytes(b"%PDF-1.7\njob-one\n%%EOF")
+    second_file.write_bytes(b"%PDF-1.7\njob-two\n%%EOF")
+
+    first = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="same-platform-id",
+        candidate_name_from_platform="张伟",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="job-one-hash",
+        source_kind="online_resume",
+    )
+    second = store.record_download(
+        session_id=second_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="same-platform-id",
+        candidate_name_from_platform="张伟",
+        position="B端社交媒体运营",
+        file_path=second_file,
+        file_hash="job-two-hash",
+        source_kind="online_resume",
+    )
+
+    assert first.id != second.id
+    assert len(store.list_pending()) == 2
+
+
+def test_artifact_store_does_not_merge_masked_names_without_stable_id(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "masked-names.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("masked-one", "张女士", "AI产品经理", ["第一位候选人"]),
+    ).session
+    second_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("masked-two", "张女士", "AI产品经理", ["第二位候选人"]),
+    ).session
+    first_file = tmp_path / "masked-one.pdf"
+    second_file = tmp_path / "masked-two.pdf"
+    first_file.write_bytes(b"%PDF-1.7\nmasked-one\n%%EOF")
+    second_file.write_bytes(b"%PDF-1.7\nmasked-two\n%%EOF")
+
+    first = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="张女士",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="masked-one-hash",
+        source_kind="online_resume",
+    )
+    second = store.record_download(
+        session_id=second_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="张女士",
+        position="AI产品经理",
+        file_path=second_file,
+        file_hash="masked-two-hash",
+        source_kind="online_resume",
+    )
+
+    assert first.id != second.id
+    assert len(store.list_pending()) == 2
+
+
+def test_artifact_store_does_not_merge_full_names_without_stable_id(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "same-full-name.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("full-one", "张伟", "AI产品经理", ["第一位候选人"]),
+    ).session
+    second_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("full-two", "张伟", "AI产品经理", ["第二位候选人"]),
+    ).session
+    first_file = tmp_path / "full-one.pdf"
+    second_file = tmp_path / "full-two.pdf"
+    first_file.write_bytes(b"%PDF-1.7\nfull-one\n%%EOF")
+    second_file.write_bytes(b"%PDF-1.7\nfull-two\n%%EOF")
+
+    first = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="张伟",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="full-one-hash",
+        source_kind="online_resume",
+    )
+    second = store.record_download(
+        session_id=second_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="",
+        candidate_name_from_platform="张伟",
+        position="AI产品经理",
+        file_path=second_file,
+        file_hash="full-two-hash",
+        source_kind="online_resume",
+    )
+
+    assert first.id != second.id
+    assert len(store.list_pending()) == 2
+
+
+def test_artifact_store_does_not_merge_stable_id_when_position_is_missing(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "missing-position.sqlite"
+    conversation_repo = ConversationRepository(database)
+    store = ResumeArtifactStore(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("same-platform-id", "张伟", "AI产品经理", ["第一份简历"]),
+    ).session
+    second_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("same-platform-id", "张伟", "", ["第二份简历"]),
+    ).session
+    first_file = tmp_path / "known-position.pdf"
+    second_file = tmp_path / "missing-position.pdf"
+    first_file.write_bytes(b"%PDF-1.7\nknown-position\n%%EOF")
+    second_file.write_bytes(b"%PDF-1.7\nmissing-position\n%%EOF")
+
+    first = store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="same-platform-id",
+        candidate_name_from_platform="张伟",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="known-position-hash",
+        source_kind="online_resume",
+    )
+    second = store.record_download(
+        session_id=second_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="same-platform-id",
+        candidate_name_from_platform="张伟",
+        position="",
+        file_path=second_file,
+        file_hash="missing-position-hash",
+        source_kind="online_resume",
+    )
+
+    assert first.id != second.id
+    assert len(store.list_pending()) == 2
+
+
+def test_runner_skips_download_when_current_session_already_has_artifact(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "business-resume-complete.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    old_conversation = Conversation(
+        id="old-platform-conversation",
+        platform=Platform.JOB51,
+        owner="owner",
+        candidate=Candidate(name="胡泽群", applied_position="AI产品经理"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="旧简历")],
+        should_reply=True,
+    )
+    old_session = resolve_or_create_session(conversation_repo, old_conversation).session
+    existing_file = tmp_path / "existing.pdf"
+    existing_file.write_bytes(b"%PDF-1.7\nexisting\n%%EOF")
+    artifact_store.record_download(
+        session_id=old_session.id,
+        platform=Platform.JOB51.value,
+        owner="owner",
+        platform_conversation_id="old-platform-conversation",
+        candidate_name_from_platform="胡泽群",
+        position="AI产品经理",
+        file_path=existing_file,
+        file_hash="existing-hash",
+        source_kind="online_resume",
+    )
+    page = FakePage(
+        conversations=[
+            {
+                "id": "old-platform-conversation",
+                "name": "胡泽群",
+                "position": "AI产品经理",
+                "label": "胡泽群 AI产品经理",
+                "latest_message": "简历可以下载",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "简历可以下载"}],
+                "online_resume_bytes": b"%PDF-1.7\nnew-watermark\n%%EOF",
+                "online_resume_filename": "candidate.pdf",
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="owner", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    "AI产品经理": {
+                        "directResume": True,
+                        "resumeRequestPrompt": "请发送简历",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    assert state["stage"] == "resume_already_downloaded"
+    assert page.resume_requests == 0
+    assert len(artifact_store.list_pending()) == 1
+
+
+def test_runner_skips_business_actions_for_completed_canonical_message_snapshot(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "canonical-snapshot-guard.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    bootstrap = Conversation(
+        id="snapshot-guard",
+        platform=Platform.JOB51,
+        owner="owner",
+        candidate=Candidate(name="Candidate", applied_position="DirectRole"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="简历可以下载")],
+        should_reply=True,
+    )
+    session = resolve_or_create_session(conversation_repo, bootstrap).session
+    conversation_repo.update_session_progress(
+        session.id,
+        current_stage="download_not_captured",
+        next_action="request_resume_failed",
+    )
+    conversation_repo.save_status(
+        CandidateStatus(
+            session_id=session.id,
+            last_action="request_resume_failed",
+            decided_result="download_not_captured",
+            payload={
+                "lastDecision": {
+                    "action": "request_resume_failed",
+                    "reason": "download_not_captured",
+                }
+            },
+        )
+    )
+    fingerprint = recent_messages_fingerprint(bootstrap.messages)
+    agent_manager.record_processing_snapshot(
+        database,
+        owner="owner",
+        platform=Platform.JOB51.value,
+        summary={
+            "processed": 1,
+            "selectedProcessingKey": "old-list-key",
+            "provisionalProcessingKey": "old-list-key",
+            "canonicalProcessingKey": f"session|{session.id}|message|{fingerprint}",
+            "canonicalSessionId": session.id,
+            "latestMessageFingerprint": fingerprint,
+            "nextAction": "request_resume",
+            "stage": "resume_attachment_downloaded",
+        },
+        classification=agent_manager.Classification(False, []),
+    )
+    page = FakePage(
+        conversations=[
+            {
+                "id": "snapshot-guard",
+                "name": "Candidate",
+                "position": "DirectRole",
+                "label": "Candidate DirectRole",
+                "latest_message": "简历可以下载",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "简历可以下载"}],
+                "online_resume_bytes": b"%PDF-1.7\nnew-watermark\n%%EOF",
+                "online_resume_filename": "candidate.pdf",
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="owner", dry_run=False)
+    sink = InMemoryDecisionSink()
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    "DirectRole": {
+                        "directResume": True,
+                        "resumeRequestPrompt": "请发送简历",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            decision_sink=sink,
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    assert state["stage"] == "message_snapshot_already_processed"
+    assert page.resume_requests == 0
+    assert artifact_store.list_pending() == []
+    persisted_session = conversation_repo.get_session(session.id)
+    persisted_status = conversation_repo.get_status(session.id)
+    assert persisted_session is not None
+    assert persisted_session.current_stage == "download_not_captured"
+    assert persisted_session.next_action == "request_resume_failed"
+    assert persisted_status.last_action == "request_resume_failed"
+    assert persisted_status.decided_result == "download_not_captured"
+    assert persisted_status.payload["lastDecision"] == {
+        "action": "request_resume_failed",
+        "reason": "download_not_captured",
+    }
+    assert sink.events == []
 
 
 def test_runner_persists_status_and_writes_artifact_after_live_download(tmp_path: Path) -> None:

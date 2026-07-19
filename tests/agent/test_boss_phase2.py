@@ -601,8 +601,8 @@ def test_ai_basic_leading_acknowledgement_accepts_without_swallowing_hesitation(
     assert hesitant.status == "unclear"
 
 
-def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
-    """HRBP 问还招/细节时不先答“还在招”，直接发岗位条件问题。"""
+def test_hrbp_unanswered_detail_question_escalates_before_screening() -> None:
+    """HRBP 复合细节问题没有知识答案时转人工，不覆盖原问题。"""
 
     state, page = run_case(
         Platform.BOSS,
@@ -612,8 +612,9 @@ def test_hrbp_hiring_or_detail_question_sends_screening_first() -> None:
         ),
     )
 
-    assert state["next_action"] == "ask_screening"
-    assert page.sent_messages == ["你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"]
+    assert state["next_action"] == "escalate"
+    assert state["stage"] == "unknown_question"
+    assert page.sent_messages == []
     assert page.resume_requests == 0
 
 
@@ -633,8 +634,8 @@ def test_sales_paid_training_question_uses_question_patterns_without_requesting_
     assert page.resume_requests == 0
 
 
-def test_screening_unknown_question_asks_configured_question() -> None:
-    """筛选岗位遇到不能回答的问句时，跳过答疑并发送已配置问题。"""
+def test_screening_unknown_question_escalates_without_asking_next_question() -> None:
+    """筛选岗位遇到不能回答的问句时转人工，不覆盖候选人的问题。"""
 
     state, page = run_case(
         Platform.BOSS,
@@ -644,8 +645,9 @@ def test_screening_unknown_question_asks_configured_question() -> None:
         ),
     )
 
-    assert state["next_action"] == "ask_screening"
-    assert page.sent_messages == ["你好，方便问下你之前做过化工原料外贸销售吗"]
+    assert state["next_action"] == "escalate"
+    assert state["stage"] == "unknown_question"
+    assert page.sent_messages == []
 
 
 def test_boss_rhetorical_hr_attack_is_not_a_business_question() -> None:
@@ -810,20 +812,158 @@ def test_hr_screening_answer_with_faq_replies_before_next_question() -> None:
     assert state["stage"] == "screening_question_sent"
 
 
-def test_boss_ai_intern_initial_phrase_precedes_questions() -> None:
-    """BOSS AI 应用开发：未发基础条件前，候选人提问也先发基础条件。"""
+def test_known_question_reply_preserves_negative_screening_decision() -> None:
+    rules = load_chat_rules()
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "人力资源管培生",
+            [
+                {"sender": "me", "text": "你好，这个岗位需要出差，可以接受吗"},
+                {"sender": "other", "text": "不能接受出差，请问提供住宿吗？"},
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert page.sent_messages == ["公司包住，两人间"]
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "screening_reject"
+    assert page.resume_requests == 0
+
+
+def test_boss_ai_intern_answers_known_question_before_initial_phrase() -> None:
+    """首次提问也必须先答候选人，再发送基础条件。"""
+
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
 
     state, page = run_case(
         Platform.BOSS,
         conversation(
             "AI应用开发实习生",
-            [{"sender": "other", "text": "方便看看我的简历吗"}],
+            [{"sender": "other", "text": "请问每天的工作时间是几点？"}],
         ),
+        rules=rules,
     )
 
     assert state["next_action"] == "ask_basic_conditions"
     assert state["stage"] == "basic_phrase_sent"
-    assert page.sent_messages == ["基础条件确认话术"]
+    assert page.sent_messages == ["8-11点，13-17点", phrase]
+
+
+def test_any_required_screening_accepts_explicit_alternative_experience() -> None:
+    screening = {
+        "mode": "ask_any_required_question",
+        "questions": [
+            {"text": "你好，你之前有了解过膨润土吗", "required": True},
+            {"text": "你好，你熟悉涂料原料吗", "required": True},
+        ],
+    }
+
+    analysis = asyncio.run(
+        analyze_position_screening(
+            [
+                {"sender": "me", "text": "你好，你之前有了解过膨润土吗"},
+                {
+                    "sender": "other",
+                    "text": "没有膨润土经验，但做了十五年涂料销售",
+                },
+            ],
+            screening,
+        )
+    )
+
+    assert analysis["status"] == "accept"
+    assert analysis["reason"] == "any_required_question_accept"
+
+
+def test_screening_does_not_apply_unrelated_positive_experience_to_certificate() -> None:
+    screening = {
+        "mode": "ask_any_required_question",
+        "questions": [
+            {"text": "你好，你有弱电电工证吗", "required": True},
+            {"text": "你好，你熟悉 PLC 吗", "required": True},
+        ],
+    }
+
+    analysis = asyncio.run(
+        analyze_position_screening(
+            [
+                {"sender": "me", "text": "你好，你有弱电电工证吗"},
+                {
+                    "sender": "other",
+                    "text": "没有弱电电工证，但做了十五年涂料销售",
+                },
+            ],
+            screening,
+        )
+    )
+
+    assert analysis["status"] == "not_asked"
+    assert analysis["nextQuestion"]["text"] == "你好，你熟悉 PLC 吗"
+
+
+def test_coating_sales_does_not_replace_industrial_coating_formula_experience() -> None:
+    screening = {
+        "mode": "ask_required_questions",
+        "questions": [
+            {"text": "你好，你熟悉工业涂料配方吗", "required": True},
+        ],
+    }
+
+    analysis = asyncio.run(
+        analyze_position_screening(
+            [
+                {"sender": "me", "text": "你好，你熟悉工业涂料配方吗"},
+                {
+                    "sender": "other",
+                    "text": "没有做过工业涂料配方，但做了十五年涂料销售",
+                },
+            ],
+            screening,
+        )
+    )
+
+    assert analysis["status"] == "reject"
+
+
+def test_no_problem_is_an_acceptance_not_a_generic_negation() -> None:
+    result = asyncio.run(judge_candidate_reply("没有问题，可以接受"))
+
+    assert result.status == "accept"
+
+
+def test_closing_phrase_without_pending_question_sends_nothing() -> None:
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [{"sender": "other", "text": "打扰了，谢谢"}],
+        ),
+        rules=load_chat_rules(),
+    )
+
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "candidate_closing"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_good_ack_after_screening_question_is_not_treated_as_closing() -> None:
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "销售管培生",
+            [
+                {"sender": "me", "text": "你是否接受出差？"},
+                {"sender": "other", "text": "好的"},
+            ],
+        ),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert page.resume_requests == 1
 
 
 def test_boss_ai_intern_attachment_after_basic_phrase_is_received() -> None:

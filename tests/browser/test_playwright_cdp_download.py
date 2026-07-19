@@ -237,7 +237,9 @@ def test_job51_download_reads_uuid_file_when_artifact_path_is_missing(tmp_path: 
     assert raw.save_clicks == 1
 
 
-def test_job51_download_uses_toolbar_save_when_legacy_id_is_missing(tmp_path: Path) -> None:
+def test_job51_download_uses_trusted_toolbar_save_when_legacy_id_is_missing(
+    tmp_path: Path,
+) -> None:
     download_file = tmp_path / "resume.pdf"
     download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
     raw = _Job51DownloadRawPage(
@@ -252,10 +254,79 @@ def test_job51_download_uses_toolbar_save_when_legacy_id_is_missing(tmp_path: Pa
 
     assert result["ok"] is True
     assert result["bytes"] == b"%PDF-1.7\nbody\n%%EOF"
-    assert result["clicked"]["source"] == "job51_toolbar_save_left_of_print"
+    assert result["clicked"]["source"] == "job51_toolbar_semantic_save"
     assert raw.save_clicks == 0
     assert raw.toolbar_save_clicks == 1
     assert raw.confirm_clicks == 1
+
+
+def test_job51_download_rejects_positional_toolbar_guess_without_clicking(
+    tmp_path: Path,
+) -> None:
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=None,
+        save_visible=False,
+        toolbar_save_visible=True,
+        toolbar_target={
+            "found": True,
+            "trusted": False,
+            "x": 1396,
+            "y": 176,
+            "source": "job51_toolbar_save_left_of_print",
+            "label": "转发 ibtn",
+        },
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is False
+    assert result["reason"] == "online_resume_save_target_untrusted"
+    assert raw.toolbar_save_clicks == 0
+    assert raw.confirm_clicks == 0
+    assert raw.expect_download_calls == 0
+
+
+def test_job51_download_remeasures_trusted_toolbar_target_after_hover_shift(
+    tmp_path: Path,
+) -> None:
+    download_file = tmp_path / "resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(download_file), suggested_filename="resume.pdf"),
+        save_visible=False,
+        toolbar_save_visible=True,
+        toolbar_boxes=[
+            {"x": 1380, "y": 160, "width": 24, "height": 24},
+            {"x": 1280, "y": 180, "width": 24, "height": 24},
+        ],
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert raw.clicked_coordinates == [(1292.0, 192.0)]
+    assert raw.toolbar_box_reads == 2
+
+
+def test_job51_download_waits_for_save_dialog_with_bounded_timeout(
+    tmp_path: Path,
+) -> None:
+    download_file = tmp_path / "resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(download_file), suggested_filename="resume.pdf"),
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert raw.dialog_wait_timeouts == [4000]
 
 
 def test_job51_download_continues_when_pdf_button_is_not_stable(tmp_path: Path) -> None:
@@ -461,6 +532,9 @@ class _Job51DownloadRawPage:
         pdf_click_should_timeout: bool = False,
         save_visible: bool = True,
         toolbar_save_visible: bool = False,
+        toolbar_target: dict[str, object] | None = None,
+        toolbar_boxes: list[dict[str, float]] | None = None,
+        dialog_visible: bool = True,
         export_status_visible: bool = False,
     ) -> None:
         self.context = _DownloadContext(cdp_should_fail=cdp_should_fail)
@@ -470,7 +544,13 @@ class _Job51DownloadRawPage:
         self.pdf_click_should_timeout = pdf_click_should_timeout
         self.save_visible = save_visible
         self.toolbar_save_visible = toolbar_save_visible
+        self.toolbar_target = toolbar_target
+        self.toolbar_boxes = list(toolbar_boxes or [])
+        self.toolbar_box_reads = 0
         self.toolbar_save_clicks = 0
+        self.clicked_coordinates: list[tuple[float, float]] = []
+        self.dialog_visible = dialog_visible
+        self.dialog_wait_timeouts: list[int] = []
         self.export_status_visible = export_status_visible
         self.url = "https://ehire.51job.com/Revision/chat"
         self.download = download
@@ -488,13 +568,15 @@ class _Job51DownloadRawPage:
             return {}
         if not self.toolbar_save_visible:
             return {"found": False, "reason": "online_resume_save_icon_not_found"}
-        return {
+        return dict(self.toolbar_target or {
             "found": True,
+            "trusted": True,
             "x": 1396,
             "y": 176,
-            "source": "job51_toolbar_save_left_of_print",
-            "label": "toolbar icon before print",
-        }
+            "source": "job51_toolbar_semantic_save",
+            "label": "保存 download",
+            "selector": "[data-codex-job51-save-target='trusted']",
+        })
 
     async def wait_for_timeout(self, timeout: int) -> None:
         _ = timeout
@@ -517,7 +599,7 @@ class _Job51Mouse:
         _ = x, y, steps
 
     async def click(self, x: float, y: float) -> None:
-        _ = x, y
+        self.page.clicked_coordinates.append((x, y))
         self.page.toolbar_save_clicks += 1
 
 
@@ -613,9 +695,29 @@ class _Job51Locator:
     async def is_visible(self) -> bool:
         if self.selector == "#sensor_imresume_download":
             return self.page.save_visible
+        if self.selector == ".el-dialog:visible":
+            return self.page.dialog_visible
         if "el-message-box" in self.selector:
             return self.page.export_status_visible
         return True
+
+    async def wait_for(self, *, state: str, timeout: int) -> None:
+        _ = state
+        if self.selector == ".el-dialog:visible":
+            self.page.dialog_wait_timeouts.append(timeout)
+            if not self.page.dialog_visible:
+                raise TimeoutError("save dialog did not become visible")
+
+    async def bounding_box(self, timeout: int) -> dict[str, float] | None:
+        _ = timeout
+        if "data-codex-job51-save-target" not in self.selector:
+            return None
+        boxes = self.page.toolbar_boxes or [
+            {"x": 1384, "y": 164, "width": 24, "height": 24}
+        ]
+        index = min(self.page.toolbar_box_reads, len(boxes) - 1)
+        self.page.toolbar_box_reads += 1
+        return dict(boxes[index])
 
     async def click(self, timeout: int) -> None:
         _ = timeout

@@ -42,6 +42,8 @@ async def analyze_position_screening(
         progress.append(
             await _question_progress(question, questions, normalized_messages, llm=llm)
         )
+    if mode == "ask_any_required_question":
+        progress = _apply_any_required_alternative_acceptance(questions, progress)
     return _decide_screening_status(mode, questions, progress)
 
 
@@ -307,15 +309,114 @@ def _rule_classify(question_text: str, answer_text: str) -> str:
     if any(term in compact for term in ("可以接受", "能接受")):
         return "accept"
     if any(term in question_compact for term in ("证", "经历", "熟悉", "了解", "接触", "做过")):
-        if re.search(r"(没有|没|无|不是|不了解|不熟悉|没接触|没做过)", compact):
-            return "reject"
-        if re.search(r"(有|做过|接触过|了解|熟悉|会|持有|考了|拿到)", compact):
+        clauses = _answer_clauses(answer_text)
+        subjects = _question_subject_keywords(question_text)
+        relevant = [
+            clause
+            for clause in clauses
+            if not subjects or any(subject in _compact(clause) for subject in subjects)
+        ]
+        if not relevant and len(compact) <= 12:
+            relevant = clauses
+        positive = False
+        negative = False
+        for clause in relevant:
+            clause_compact = _compact(clause)
+            clause_negative = bool(
+                re.search(
+                    r"(没有|没|无|不是|不了解|不熟悉|没接触|没做过|不会)",
+                    clause_compact,
+                )
+            )
+            clause_positive = bool(
+                re.search(
+                    r"(做过|做了|接触过|了解|熟悉|从事|工作|经验|销售|研发|"
+                    r"配方|持有|考了|拿到|会|[一二三四五六七八九十百\d]+年)",
+                    clause_compact,
+                )
+                or re.search(r"(?:^|我)有(?:过|相关)?", clause_compact)
+            )
+            negative = negative or clause_negative
+            positive = positive or (clause_positive and not clause_negative)
+        if positive:
             return "accept"
+        if negative:
+            return "reject"
     if re.search(r"(不能|不可以|不接受|不行|不考虑|不愿意|暂时不|拒绝)", compact):
         return "reject"
     if re.search(r"(可以|接受|能|愿意|没问题|符合|是的|对)", compact):
         return "accept"
     return ""
+
+
+def _apply_any_required_alternative_acceptance(
+    questions: list[dict[str, Any]],
+    progress: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    answer_text = " ".join(
+        str(item.get("answerText") or "")
+        for item in progress
+        if str(item.get("answerText") or "").strip()
+    ).strip()
+    if not answer_text:
+        return progress
+    updated = [dict(item) for item in progress]
+    for item, question in zip(updated, questions, strict=False):
+        if item.get("status") == "accept" or item.get("asked"):
+            continue
+        if not _answer_mentions_question_subject(str(question.get("text") or ""), answer_text):
+            continue
+        if _rule_classify(str(question.get("text") or ""), answer_text) != "accept":
+            continue
+        item["status"] = "accept"
+        item["answerText"] = answer_text
+        item["judgement"] = {
+            "status": "accept",
+            "evidence": answer_text,
+            "source": "screening_alternative_rule",
+        }
+    return updated
+
+
+def _answer_clauses(text: str) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"(?:但是|不过|然而|但)|[，。；;！？!?]", str(text or ""))
+        if item.strip()
+    ]
+
+
+def _question_subject_keywords(question_text: str) -> list[str]:
+    compact = _compact(question_text)
+    groups = (
+        (("膨润土",), ("膨润土",)),
+        (("工业涂料配方", "涂料配方"), ("工业涂料配方", "涂料配方", "配方")),
+        (("流变助剂",), ("流变助剂", "助剂")),
+        (("工业涂料研发", "涂料研发"), ("工业涂料研发", "涂料研发", "研发")),
+        (("涂料原料",), ("涂料原料", "涂料")),
+        (("工业涂料", "涂料"), ("工业涂料", "涂料")),
+        (("化工原料",), ("化工原料", "化工")),
+        (("外贸销售",), ("外贸销售", "外贸")),
+        (("弱电电工证", "电工证"), ("弱电电工证", "电工证")),
+        (("plc",), ("plc",)),
+        (("班干部", "学生会"), ("班干部", "学生会")),
+        (("人力资源实习",), ("人力资源", "hr实习", "hr")),
+        (("猎头实习",), ("猎头",)),
+        (("油服公司",), ("油服", "油服公司")),
+        (("石油助剂",), ("石油助剂", "助剂")),
+        (("钻井泥浆",), ("钻井泥浆", "泥浆")),
+        (("驾照", "驾驶证"), ("驾照", "驾驶证")),
+    )
+    for triggers, subjects in groups:
+        if any(trigger in compact for trigger in triggers):
+            return list(subjects)
+    return []
+
+
+def _answer_mentions_question_subject(question_text: str, answer_text: str) -> bool:
+    subjects = _question_subject_keywords(question_text)
+    compact = _compact(answer_text)
+    return bool(subjects and any(subject in compact for subject in subjects))
 
 
 def _normalize_message(item: ChatMessage | dict[str, Any]) -> dict[str, str]:

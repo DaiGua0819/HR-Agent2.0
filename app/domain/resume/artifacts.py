@@ -11,6 +11,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 from app.db.engine import connect, run_migrations
+from app.domain.resume.job_types import canonical_resume_job_type
 from app.domain.resume.models import Resume
 from app.domain.resume.name_parser import parse_resume_name
 from app.domain.resume.repository import ResumeRepository
@@ -76,6 +77,17 @@ class ResumeArtifactStore:
             updated_at=now,
         )
         with connect(self.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_row = _find_business_download_row(
+                connection,
+                session_id=session_id,
+                platform=platform,
+                owner=owner,
+                platform_conversation_id=platform_conversation_id,
+                position=position,
+            )
+            if existing_row is not None:
+                return _artifact_from_row(existing_row)
             connection.execute(
                 """
                 INSERT INTO resume_artifacts (
@@ -96,6 +108,47 @@ class ResumeArtifactStore:
             )
             connection.commit()
         return self.get(artifact.id) or artifact
+
+    def has_business_download(
+        self,
+        *,
+        session_id: str,
+        platform: str,
+        owner: str,
+        platform_conversation_id: str,
+        position: str,
+    ) -> bool:
+        """Return whether this candidate/job already has a captured resume file."""
+
+        return self.find_business_download(
+            session_id=session_id,
+            platform=platform,
+            owner=owner,
+            platform_conversation_id=platform_conversation_id,
+            position=position,
+        ) is not None
+
+    def find_business_download(
+        self,
+        *,
+        session_id: str,
+        platform: str,
+        owner: str,
+        platform_conversation_id: str,
+        position: str,
+    ) -> ResumeArtifact | None:
+        """Find an existing artifact by canonical session or stable platform identity."""
+
+        with connect(self.database_path) as connection:
+            row = _find_business_download_row(
+                connection,
+                session_id=session_id,
+                platform=platform,
+                owner=owner,
+                platform_conversation_id=platform_conversation_id,
+                position=position,
+            )
+        return _artifact_from_row(row) if row is not None else None
 
     def get(self, artifact_id: str) -> ResumeArtifact | None:
         """Read one artifact by id."""
@@ -308,6 +361,48 @@ def _artifact_from_row(row: Any) -> ResumeArtifact:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _find_business_download_row(
+    connection: Any,
+    *,
+    session_id: str,
+    platform: str,
+    owner: str,
+    platform_conversation_id: str,
+    position: str,
+) -> Any | None:
+    session_key = str(session_id or "").strip()
+    position_key = canonical_resume_job_type(position)
+    if session_key:
+        row = connection.execute(
+            """
+            SELECT * FROM resume_artifacts
+            WHERE session_id = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (session_key,),
+        ).fetchone()
+        if row is not None:
+            row_position = canonical_resume_job_type(row["position"])
+            if not position_key or not row_position or position_key == row_position:
+                return row
+    platform_id = str(platform_conversation_id or "").strip()
+    if not platform_id or not position_key:
+        return None
+    rows = connection.execute(
+        """
+        SELECT * FROM resume_artifacts
+        WHERE platform = ? AND owner = ? AND platform_conversation_id = ?
+        ORDER BY created_at DESC
+        """,
+        (platform, owner, platform_id),
+    ).fetchall()
+    for row in rows:
+        row_position = canonical_resume_job_type(row["position"])
+        if row_position and row_position == position_key:
+            return row
+    return None
 
 
 def _now_iso() -> str:

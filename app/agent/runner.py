@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,13 @@ class ConversationRunner:
         conversation = await self.adapter.read_chat_context()
         state = self._state_from_conversation(conversation)
         self.persistence.attach(state, conversation)
+        if self.persistence.should_skip_current_message_snapshot():
+            return self._finish_technical_skip(
+                state,
+                "wait",
+                "message_snapshot_already_processed",
+                result={"skipped": True, "reason": "canonical_message_snapshot_completed"},
+            )
         return await self._process(state, conversation)
 
     async def _process(self, state: GraphState, conversation: Conversation) -> GraphState:
@@ -109,17 +117,24 @@ class ConversationRunner:
                 "candidate_rejected",
                 evidence=turn_text,
             )
-        if self._needs_initial_ai_basic_phrase(conversation, rule):
-            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
-
+        if _candidate_closing_turn(turn_text, conversation, rule):
+            return self._finish(
+                state,
+                "wait",
+                "candidate_closing",
+                evidence=turn_text,
+            )
         if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)
 
+        needs_initial_ai_phrase = self._needs_initial_ai_basic_phrase(conversation, rule)
         if is_silent_question(
             turn_text,
             self.rules,
             position=conversation.candidate.applied_position,
         ):
+            if needs_initial_ai_phrase:
+                return await self._send_initial_ai_basic_phrase(state, conversation, rule)
             return self._finish(
                 state,
                 "wait",
@@ -127,12 +142,33 @@ class ConversationRunner:
                 evidence=turn_text,
             )
 
-        if rule_screening(rule) and should_prioritize_screening(turn_text, rule):
-            return await self._handle_screening(state, conversation, rule, turn_text)
-        if self._should_handle_screening_before_knowledge(conversation, rule, turn_text):
-            return await self._handle_screening(state, conversation, rule, turn_text)
-
         answer = self._knowledge_answer(turn_text, conversation)
+        if needs_initial_ai_phrase:
+            if answer:
+                failed = await self._send_or_fail(
+                    state,
+                    answer,
+                    action="answer_question",
+                    failure_reason="knowledge_answer_send_failed",
+                )
+                if failed:
+                    return failed
+                return await self._send_initial_ai_basic_phrase(
+                    state,
+                    conversation,
+                    rule,
+                    knowledge_answer=answer,
+                )
+            if looks_like_question(turn_text) and not self._is_resume_intent(turn_text):
+                state["pending_question"] = turn_text
+                return self._finish(
+                    state,
+                    "escalate",
+                    "unknown_question",
+                    evidence=turn_text,
+                )
+            return await self._send_initial_ai_basic_phrase(state, conversation, rule)
+
         if answer:
             screening = rule_screening(rule)
             if is_ai_basic_rule(conversation.candidate.applied_position, rule):
@@ -158,15 +194,15 @@ class ConversationRunner:
                     screening,
                     llm=self.llm,
                 )
-                if analysis.get("status") in {"not_asked", "accept"}:
-                    failed = await self._send_or_fail(
-                        state,
-                        answer,
-                        action="answer_question",
-                        failure_reason="knowledge_answer_send_failed",
-                    )
-                    if failed:
-                        return failed
+                failed = await self._send_or_fail(
+                    state,
+                    answer,
+                    action="answer_question",
+                    failure_reason="knowledge_answer_send_failed",
+                )
+                if failed:
+                    return failed
+                if analysis.get("status") != "not_configured":
                     return await self._handle_screening(
                         state,
                         conversation,
@@ -174,6 +210,12 @@ class ConversationRunner:
                         analysis=analysis,
                         knowledge_answer=answer,
                     )
+                return self._finish(
+                    state,
+                    "answer_question",
+                    "knowledge_hit",
+                    reply=answer,
+                )
             failed = await self._send_or_fail(
                 state,
                 answer,
@@ -183,6 +225,15 @@ class ConversationRunner:
             if failed:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
+
+        if looks_like_question(turn_text) and not self._is_resume_intent(turn_text):
+            state["pending_question"] = turn_text
+            return self._finish(state, "escalate", "unknown_question", evidence=turn_text)
+
+        if rule_screening(rule) and should_prioritize_screening(turn_text, rule):
+            return await self._handle_screening(state, conversation, rule, turn_text)
+        if self._should_handle_screening_before_knowledge(conversation, rule, turn_text):
+            return await self._handle_screening(state, conversation, rule, turn_text)
 
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
             phrase = initial_common_phrase(rule)
@@ -195,12 +246,6 @@ class ConversationRunner:
                     turn_text,
                     judgement=judgement,
                 )
-
-        if looks_like_question(turn_text):
-            if rule_screening(rule):
-                return await self._handle_screening(state, conversation, rule, turn_text)
-            state["pending_question"] = turn_text
-            return self._finish(state, "escalate", "unknown_question", evidence=turn_text)
 
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
             return await self._handle_ai_basic(state, conversation, rule, turn_text)
@@ -307,8 +352,10 @@ class ConversationRunner:
         state: GraphState,
         conversation: Conversation,
         rule: dict[str, Any],
+        *,
+        knowledge_answer: str = "",
     ) -> GraphState:
-        """AI 应用开发岗位首轮固定先发基础条件，再处理候选人问题。"""
+        """AI 应用开发岗位在已知问题答复后发送基础条件。"""
 
         phrase = initial_common_phrase(rule)
         if not phrase:
@@ -327,10 +374,17 @@ class ConversationRunner:
                 "send_failed",
                 "basic_phrase_send_failed",
                 reply=phrase,
+                knowledgeAnswer=knowledge_answer,
                 sendResult=asdict(result),
             )
         append_sent(state, phrase)
-        return self._finish(state, "ask_basic_conditions", "basic_phrase_sent", reply=phrase)
+        return self._finish(
+            state,
+            "ask_basic_conditions",
+            "basic_phrase_sent",
+            reply=phrase,
+            knowledgeAnswer=knowledge_answer,
+        )
 
     async def _handle_screening(
         self,
@@ -622,9 +676,7 @@ class ConversationRunner:
         return False
 
     @staticmethod
-    def _should_escalate_direct_question(text: str) -> bool:
-        if not looks_like_question(text):
-            return False
+    def _is_resume_intent(text: str) -> bool:
         compact = "".join(text.lower().split())
         resume_intent_terms = (
             "发简历",
@@ -645,7 +697,16 @@ class ConversationRunner:
             "exchangecv",
         )
         if any(term in compact for term in resume_intent_terms):
+            return True
+        return "简历" in compact and any(
+            term in compact for term in ("发", "传", "查阅", "查看", "看看", "投递")
+        )
+
+    @staticmethod
+    def _should_escalate_direct_question(text: str) -> bool:
+        if not looks_like_question(text) or ConversationRunner._is_resume_intent(text):
             return False
+        compact = "".join(text.lower().split())
         detail_terms = (
             "detail",
             "details",
@@ -702,6 +763,21 @@ class ConversationRunner:
         self.persistence.finish(state, action=action, reason=reason, extra=extra)
         return state
 
+    @staticmethod
+    def _finish_technical_skip(
+        state: GraphState,
+        action: str,
+        reason: str,
+        **extra: Any,
+    ) -> GraphState:
+        """Return a no-op result without replacing the last business outcome."""
+
+        extra = _json_safe(extra)
+        state["next_action"] = action
+        state["stage"] = reason
+        state["decision"] = {"action": action, "reason": reason, **extra}
+        return state
+
 ZhilianConversationRunner = ConversationRunner
 
 
@@ -745,3 +821,65 @@ def _candidate_rejected_conversation(text: str) -> bool:
         "谢谢关注",
     )
     return any(term in compact for term in reject_terms)
+
+
+def _candidate_closing_turn(
+    text: str,
+    conversation: Conversation,
+    rule: dict[str, Any],
+) -> bool:
+    compact = re.sub(r"[\s，。！？!?、,.；;：:]+", "", str(text or "").lower())
+    if not compact:
+        return False
+    if any(
+        term in compact
+        for term in (
+            "打扰了",
+            "不打扰了",
+            "先不打扰",
+            "感谢您的时间",
+            "感谢你们的时间",
+            "谢谢关注",
+            "祝好",
+        )
+    ):
+        return True
+    polite_closings = {
+        "谢谢",
+        "谢谢您",
+        "感谢",
+        "好的谢谢",
+        "好谢谢",
+        "收到谢谢",
+        "明白了谢谢",
+        "了解了谢谢",
+        "好的",
+        "好",
+        "收到",
+        "明白了",
+        "了解了",
+    }
+    if compact not in polite_closings:
+        return False
+    return not _has_pending_recruiter_question(conversation, rule)
+
+
+def _has_pending_recruiter_question(
+    conversation: Conversation,
+    rule: dict[str, Any],
+) -> bool:
+    latest_recruiter_text = ""
+    for message in reversed(conversation.messages):
+        if message.sender == MessageSender.ME:
+            latest_recruiter_text = message.text.strip()
+            break
+    if not latest_recruiter_text:
+        return False
+    phrase = initial_common_phrase(rule)
+    if phrase and "".join(phrase.split()) == "".join(latest_recruiter_text.split()):
+        return True
+    for question in normalize_position_screening_questions(rule_screening(rule)):
+        if position_screening_question_matches_any(latest_recruiter_text, question):
+            return True
+    compact = "".join(latest_recruiter_text.split())
+    return any(term in compact for term in ("?", "？", "吗", "么", "是否", "能否"))

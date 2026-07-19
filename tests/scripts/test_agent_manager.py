@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -54,6 +55,33 @@ class AgentManagerTests(unittest.TestCase):
         self.assertIn("send_failed", result.reasons)
         self.assertIn("conversation_changed_before_send", result.reasons)
 
+    def test_classifies_identity_warning_and_untrusted_resume_target_as_anomaly(self) -> None:
+        identity = agent_manager.classify_result(
+            {
+                "accepted": True,
+                "processed": 1,
+                "identityWarnings": ["recent_messages_not_matched"],
+                "nextAction": "wait",
+                "stage": "identity_warning",
+            }
+        )
+        untrusted_download = agent_manager.classify_result(
+            {
+                "accepted": True,
+                "processed": 1,
+                "nextAction": "request_resume_failed",
+                "stage": "online_resume_save_target_untrusted",
+            }
+        )
+
+        self.assertTrue(identity.is_anomaly)
+        self.assertIn("recent_messages_not_matched", identity.reasons)
+        self.assertTrue(untrusted_download.is_anomaly)
+        self.assertIn(
+            "online_resume_save_target_untrusted",
+            untrusted_download.reasons,
+        )
+
     def test_accepts_successful_resume_result(self) -> None:
         result = agent_manager.classify_result(
             {
@@ -82,6 +110,20 @@ class AgentManagerTests(unittest.TestCase):
         )
 
         self.assertEqual(state, {"processed": 1, "anomalies": 1})
+
+    def test_completed_snapshot_skip_does_not_increment_business_processed(self) -> None:
+        state = {"processed": 0, "anomalies": 0}
+
+        agent_manager.update_run_counters(
+            state,
+            {
+                "processed": 1,
+                "stage": "message_snapshot_already_processed",
+            },
+            agent_manager.Classification(False, []),
+        )
+
+        self.assertEqual(state, {"processed": 0, "anomalies": 0})
 
     def test_boss_email_resume_handoff_is_not_an_anomaly(self) -> None:
         result = agent_manager.classify_result(
@@ -412,6 +454,352 @@ class AgentManagerTests(unittest.TestCase):
                 ],
             )
 
+    def test_processing_snapshots_persist_completed_message_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            classification = agent_manager.Classification(False, [])
+            summary = {
+                "processed": 1,
+                "selectedProcessingKey": "candidate-a:message-1",
+                "provisionalProcessingKey": "candidate-a:message-1",
+                "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                "canonicalSessionId": "conv-a",
+                "latestMessageFingerprint": "fingerprint-1",
+                "nextAction": "request_resume",
+                "stage": "resume_attachment_downloaded",
+            }
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary=summary,
+                classification=classification,
+            )
+
+            exclusions = agent_manager.load_processing_snapshot_exclusions(
+                database_path,
+                owner="owner",
+                platform="job51",
+            )
+            self.assertEqual(
+                exclusions,
+                {
+                    "candidate-a:message-1",
+                    "session|conv-a|message|fingerprint-1",
+                },
+            )
+            self.assertNotIn("candidate-a:message-2", exclusions)
+
+    def test_retryable_processing_snapshot_is_excluded_after_second_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            classification = agent_manager.Classification(
+                True,
+                ["download_not_captured"],
+            )
+            summary = {
+                "processed": 1,
+                "selectedProcessingKey": "candidate-a:message-1",
+                "provisionalProcessingKey": "candidate-a:message-1",
+                "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                "canonicalSessionId": "conv-a",
+                "latestMessageFingerprint": "fingerprint-1",
+                "nextAction": "request_resume_failed",
+                "stage": "download_not_captured",
+            }
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary=summary,
+                classification=classification,
+            )
+            self.assertEqual(
+                agent_manager.load_processing_snapshot_exclusions(
+                    database_path,
+                    owner="owner",
+                    platform="job51",
+                ),
+                set(),
+            )
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary=summary,
+                classification=classification,
+            )
+            self.assertIn(
+                "candidate-a:message-1",
+                agent_manager.load_processing_snapshot_exclusions(
+                    database_path,
+                    owner="owner",
+                    platform="job51",
+                ),
+            )
+
+    def test_slow_save_dialog_failure_remains_retryable_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            summary = {
+                "processed": 1,
+                "selectedProcessingKey": "candidate-a:message-1",
+                "provisionalProcessingKey": "candidate-a:message-1",
+                "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                "canonicalSessionId": "conv-a",
+                "latestMessageFingerprint": "fingerprint-1",
+                "nextAction": "request_resume_failed",
+                "stage": "online_resume_save_dialog_not_visible",
+            }
+            classification = agent_manager.classify_result(
+                {
+                    "accepted": True,
+                    "processed": 1,
+                    "nextAction": "request_resume_failed",
+                    "stage": "online_resume_save_dialog_not_visible",
+                }
+            )
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary=summary,
+                classification=classification,
+            )
+
+            assert agent_manager.load_processing_snapshot_exclusions(
+                database_path,
+                owner="owner",
+                platform="job51",
+            ) == set()
+
+    def test_processed_snapshot_skip_does_not_overwrite_terminal_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            canonical_key = "session|conv-a|message|fingerprint-1"
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    "processed": 1,
+                    "selectedProcessingKey": "candidate-a:message-1",
+                    "provisionalProcessingKey": "candidate-a:message-1",
+                    "canonicalProcessingKey": canonical_key,
+                    "canonicalSessionId": "conv-a",
+                    "latestMessageFingerprint": "fingerprint-1",
+                    "nextAction": "request_resume_failed",
+                    "stage": "online_resume_save_target_untrusted",
+                },
+                classification=agent_manager.Classification(
+                    True,
+                    ["online_resume_save_target_untrusted"],
+                ),
+            )
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    "processed": 1,
+                    "selectedProcessingKey": "candidate-a:message-1",
+                    "provisionalProcessingKey": "candidate-a:message-1",
+                    "canonicalProcessingKey": canonical_key,
+                    "canonicalSessionId": "conv-a",
+                    "latestMessageFingerprint": "fingerprint-1",
+                    "nextAction": "wait",
+                    "stage": "message_snapshot_already_processed",
+                },
+                classification=agent_manager.Classification(False, []),
+            )
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                row = connection.execute(
+                    """
+                    SELECT status, action, stage, attempt_count
+                    FROM message_processing_snapshots
+                    WHERE snapshot_key = ?
+                    """,
+                    (canonical_key,),
+                ).fetchone()
+            self.assertEqual(
+                row,
+                (
+                    "failed_terminal",
+                    "request_resume_failed",
+                    "online_resume_save_target_untrusted",
+                    1,
+                ),
+            )
+
+    def test_retry_limit_aggregates_by_canonical_key_when_provisional_changes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            classification = agent_manager.Classification(
+                True,
+                ["download_not_captured"],
+            )
+            base = {
+                "processed": 1,
+                "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                "canonicalSessionId": "conv-a",
+                "latestMessageFingerprint": "fingerprint-1",
+                "nextAction": "request_resume_failed",
+                "stage": "download_not_captured",
+            }
+
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    **base,
+                    "selectedProcessingKey": "candidate-a:message-1:09:00",
+                    "provisionalProcessingKey": "candidate-a:message-1:09:00",
+                },
+                classification=classification,
+            )
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    **base,
+                    "selectedProcessingKey": "candidate-a:message-1:09:01",
+                    "provisionalProcessingKey": "candidate-a:message-1:09:01",
+                },
+                classification=classification,
+            )
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT provisional_processing_key, attempt_count
+                    FROM message_processing_snapshots
+                    """
+                ).fetchall()
+            self.assertEqual(rows, [("candidate-a:message-1:09:01", 2)])
+
+    def test_same_provisional_key_with_new_fingerprint_creates_new_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "resumes.sqlite"
+            provisional_key = "candidate-a:same-list-key"
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    "processed": 1,
+                    "selectedProcessingKey": provisional_key,
+                    "provisionalProcessingKey": provisional_key,
+                    "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                    "canonicalSessionId": "conv-a",
+                    "latestMessageFingerprint": "fingerprint-1",
+                    "nextAction": "answer_question",
+                    "stage": "knowledge_hit",
+                },
+                classification=agent_manager.Classification(False, []),
+            )
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    "processed": 1,
+                    "selectedProcessingKey": provisional_key,
+                    "provisionalProcessingKey": provisional_key,
+                    "canonicalProcessingKey": "session|conv-a|message|fingerprint-2",
+                    "canonicalSessionId": "conv-a",
+                    "latestMessageFingerprint": "fingerprint-2",
+                    "nextAction": "request_resume_failed",
+                    "stage": "download_not_captured",
+                },
+                classification=agent_manager.Classification(
+                    True,
+                    ["download_not_captured"],
+                ),
+            )
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT canonical_processing_key, status, attempt_count
+                    FROM message_processing_snapshots
+                    ORDER BY canonical_processing_key
+                    """
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    ("session|conv-a|message|fingerprint-1", "completed", 1),
+                    ("session|conv-a|message|fingerprint-2", "failed_retryable", 1),
+                ],
+            )
+
+    def test_guarded_run_does_not_put_persisted_snapshots_in_request_url(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_root = root / "agent-manager"
+            database_path = root / "resumes.sqlite"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+                "databasePath": str(database_path),
+            }
+            agent_manager.record_processing_snapshot(
+                database_path,
+                owner="owner",
+                platform="job51",
+                summary={
+                    "processed": 1,
+                    "selectedProcessingKey": "candidate-a:message-1",
+                    "provisionalProcessingKey": "candidate-a:message-1",
+                    "canonicalProcessingKey": "session|conv-a|message|fingerprint-1",
+                    "canonicalSessionId": "conv-a",
+                    "latestMessageFingerprint": "fingerprint-1",
+                    "nextAction": "answer_question",
+                    "stage": "knowledge_hit",
+                },
+                classification=agent_manager.Classification(False, []),
+            )
+            exclusions_by_call: list[list[str]] = []
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                del method, timeout
+                query = parse_qs(urlparse(url).query)
+                exclusions_by_call.append(query.get("exclude_conversation_id", []))
+                return {"accepted": True, "processed": 0}
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=0,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(exclusions_by_call, [[]])
+
     def test_guarded_run_does_not_exclude_normal_legacy_contact_without_snapshot_key(
         self,
     ) -> None:
@@ -509,6 +897,109 @@ class AgentManagerTests(unittest.TestCase):
             self.assertEqual(result["processed"], 5)
             self.assertEqual(result["anomalies"], 5)
             self.assertEqual(call_count, 5)
+
+    def test_guarded_run_counts_repeated_failures_for_one_candidate_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            call_count = 0
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                nonlocal call_count
+                del url, method, timeout
+                call_count += 1
+                if call_count > 2:
+                    return {"accepted": True, "processed": 0}
+                return {
+                    "accepted": True,
+                    "processed": 1,
+                    "conversationId": "candidate-a",
+                    "selectedConversationId": "row-a",
+                    "selectedProcessingKey": f"candidate-a:message-{call_count}",
+                    "canonicalSessionId": "conv-candidate-a",
+                    "canonicalProcessingKey": (
+                        f"session|conv-candidate-a|message|fingerprint-{call_count}"
+                    ),
+                    "nextAction": "request_resume_failed",
+                    "stage": "download_not_captured",
+                }
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=10,
+                    max_anomalies=5,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["processed"], 2)
+            self.assertEqual(result["anomalies"], 1)
+
+    def test_guarded_run_snapshot_skip_does_not_consume_contact_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "owner"}],
+            }
+            call_count = 0
+
+            def fake_http_json(
+                url: str, *, method: str, timeout: float
+            ) -> dict[str, object]:
+                nonlocal call_count
+                del url, method, timeout
+                call_count += 1
+                if call_count == 1:
+                    return {
+                        "accepted": True,
+                        "processed": 1,
+                        "conversationId": "candidate-old",
+                        "selectedProcessingKey": "old-snapshot",
+                        "nextAction": "wait",
+                        "stage": "message_snapshot_already_processed",
+                    }
+                return {
+                    "accepted": True,
+                    "processed": 1,
+                    "conversationId": "candidate-new",
+                    "selectedProcessingKey": "new-snapshot",
+                    "nextAction": "answer_question",
+                    "stage": "knowledge_hit",
+                }
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("owner", "job51")],
+                    skipped=set(),
+                    max_contacts=1,
+                    max_anomalies=5,
+                    sleep_seconds=0,
+                )
+
+            self.assertEqual(call_count, 2)
+            self.assertEqual(result["processed"], 1)
 
     def test_owner_lanes_finish_current_contact_after_global_anomaly_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

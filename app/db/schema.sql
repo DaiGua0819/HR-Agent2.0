@@ -104,6 +104,29 @@ CREATE TABLE IF NOT EXISTS candidate_status (
   FOREIGN KEY(session_id) REFERENCES conversation_sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS message_processing_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  snapshot_key TEXT NOT NULL,
+  provisional_processing_key TEXT NOT NULL,
+  canonical_processing_key TEXT NOT NULL DEFAULT '',
+  canonical_session_id TEXT NOT NULL DEFAULT '',
+  latest_message_fingerprint TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT '',
+  error_reasons TEXT NOT NULL DEFAULT '[]',
+  retryable INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 1,
+  processed_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(owner, platform, snapshot_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_processing_snapshots_lookup
+  ON message_processing_snapshots(owner, platform, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS resume_artifacts (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,

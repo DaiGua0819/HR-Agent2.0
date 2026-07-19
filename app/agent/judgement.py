@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -94,12 +95,25 @@ def _rule_judge(reply_text: str) -> JudgementResult:
     text = reply_text.strip()
     if not text:
         return JudgementResult(status="waiting", evidence="", source="rule_fallback")
-    if any(term in text for term in REJECT_TERMS):
+    if any(term in text for term in ("没问题", "没有问题")):
+        return JudgementResult(status="accept", evidence=text, source="rule_fallback")
+    explicit_reject_terms = tuple(
+        term for term in REJECT_TERMS if term not in {"没有", "不是"}
+    )
+    if any(term in text for term in explicit_reject_terms):
         return JudgementResult(status="reject", evidence=text, source="rule_fallback")
     if text.startswith(ACCEPT_ACK_PREFIXES) and not any(
         term in text for term in HESITATION_TERMS
     ):
         return JudgementResult(status="accept", evidence=text, source="rule_fallback")
-    if any(term in text for term in ACCEPT_TERMS):
+    has_positive = any(term in text for term in ACCEPT_TERMS if term != "有") or bool(
+        re.search(r"(?:^|我|，|,|。|；|;)有(?:过|相关|经验|接触|了解|做)", text)
+    )
+    has_generic_negative = any(term in text for term in ("没有", "不是"))
+    if has_generic_negative and has_positive:
+        return JudgementResult(status="unclear", evidence=text, source="rule_fallback")
+    if has_generic_negative:
+        return JudgementResult(status="reject", evidence=text, source="rule_fallback")
+    if has_positive:
         return JudgementResult(status="accept", evidence=text, source="rule_fallback")
     return JudgementResult(status="unclear", evidence=text, source="rule_fallback")

@@ -79,17 +79,13 @@ JOB51_ONLINE_RESUME_SAVE_TARGET_JS = r"""
       rect.right <= rootRect.right + 8 && rect.right >= rootRect.right - 280;
   });
   const semantic = controls.filter((item) => {
-    return /下载|保存|存储|导出|download|save|export/i.test(item.label);
+    const positive = /下载|保存|存储|导出|download|save|export/i.test(item.label);
+    const negative = /转发|收藏|打印|分享|微信|forward|favorite|collect|print|share|wechat/i.test(
+      item.label
+    );
+    return positive && !negative;
   }).sort((a, b) => b.rect.left - a.rect.left);
-  let target = semantic[0] || null;
-  let source = "job51_toolbar_semantic_save";
-  if (!target) {
-    const ordered = controls.sort((a, b) => a.rect.left - b.rect.left);
-    if (ordered.length >= 2) {
-      target = ordered[ordered.length - 2];
-      source = "job51_toolbar_save_left_of_print";
-    }
-  }
+  const target = semantic[0] || null;
   if (!target) {
     return {
       found: false,
@@ -101,12 +97,17 @@ JOB51_ONLINE_RESUME_SAVE_TARGET_JS = r"""
       })),
     };
   }
+  const marker = "data-codex-job51-save-target";
+  document.querySelectorAll(`[${marker}]`).forEach((item) => item.removeAttribute(marker));
+  target.control.setAttribute(marker, "trusted");
   return {
     found: true,
+    trusted: true,
     x: target.rect.left + target.rect.width / 2,
     y: target.rect.top + target.rect.height / 2,
-    source,
+    source: "job51_toolbar_semantic_save",
     label: target.label.slice(0, 120),
+    selector: `[${marker}='trusted']`,
   };
 }
 """
@@ -742,8 +743,42 @@ class PlaywrightCDPPage:
                         "reason": "online_resume_export_not_available",
                         "target": target if isinstance(target, dict) else {},
                     }
-                x = float(target.get("x") or 0)
-                y = float(target.get("y") or 0)
+                source = str(target.get("source") or "")
+                if target.get("trusted") is not True or source not in {
+                    "job51_toolbar_semantic_save",
+                }:
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_untrusted",
+                        "target": target,
+                    }
+                selector = str(target.get("selector") or "").strip()
+                if not selector:
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_untrusted",
+                        "target": target,
+                    }
+                marked_target = self.page.locator(selector).first
+                if not await marked_target.count() or not await marked_target.is_visible():
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_stale",
+                        "target": target,
+                    }
+                first_box = await marked_target.bounding_box(timeout=3000)
+                if not first_box:
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_stale",
+                        "target": target,
+                    }
+                x = float(first_box.get("x") or 0) + float(first_box.get("width") or 0) / 2
+                y = float(first_box.get("y") or 0) + float(first_box.get("height") or 0) / 2
                 if x <= 0 or y <= 0:
                     return {
                         "ok": False,
@@ -752,16 +787,39 @@ class PlaywrightCDPPage:
                         "target": target,
                     }
                 await self.page.mouse.move(x, y, steps=6)
+                await self.page.wait_for_timeout(120)
+                latest_box = await marked_target.bounding_box(timeout=3000)
+                if not latest_box:
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_stale",
+                        "target": target,
+                    }
+                x = float(latest_box.get("x") or 0) + float(
+                    latest_box.get("width") or 0
+                ) / 2
+                y = float(latest_box.get("y") or 0) + float(
+                    latest_box.get("height") or 0
+                ) / 2
+                await self.page.mouse.move(x, y, steps=3)
                 await self.page.mouse.click(x, y)
                 clicked = {
                     "clicked": True,
-                    "source": str(target.get("source") or "job51_toolbar_save"),
+                    "source": source,
                     "label": str(target.get("label") or "")[:120],
                     "x": round(x),
                     "y": round(y),
                 }
-            await self.page.wait_for_timeout(1000)
             dialog = self.page.locator(".el-dialog:visible").filter(has_text="保存到本地").last
+            try:
+                await dialog.wait_for(state="visible", timeout=4000)
+            except Exception:
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_save_dialog_not_visible",
+                }
             if not await dialog.count() or not await dialog.is_visible():
                 return {
                     "ok": False,

@@ -12,6 +12,27 @@ from pathlib import Path
 from app.settings import load_settings
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+MESSAGE_PROCESSING_SNAPSHOTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS message_processing_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  snapshot_key TEXT NOT NULL,
+  provisional_processing_key TEXT NOT NULL,
+  canonical_processing_key TEXT NOT NULL DEFAULT '',
+  canonical_session_id TEXT NOT NULL DEFAULT '',
+  latest_message_fingerprint TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT '',
+  error_reasons TEXT NOT NULL DEFAULT '[]',
+  retryable INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 1,
+  processed_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(owner, platform, snapshot_key)
+)
+"""
 
 
 def _as_path(database_path: str | Path | None) -> Path:
@@ -147,6 +168,125 @@ def _preflight_existing_tables(connection: sqlite3.Connection) -> None:
         _add_column_if_missing(connection, "resumes", "source_artifact_id", "TEXT")
     if "interview_sessions" in tables:
         _migrate_interview_sessions_if_present(connection)
+    ensure_message_processing_snapshots_schema(connection)
+
+
+def ensure_message_processing_snapshots_schema(connection: sqlite3.Connection) -> None:
+    """Create or rebuild the processing snapshot table around canonical keys."""
+
+    if not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    table_exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("message_processing_snapshots",),
+    ).fetchone()
+    if table_exists is None:
+        connection.execute(MESSAGE_PROCESSING_SNAPSHOTS_TABLE_SQL)
+        _create_message_processing_snapshot_index(connection)
+        return
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(message_processing_snapshots)")
+    }
+    if "snapshot_key" in columns:
+        _create_message_processing_snapshot_index(connection)
+        return
+
+    legacy_rows = connection.execute(
+        "SELECT * FROM message_processing_snapshots ORDER BY updated_at, id"
+    ).fetchall()
+    connection.execute(
+        "ALTER TABLE message_processing_snapshots "
+        "RENAME TO message_processing_snapshots_legacy_v1"
+    )
+    connection.execute(MESSAGE_PROCESSING_SNAPSHOTS_TABLE_SQL)
+    for row in legacy_rows:
+        canonical_key = str(row["canonical_processing_key"] or "").strip()
+        provisional_key = str(row["provisional_processing_key"] or "").strip()
+        snapshot_key = canonical_key or provisional_key
+        if not snapshot_key:
+            continue
+        connection.execute(
+            """
+            INSERT INTO message_processing_snapshots (
+              owner, platform, snapshot_key, provisional_processing_key,
+              canonical_processing_key, canonical_session_id,
+              latest_message_fingerprint, status, action, stage,
+              error_reasons, retryable, attempt_count, processed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner, platform, snapshot_key) DO UPDATE SET
+              provisional_processing_key = excluded.provisional_processing_key,
+              canonical_processing_key = CASE
+                WHEN excluded.canonical_processing_key != ''
+                THEN excluded.canonical_processing_key
+                ELSE message_processing_snapshots.canonical_processing_key
+              END,
+              canonical_session_id = CASE
+                WHEN excluded.canonical_session_id != ''
+                THEN excluded.canonical_session_id
+                ELSE message_processing_snapshots.canonical_session_id
+              END,
+              latest_message_fingerprint = CASE
+                WHEN excluded.latest_message_fingerprint != ''
+                THEN excluded.latest_message_fingerprint
+                ELSE message_processing_snapshots.latest_message_fingerprint
+              END,
+              status = CASE
+                WHEN message_processing_snapshots.status = 'completed'
+                  OR excluded.status = 'completed' THEN 'completed'
+                WHEN message_processing_snapshots.status = 'failed_terminal'
+                  OR excluded.status = 'failed_terminal' THEN 'failed_terminal'
+                ELSE 'failed_retryable'
+              END,
+              action = excluded.action,
+              stage = excluded.stage,
+              error_reasons = excluded.error_reasons,
+              retryable = CASE
+                WHEN message_processing_snapshots.status = 'completed'
+                  OR excluded.status = 'completed'
+                  OR message_processing_snapshots.status = 'failed_terminal'
+                  OR excluded.status = 'failed_terminal' THEN 0
+                ELSE 1
+              END,
+              attempt_count = message_processing_snapshots.attempt_count
+                + excluded.attempt_count,
+              processed_at = MIN(
+                message_processing_snapshots.processed_at,
+                excluded.processed_at
+              ),
+              updated_at = MAX(
+                message_processing_snapshots.updated_at,
+                excluded.updated_at
+              )
+            """,
+            (
+                row["owner"],
+                row["platform"],
+                snapshot_key,
+                provisional_key,
+                canonical_key,
+                row["canonical_session_id"],
+                row["latest_message_fingerprint"],
+                row["status"],
+                row["action"],
+                row["stage"],
+                row["error_reasons"],
+                row["retryable"],
+                row["attempt_count"],
+                row["processed_at"],
+                row["updated_at"],
+            ),
+        )
+    connection.execute("DROP TABLE message_processing_snapshots_legacy_v1")
+    _create_message_processing_snapshot_index(connection)
+
+
+def _create_message_processing_snapshot_index(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_message_processing_snapshots_lookup
+        ON message_processing_snapshots(owner, platform, status, updated_at DESC)
+        """
+    )
 
 
 def _add_column_if_missing(

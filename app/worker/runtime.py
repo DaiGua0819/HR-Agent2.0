@@ -87,21 +87,28 @@ class WorkerRuntime:
                     await self._prepare_message_adapter(adapter)
                     if normalized_batch_id:
                         self._prepared_message_batches[platform] = normalized_batch_id
+                effective_exclusions = {
+                    str(item) for item in exclude_ids or set() if str(item)
+                }
                 ref = await self._find_next_unread_thread(
                     adapter,
-                    {str(item) for item in exclude_ids or set() if str(item)},
+                    effective_exclusions,
                 )
                 if ref is None and reused_preparation:
                     await self._prepare_message_adapter(adapter)
                     ref = await self._find_next_unread_thread(
                         adapter,
-                        {str(item) for item in exclude_ids or set() if str(item)},
+                        effective_exclusions,
                     )
                 if ref is None:
                     self._clear_prepared_message_batch(platform, normalized_batch_id)
                     return {"accepted": True, "processed": 0, "platform": platform.value}
                 state = await self._run_current_conversation(adapter)
                 contact = await self._contact_payload(state, fallback_id=ref.conversation_id)
+                processing_identity = _processing_identity_payload(
+                    state,
+                    provisional_key=ref.processing_key,
+                )
                 return {
                     "accepted": True,
                     "processed": 1,
@@ -109,6 +116,7 @@ class WorkerRuntime:
                     "platform": platform.value,
                     "selectedConversationId": ref.conversation_id,
                     "selectedProcessingKey": ref.processing_key,
+                    **processing_identity,
                     **contact,
                     "dryRun": load_settings().dry_run,
                 }
@@ -376,3 +384,30 @@ class WorkerRuntime:
             config={"configurable": {"thread_id": f"{self.owner}-{state.get('conversation_id')}"}},
         )
         return str(graph_state.get("stage") or "")
+
+
+def _processing_identity_payload(
+    state: dict[str, object],
+    *,
+    provisional_key: str = "",
+) -> dict[str, object]:
+    session_id = str(state.get("session_id") or "").strip()
+    fingerprint = str(state.get("recent_messages_fingerprint") or "").strip()
+    canonical_key = (
+        f"session|{session_id}|message|{fingerprint}"
+        if session_id and fingerprint
+        else ""
+    )
+    raw_warnings = state.get("identity_warnings")
+    warnings = (
+        [str(item) for item in raw_warnings if str(item)]
+        if isinstance(raw_warnings, list)
+        else []
+    )
+    return {
+        "provisionalProcessingKey": str(provisional_key or "").strip(),
+        "canonicalSessionId": session_id,
+        "latestMessageFingerprint": fingerprint,
+        "canonicalProcessingKey": canonical_key,
+        "identityWarnings": warnings,
+    }

@@ -29,6 +29,7 @@ class ConversationPersistence:
         self.adapter = adapter
         self.session_resolution: SessionResolution | None = None
         self.candidate_status: CandidateStatus | None = None
+        self.recent_messages_fingerprint = ""
 
     def attach(self, state: GraphState, conversation: Conversation) -> None:
         """Resolve the platform session and persist observed messages."""
@@ -44,11 +45,25 @@ class ConversationPersistence:
         )
         status = self.repository.get_status(resolution.session.id)
         self.candidate_status = status
+        self.recent_messages_fingerprint = fingerprint
         state["session_id"] = resolution.session.id
         state["identity_confidence"] = resolution.confidence
         state["identity_warnings"] = resolution.warnings
         state["recent_messages_fingerprint"] = fingerprint
         state["candidate_status"] = asdict(status)
+
+    def should_skip_current_message_snapshot(self) -> bool:
+        """Check the canonical session/message key before any business action."""
+
+        if self.repository is None or self.session_resolution is None:
+            return False
+        session = self.session_resolution.session
+        return self.repository.should_skip_processing_snapshot(
+            owner=session.owner,
+            platform=session.platform,
+            canonical_session_id=session.id,
+            latest_message_fingerprint=self.recent_messages_fingerprint,
+        )
 
     def has_resume_completion(self) -> bool:
         """Return whether a real resume action has already been persisted."""
@@ -59,7 +74,18 @@ class ConversationPersistence:
         """Return whether a real resume file has already been persisted."""
 
         status = self.candidate_status
-        return bool(status and status.resume_downloaded)
+        if status and status.resume_downloaded:
+            return True
+        if self.artifact_store is None or self.session_resolution is None:
+            return False
+        session = self.session_resolution.session
+        return self.artifact_store.has_business_download(
+            session_id=session.id,
+            platform=session.platform,
+            owner=session.owner,
+            platform_conversation_id=session.platform_conversation_id,
+            position=session.position,
+        )
 
     def has_resume_request_pending(self) -> bool:
         """Return whether a prior real resume request is waiting for the candidate."""

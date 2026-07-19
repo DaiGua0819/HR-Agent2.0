@@ -122,6 +122,13 @@ def test_worker_process_messages_excludes_prior_contact_and_returns_selected_id(
     assert result["conversationId"] == "candidate-detail-b"
     assert result["selectedConversationId"] == "row-b"
     assert result["selectedProcessingKey"] == "snapshot-b"
+    assert result["provisionalProcessingKey"] == "snapshot-b"
+    assert result["canonicalSessionId"] == "conv-candidate-b"
+    assert result["latestMessageFingerprint"] == "fingerprint-b"
+    assert result["canonicalProcessingKey"] == (
+        "session|conv-candidate-b|message|fingerprint-b"
+    )
+    assert result["identityWarnings"] == []
 
 
 def test_worker_reuses_message_preparation_within_same_batch() -> None:
@@ -361,6 +368,9 @@ class ExcludingContactRuntime(WorkerRuntime):
         _ = adapter
         return {
             "conversation_id": "candidate-detail-b",
+            "session_id": "conv-candidate-b",
+            "recent_messages_fingerprint": "fingerprint-b",
+            "identity_warnings": [],
             "next_action": "request_resume",
             "stage": "resume_attachment_downloaded",
         }

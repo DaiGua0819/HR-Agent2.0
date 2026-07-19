@@ -347,6 +347,72 @@ class ConversationRepository:
             connection.commit()
         return updated
 
+    def processing_snapshot_exclusions(
+        self,
+        *,
+        owner: str,
+        platform: str,
+        retry_limit: int = 2,
+    ) -> set[str]:
+        """Load durable list and canonical keys that must not be processed again."""
+
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT provisional_processing_key, canonical_processing_key
+                FROM message_processing_snapshots
+                WHERE owner = ? AND platform = ?
+                  AND (
+                    status = 'completed'
+                    OR status = 'failed_terminal'
+                    OR (retryable = 1 AND attempt_count >= ?)
+                  )
+                """,
+                (owner, platform, max(1, int(retry_limit))),
+            ).fetchall()
+        exclusions: set[str] = set()
+        for row in rows:
+            provisional_key = str(row["provisional_processing_key"] or "")
+            canonical_key = str(row["canonical_processing_key"] or "")
+            if provisional_key:
+                exclusions.add(provisional_key)
+            if canonical_key:
+                exclusions.add(canonical_key)
+        return exclusions
+
+    def should_skip_processing_snapshot(
+        self,
+        *,
+        owner: str,
+        platform: str,
+        canonical_session_id: str,
+        latest_message_fingerprint: str,
+        retry_limit: int = 2,
+    ) -> bool:
+        """Check canonical message completion after the right-side chat is loaded."""
+
+        session_id = str(canonical_session_id or "").strip()
+        fingerprint = str(latest_message_fingerprint or "").strip()
+        if not session_id or not fingerprint:
+            return False
+        snapshot_key = f"session|{session_id}|message|{fingerprint}"
+        with connect(self.database_path) as connection:
+            row = connection.execute(
+                """
+                SELECT status, retryable, attempt_count
+                FROM message_processing_snapshots
+                WHERE owner = ? AND platform = ? AND snapshot_key = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (owner, platform, snapshot_key),
+            ).fetchone()
+        if row is None:
+            return False
+        return bool(
+            row["status"] in {"completed", "failed_terminal"}
+            or (bool(row["retryable"]) and int(row["attempt_count"]) >= retry_limit)
+        )
+
 
 def _session_params(session: ConversationSession) -> tuple[Any, ...]:
     return (

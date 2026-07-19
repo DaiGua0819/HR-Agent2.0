@@ -14,18 +14,23 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.db.engine import ensure_message_processing_snapshots_schema
+
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TOPOLOGY_PATH = SKILL_ROOT / "references" / "topology.json"
 ANOMALY_PATTERN = re.compile(
-    r"failed|mismatch|ambiguous|stale_|not_closed|blocked|unknown_question|"
+    r"failed|mismatch|ambiguous|stale_|_stale|not_closed|blocked|unknown_question|"
     r"unconfigured_position|download_error|security_verification|login_required|"
-    r"conversation_changed|identity_changed|changed_before_send",
+    r"conversation_changed|identity_changed|identity_warning|not_matched|"
+    r"changed_before_send|online_resume_save_target_untrusted|"
+    r"online_resume_save_dialog_not_visible|download_not_captured",
     re.IGNORECASE,
 )
 TEXT_OMIT_KEYS = {
@@ -39,6 +44,14 @@ TEXT_OMIT_KEYS = {
 }
 STOP_ACTIONS = {"send_failed", "request_resume_failed", "escalate"}
 LOCAL_RESUME_PLATFORMS = ("job51", "zhilian")
+PROCESSING_SNAPSHOT_RETRY_LIMIT = 2
+PROCESSED_SNAPSHOT_SKIP_STAGE = "message_snapshot_already_processed"
+RETRYABLE_PROCESSING_PATTERN = re.compile(
+    r"timeout|download_not_captured|download_error|page_not_ready|"
+    r"temporary|connection|worker_unreachable|save_dialog_not_visible|"
+    r"save_target_stale",
+    re.IGNORECASE,
+)
 
 
 class ManagerError(RuntimeError):
@@ -168,6 +181,9 @@ def classify_result(payload: dict[str, Any]) -> Classification:
         else {}
     )
     candidates.append(str(details.get("reason") or ""))
+    identity_warnings = payload.get("identityWarnings")
+    if isinstance(identity_warnings, list):
+        candidates.extend(str(item) for item in identity_warnings)
 
     for candidate in candidates:
         candidate = candidate.strip()
@@ -782,6 +798,23 @@ def concise_result(payload: dict[str, Any]) -> dict[str, Any]:
         "conversationId": str(payload.get("conversationId") or ""),
         "selectedConversationId": str(payload.get("selectedConversationId") or ""),
         "selectedProcessingKey": str(payload.get("selectedProcessingKey") or ""),
+        "provisionalProcessingKey": str(
+            payload.get("provisionalProcessingKey")
+            or payload.get("selectedProcessingKey")
+            or ""
+        ),
+        "canonicalProcessingKey": str(payload.get("canonicalProcessingKey") or ""),
+        "canonicalSessionId": str(payload.get("canonicalSessionId") or ""),
+        "latestMessageFingerprint": str(
+            payload.get("latestMessageFingerprint") or ""
+        ),
+        "identityWarnings": [
+            str(item)
+            for item in payload.get("identityWarnings", [])
+            if str(item)
+        ]
+        if isinstance(payload.get("identityWarnings"), list)
+        else [],
         "nextAction": str(payload.get("nextAction") or ""),
         "stage": str(payload.get("stage") or ""),
         "resultReason": str(result.get("reason") or ""),
@@ -789,15 +822,193 @@ def concise_result(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def ensure_processing_snapshot_table(database_path: Path) -> None:
+    """Create the durable message snapshot table without touching business data."""
+
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(database_path, timeout=10)) as connection:
+        connection.row_factory = sqlite3.Row
+        ensure_message_processing_snapshots_schema(connection)
+        connection.commit()
+
+
+def load_processing_snapshot_exclusions(
+    database_path: Path,
+    *,
+    owner: str,
+    platform: str,
+) -> set[str]:
+    """Load snapshots that must not be processed again without a new message."""
+
+    ensure_processing_snapshot_table(database_path)
+    with closing(sqlite3.connect(database_path, timeout=10)) as connection:
+        rows = connection.execute(
+            """
+            SELECT provisional_processing_key, canonical_processing_key
+            FROM message_processing_snapshots
+            WHERE owner = ? AND platform = ?
+              AND (
+                status = 'completed'
+                OR status = 'failed_terminal'
+                OR (retryable = 1 AND attempt_count >= ?)
+              )
+            """,
+            (owner, platform, PROCESSING_SNAPSHOT_RETRY_LIMIT),
+        ).fetchall()
+    exclusions: set[str] = set()
+    for provisional_key, canonical_key in rows:
+        if provisional_key:
+            exclusions.add(str(provisional_key))
+        if canonical_key:
+            exclusions.add(str(canonical_key))
+    return exclusions
+
+
+def record_processing_snapshot(
+    database_path: Path,
+    *,
+    owner: str,
+    platform: str,
+    summary: dict[str, Any],
+    classification: Classification,
+) -> None:
+    """Persist one processed list snapshot for reuse by later guarded runs."""
+
+    provisional_key = str(
+        summary.get("provisionalProcessingKey")
+        or summary.get("selectedProcessingKey")
+        or ""
+    ).strip()
+    if (
+        int(summary.get("processed") or 0) < 1
+        or not provisional_key
+        or str(summary.get("stage") or "") == PROCESSED_SNAPSHOT_SKIP_STAGE
+    ):
+        return
+    canonical_key = str(summary.get("canonicalProcessingKey") or "").strip()
+    snapshot_key = canonical_key or provisional_key
+    retryable = bool(
+        classification.is_anomaly
+        and RETRYABLE_PROCESSING_PATTERN.search(
+            " ".join(
+                [
+                    *classification.reasons,
+                    str(summary.get("stage") or ""),
+                    str(summary.get("resultReason") or ""),
+                ]
+            )
+        )
+    )
+    status = (
+        "completed"
+        if not classification.is_anomaly
+        else "failed_retryable"
+        if retryable
+        else "failed_terminal"
+    )
+    timestamp = now_iso()
+    ensure_processing_snapshot_table(database_path)
+    with closing(sqlite3.connect(database_path, timeout=10)) as connection:
+        connection.execute(
+            """
+            INSERT INTO message_processing_snapshots (
+              owner, platform, snapshot_key, provisional_processing_key,
+              canonical_processing_key, canonical_session_id,
+              latest_message_fingerprint, status, action, stage,
+              error_reasons, retryable, attempt_count, processed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(owner, platform, snapshot_key) DO UPDATE SET
+              provisional_processing_key = excluded.provisional_processing_key,
+              canonical_processing_key = CASE
+                WHEN excluded.canonical_processing_key != ''
+                THEN excluded.canonical_processing_key
+                ELSE message_processing_snapshots.canonical_processing_key
+              END,
+              canonical_session_id = CASE
+                WHEN excluded.canonical_session_id != ''
+                THEN excluded.canonical_session_id
+                ELSE message_processing_snapshots.canonical_session_id
+              END,
+              latest_message_fingerprint = CASE
+                WHEN excluded.latest_message_fingerprint != ''
+                THEN excluded.latest_message_fingerprint
+                ELSE message_processing_snapshots.latest_message_fingerprint
+              END,
+              status = CASE
+                WHEN message_processing_snapshots.status = 'completed'
+                THEN 'completed'
+                ELSE excluded.status
+              END,
+              action = excluded.action,
+              stage = excluded.stage,
+              error_reasons = excluded.error_reasons,
+              retryable = excluded.retryable,
+              attempt_count = message_processing_snapshots.attempt_count + 1,
+              updated_at = excluded.updated_at
+            """,
+            (
+                owner,
+                platform,
+                snapshot_key,
+                provisional_key,
+                canonical_key,
+                str(summary.get("canonicalSessionId") or "").strip(),
+                str(summary.get("latestMessageFingerprint") or "").strip(),
+                status,
+                str(summary.get("nextAction") or ""),
+                str(summary.get("stage") or ""),
+                json.dumps(classification.reasons, ensure_ascii=False),
+                1 if retryable else 0,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+
 def update_run_counters(
     run_state: dict[str, Any],
     summary: dict[str, Any],
     classification: Classification,
+    *,
+    anomaly_key: str = "",
+    seen_anomaly_keys: set[str] | None = None,
 ) -> None:
-    processed = max(0, int(summary.get("processed") or 0))
+    processed = business_processed_count(summary)
     run_state["processed"] = int(run_state.get("processed") or 0) + processed
     if classification.is_anomaly:
+        if seen_anomaly_keys is not None and anomaly_key:
+            if anomaly_key in seen_anomaly_keys:
+                return
+            seen_anomaly_keys.add(anomaly_key)
         run_state["anomalies"] = int(run_state.get("anomalies") or 0) + 1
+
+
+def business_processed_count(summary: dict[str, Any]) -> int:
+    """Exclude canonical no-op skips from business processing totals and limits."""
+
+    if str(summary.get("stage") or "") == PROCESSED_SNAPSHOT_SKIP_STAGE:
+        return 0
+    return max(0, int(summary.get("processed") or 0))
+
+
+def anomaly_contact_key(
+    *,
+    owner: str,
+    platform: str,
+    summary: dict[str, Any],
+) -> str:
+    """Build a person-level anomaly key independent of the latest message snapshot."""
+
+    identity = str(
+        summary.get("canonicalSessionId")
+        or summary.get("conversationId")
+        or summary.get("selectedConversationId")
+        or summary.get("provisionalProcessingKey")
+        or summary.get("selectedProcessingKey")
+        or ""
+    ).strip()
+    return "|".join((owner, platform, identity)) if identity else ""
 
 
 def _run_guarded(
@@ -814,6 +1025,13 @@ def _run_guarded(
         raise ManagerError(f"preflight_failed:{json.dumps(check['errors'], ensure_ascii=False)}")
 
     state_dir = runtime_dir(topology)
+    snapshot_database_path = (
+        Path(str(topology.get("databasePath"))).resolve()
+        if topology.get("databasePath")
+        else None
+    )
+    if snapshot_database_path is not None:
+        ensure_processing_snapshot_table(snapshot_database_path)
     stop_path = state_dir / "stop.requested"
     clear_stop(stop_path)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -833,6 +1051,7 @@ def _run_guarded(
     control_port = int(topology["controlPlane"]["port"])
     state_lock = threading.Lock()
     stop_event = threading.Event()
+    anomaly_contact_keys: set[str] = set()
 
     def persist_state() -> None:
         write_json_atomic(current_path, run_state)
@@ -911,7 +1130,17 @@ def _run_guarded(
                 ),
                 flush=True,
             )
-            update_run_counters(run_state, summary, classification)
+            update_run_counters(
+                run_state,
+                summary,
+                classification,
+                anomaly_key=anomaly_contact_key(
+                    owner=owner,
+                    platform=platform,
+                    summary=summary,
+                ),
+                seen_anomaly_keys=anomaly_contact_keys,
+            )
             exceeded = (
                 classification.is_anomaly
                 and run_state["anomalies"] > max_anomalies
@@ -999,6 +1228,14 @@ def _run_guarded(
                         classification=classification,
                         summary=summary,
                     )
+                    if snapshot_database_path is not None:
+                        record_processing_snapshot(
+                            snapshot_database_path,
+                            owner=owner,
+                            platform=platform,
+                            summary=summary,
+                            classification=classification,
+                        )
                     processed_key = str(summary.get("selectedProcessingKey") or "").strip()
                     if summary["processed"] > 0 and processed_key:
                         excluded_contact_ids.add(processed_key)
@@ -1013,14 +1250,14 @@ def _run_guarded(
                         ).strip()
                         if summary["processed"] > 0 and skipped_contact_id:
                             excluded_contact_ids.add(skipped_contact_id)
-                            count += summary["processed"]
+                            count += business_processed_count(summary)
                             if sleep_seconds > 0:
                                 stop_event.wait(sleep_seconds)
                             continue
                         break
                     if summary["processed"] == 0:
                         break
-                    count += summary["processed"]
+                    count += business_processed_count(summary)
                     if sleep_seconds > 0:
                         stop_event.wait(sleep_seconds)
         except BaseException:
