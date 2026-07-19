@@ -2433,6 +2433,57 @@ def test_job51_preview_only_online_resume_uses_save_download_before_request() ->
     assert page.message_card_clicks == 1
 
 
+def test_job51_online_resume_payload_still_requires_browser_download_capture() -> None:
+    """Mounted preview bytes must not bypass the visible save/download action."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "已发送在线简历"}],
+                online_resume_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+                preview_only=True,
+            )
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["downloaded"] is True
+    assert page.online_resume_download_clicks == 1
+
+
+def test_job51_online_resume_uses_toolbar_save_when_legacy_id_is_missing() -> None:
+    """A visible toolbar save icon must be tried even when the legacy ID is absent."""
+
+    page = OnlineResumeEntryPage(
+        conversations=[
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "已发送在线简历"}],
+                    online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                    online_resume_filename="candidate.pdf",
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+                "online_resume_toolbar_save_available": True,
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红")
+
+    result = asyncio.run(adapter.request_resume())
+
+    assert result["requested"] is False
+    assert result["downloaded"] is True
+    assert result["resumeReceived"] is True
+    assert result["sourceKind"] == "online_resume"
+    assert page.resume_requests == 0
+
+
 def test_job51_online_resume_without_export_requests_attachment_resume() -> None:
     """A visible online resume without an export control must fall back to an attachment request."""
 
@@ -3481,6 +3532,7 @@ class OnlineResumeEntryPage(FakePage):
         self.top_right_trusted_click_opens = top_right_trusted_click_opens
         self.message_card_clicks = 0
         self.top_right_clicks = 0
+        self.online_resume_download_clicks = 0
 
     async def query_all(self, selector: str):  # type: ignore[no-untyped-def]
         if ".im-message-item .resume-element .info-content-item" in selector:
@@ -3515,6 +3567,15 @@ class OnlineResumeEntryPage(FakePage):
                 "reason": "" if found else "online_resume_button_not_found",
             }
         return await super().eval_js(script, arg)
+
+    async def click_and_download(
+        self,
+        script: str,
+        arg: object | None = None,
+        timeout_ms: int = 15000,
+    ) -> dict[str, object]:
+        self.online_resume_download_clicks += 1
+        return await super().click_and_download(script, arg, timeout_ms)
 
     async def handle_online_resume_click(self, source: str) -> None:
         if source == "message_card_online_resume":

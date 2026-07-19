@@ -504,8 +504,31 @@ class FakePage:
         """执行假点击并返回预设下载字节。"""
 
         _ = timeout_ms
-        clicked = await self.eval_js(script, arg)
         convo = self.current_conversation()
+        if "sensor_imresume_download" in script:
+            export_available = bool(
+                convo.get("online_resume_opened")
+                and (
+                    convo.get("online_resume_export_available", True)
+                    or convo.get("online_resume_toolbar_save_available")
+                )
+            )
+            clicked = {
+                "clicked": export_available,
+                "source": (
+                    "fake_online_resume_save"
+                    if export_available
+                    else "fake_online_resume_save_missing"
+                ),
+            }
+            if not export_available:
+                return {
+                    "ok": False,
+                    "clicked": clicked,
+                    "reason": "online_resume_export_not_available",
+                }
+        else:
+            clicked = await self.eval_js(script, arg)
         content = (
             convo.get("online_resume_download_bytes")
             or convo.get("online_resume_bytes")

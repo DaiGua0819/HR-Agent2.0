@@ -244,27 +244,11 @@ async def _download_online_resume(
         }
     try:
         preview_state = await _online_resume_preview_ready(page)
-        if not preview_state.get("hasSaveButton"):
-            return {
-                "ok": False,
-                "blocked": True,
-                "buttonFound": True,
-                "reason": "online_resume_export_not_available",
-                "opened": opened,
-                "previewState": preview_state,
-            }
-        payload = await _safe_eval_dict(page, "job51.online_resume_payload")
-        if not payload:
-            payload = await _safe_eval_dict(page, ONLINE_RESUME_DOWNLOAD_PAYLOAD_JS)
-        href = str(payload.get("href") or "").strip()
-        content = await _payload_resume_bytes(page, payload)
-        if content is None:
-            download = await _capture_online_resume_save_download(page)
-            content = download.get("bytes") if isinstance(download.get("bytes"), bytes) else None
-            if content is not None:
-                payload = {**payload, "filename": download.get("filename") or ""}
+        download = await _capture_online_resume_save_download(page)
+        content = download.get("bytes") if isinstance(download.get("bytes"), bytes) else None
         if content is None:
             export_queued = bool(download.get("exportQueued"))
+            download_reason = str(download.get("reason") or "")
             return {
                 "ok": False,
                 "blocked": True,
@@ -272,18 +256,20 @@ async def _download_online_resume(
                 "reason": (
                     "online_resume_export_queued_no_file"
                     if export_queued
+                    else "online_resume_export_not_available"
+                    if download_reason == "online_resume_export_not_available"
                     else "online_resume_download_link_missing"
                 ),
                 "exportQueued": export_queued,
-                "href": href,
                 "opened": opened,
+                "previewState": preview_state,
                 "download": download,
             }
         return _with_source_kind(save_resume_bytes(
             content,
             candidate_name=candidate_name,
             applied_position=applied_position,
-            filename=str(payload.get("filename") or ""),
+            filename=str(download.get("filename") or ""),
             memory=memory,
         ), "online_resume")
     finally:

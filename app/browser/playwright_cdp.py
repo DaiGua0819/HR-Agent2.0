@@ -22,6 +22,95 @@ CDP_DEFAULT_ACTION_TIMEOUT_MS = 30000
 CDP_TIMEOUT_GRACE_SECONDS = 2.0
 CDP_EVAL_TIMEOUT_SECONDS = 15.0
 
+JOB51_ONLINE_RESUME_SAVE_TARGET_JS = r"""
+() => {
+  /* job51_online_resume_save_target */
+  const attr = (el, name) => (el && el.getAttribute ? el.getAttribute(name) || "" : "");
+  const text = (el) => (el && el.innerText ? el.innerText.trim() : "");
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
+  };
+  const clickable = (el) => {
+    let node = el;
+    for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+      if (!visible(node)) continue;
+      const tag = String(node.tagName || "").toLowerCase();
+      const role = attr(node, "role");
+      const cursor = getComputedStyle(node).cursor || "";
+      if (tag === "button" || tag === "a" || role === "button" || cursor === "pointer") {
+        return node;
+      }
+    }
+    return null;
+  };
+  const roots = Array.from(document.querySelectorAll(
+    ".con.con-ehire, .imresume-container, .resume-preview, " +
+      "#IMResumePrint, .el-dialog, [role='dialog']"
+  )).filter(visible);
+  const root = roots.find((item) => item.matches(".con.con-ehire")) ||
+    roots.find((item) => item.id === "IMResumePrint") || roots.at(-1);
+  if (!root) {
+    return { found: false, reason: "online_resume_preview_root_not_found" };
+  }
+  const rootRect = root.getBoundingClientRect();
+  const seen = new Set();
+  const controls = Array.from(root.querySelectorAll(
+    "button, a, [role='button'], i, svg, use, span, div"
+  )).map((node) => {
+    const control = clickable(node);
+    if (!control || seen.has(control)) return null;
+    seen.add(control);
+    const rect = control.getBoundingClientRect();
+    const icon = control.querySelector("i, svg, use");
+    const label = [
+      text(control), attr(control, "title"), attr(control, "aria-label"),
+      attr(control, "class"), attr(icon, "class"), attr(icon, "href"),
+      attr(icon, "xlink:href")
+    ].join(" ");
+    return { control, rect, label };
+  }).filter(Boolean).filter((item) => {
+    const rect = item.rect;
+    return rect.width >= 12 && rect.width <= 80 && rect.height >= 12 && rect.height <= 80 &&
+      rect.top >= rootRect.top && rect.top <= rootRect.top + 110 &&
+      rect.right <= rootRect.right + 8 && rect.right >= rootRect.right - 280;
+  });
+  const semantic = controls.filter((item) => {
+    return /下载|保存|存储|导出|download|save|export/i.test(item.label);
+  }).sort((a, b) => b.rect.left - a.rect.left);
+  let target = semantic[0] || null;
+  let source = "job51_toolbar_semantic_save";
+  if (!target) {
+    const ordered = controls.sort((a, b) => a.rect.left - b.rect.left);
+    if (ordered.length >= 2) {
+      target = ordered[ordered.length - 2];
+      source = "job51_toolbar_save_left_of_print";
+    }
+  }
+  if (!target) {
+    return {
+      found: false,
+      reason: "online_resume_save_icon_not_found",
+      candidates: controls.slice(0, 12).map((item) => ({
+        label: item.label.slice(0, 120),
+        x: Math.round(item.rect.left),
+        y: Math.round(item.rect.top),
+      })),
+    };
+  }
+  return {
+    found: true,
+    x: target.rect.left + target.rect.width / 2,
+    y: target.rect.top + target.rect.height / 2,
+    source,
+    label: target.label.slice(0, 120),
+  };
+}
+"""
+
 
 class PlaywrightElement:
     """BrowserElement 的 Playwright Locator 包装。"""
@@ -641,14 +730,36 @@ class PlaywrightCDPPage:
             }
         try:
             save = self.page.locator("#sensor_imresume_download").first
-            if not await save.count() or not await save.is_visible():
-                return {
-                    "ok": False,
-                    "clicked": clicked,
-                    "reason": "online_resume_export_not_available",
+            if await save.count() and await save.is_visible():
+                await save.click(timeout=5000)
+                clicked = {"clicked": True, "source": "job51_trusted_save_click"}
+            else:
+                target = await self.page.evaluate(JOB51_ONLINE_RESUME_SAVE_TARGET_JS)
+                if not isinstance(target, dict) or not target.get("found"):
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_export_not_available",
+                        "target": target if isinstance(target, dict) else {},
+                    }
+                x = float(target.get("x") or 0)
+                y = float(target.get("y") or 0)
+                if x <= 0 or y <= 0:
+                    return {
+                        "ok": False,
+                        "clicked": clicked,
+                        "reason": "online_resume_save_target_invalid",
+                        "target": target,
+                    }
+                await self.page.mouse.move(x, y, steps=6)
+                await self.page.mouse.click(x, y)
+                clicked = {
+                    "clicked": True,
+                    "source": str(target.get("source") or "job51_toolbar_save"),
+                    "label": str(target.get("label") or "")[:120],
+                    "x": round(x),
+                    "y": round(y),
                 }
-            await save.click(timeout=5000)
-            clicked = {"clicked": True, "source": "job51_trusted_save_click"}
             await self.page.wait_for_timeout(1000)
             dialog = self.page.locator(".el-dialog:visible").filter(has_text="保存到本地").last
             if not await dialog.count() or not await dialog.is_visible():
