@@ -378,6 +378,37 @@ def test_scheduler_rejects_fatal_codex_event(tmp_path: Path) -> None:
     assert _summary(paths)["error"] == "fatal_codex_event:error"
 
 
+def test_scheduler_allows_non_json_cleanup_after_completed_turn(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    call_count = 0
+
+    def runner(argv, *, cwd, input_text, env, timeout_seconds):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return CommandResult(2, '{"ok":false,"errors":[]}', "")
+        output = _codex_jsonl(
+            [
+                "recruitment_preflight",
+                "processing_status",
+                "data_health",
+                "daily_report",
+            ],
+            inner_preflight_ok=False,
+        )
+        return CommandResult(0, output + "SUCCESS: cleanup child process\n", "")
+
+    result = run_scheduled(
+        paths,
+        runner=runner,
+        now=datetime(2026, 7, 21, 16, 0, tzinfo=UTC),
+        environ={"OPENAI_API_KEY": "secret"},
+    )
+
+    assert result == 0
+    assert _summary(paths)["status"] == "blocked_reported"
+
+
 def test_scheduler_rejects_wrong_daily_report_date(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     call_count = 0

@@ -454,16 +454,24 @@ def _tool_policy_error(
 def _codex_result(raw: str) -> tuple[list[CodexToolCall], str, str]:
     calls: list[CodexToolCall] = []
     final_message = ""
+    turn_completed = False
     for line in raw.splitlines():
         event = _json_object(line)
         if event is None:
+            if turn_completed:
+                continue
             return calls, final_message, "invalid_codex_jsonl"
         event_type = event.get("type")
         if not isinstance(event_type, str) or not event_type:
             return calls, final_message, "invalid_codex_event"
+        if turn_completed:
+            return calls, final_message, f"event_after_turn_completed:{event_type}"
         if event_type in {"error", "turn.failed"}:
             return calls, final_message, f"fatal_codex_event:{event_type}"
-        if event_type in {"thread.started", "turn.started", "turn.completed"}:
+        if event_type == "turn.completed":
+            turn_completed = True
+            continue
+        if event_type in {"thread.started", "turn.started"}:
             continue
         if event_type not in {"item.started", "item.completed"}:
             return calls, final_message, f"unknown_codex_event:{event_type}"
@@ -500,6 +508,8 @@ def _codex_result(raw: str) -> tuple[list[CodexToolCall], str, str]:
                 final_message = " ".join(text.split())
         elif item_type != "reasoning":
             return calls, final_message, f"forbidden_codex_item:{item_type}"
+    if not turn_completed:
+        return calls, final_message, "turn_not_completed"
     return calls, final_message, ""
 
 
