@@ -281,7 +281,7 @@ def test_processing_start_runs_fixed_sequence_and_returns_sanitized_summary() ->
 
     response = _call_tool(server, "processing_start", {})
 
-    assert manager.calls == ["start_runtime", "run_batch"]
+    assert manager.calls == ["preflight", "start_runtime", "run_batch"]
     result = response["result"]
     assert result["isError"] is False
     assert result["structuredContent"] == {
@@ -311,6 +311,22 @@ def test_processing_start_runs_fixed_sequence_and_returns_sanitized_summary() ->
     assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
     assert "must-not-be-returned" not in result["content"][0]["text"]
     assert "sensitive" not in result["content"][0]["text"]
+
+
+def test_processing_start_does_not_start_runtime_when_preflight_is_blocked() -> None:
+    manager = _FakeManager()
+    manager.preflight_result = {
+        "ok": False,
+        "errors": [{"reason": "profile_missing"}],
+        "warnings": [],
+    }
+    server = _server(manager)
+
+    response = _call_tool(server, "processing_start", {})
+
+    assert manager.calls == ["preflight"]
+    assert response["result"]["isError"] is True
+    assert response["result"]["structuredContent"] == manager.preflight_result
 
 
 def test_pause_and_read_only_tools_use_only_fixed_manager_operations() -> None:
@@ -710,6 +726,49 @@ def test_pause_during_runtime_start_prevents_batch_launch() -> None:
         "byPlatform": {},
     }
     assert pause_result.payload == {"ok": True, "status": "pause_requested"}
+    assert "run_batch" not in calls
+
+
+def test_pause_during_preflight_prevents_runtime_start() -> None:
+    class _PreflightBlockingManager(_FakeManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.preflight_entered = asyncio.Event()
+            self.release_preflight = asyncio.Event()
+
+        async def preflight(self) -> dict[str, object]:
+            self.calls.append("preflight")
+            self.preflight_entered.set()
+            await self.release_preflight.wait()
+            return self.preflight_result
+
+        async def request_stop(self, reason: str) -> None:
+            self.calls.append(("request_stop", reason))
+            self.release_preflight.set()
+
+    async def scenario() -> tuple[object, object, list[object]]:
+        manager = _PreflightBlockingManager()
+        service = _mcp_module().RecruitmentOpsService(manager)
+        start_task = asyncio.create_task(service.call_tool("processing_start", {}))
+        await manager.preflight_entered.wait()
+        pause_result = await service.call_tool("processing_pause", {})
+        start_result = await asyncio.wait_for(start_task, timeout=1)
+        return start_result, pause_result, manager.calls
+
+    start_result, pause_result, calls = asyncio.run(scenario())
+
+    assert start_result.payload == {
+        "ok": True,
+        "status": "pause_requested_before_batch",
+        "processedContacts": 0,
+        "businessResumeAcquisitions": 0,
+        "resumeRequestsWaiting": 0,
+        "anomalies": 0,
+        "anomalyReasons": [],
+        "byPlatform": {},
+    }
+    assert pause_result.payload == {"ok": True, "status": "pause_requested"}
+    assert "start_runtime" not in calls
     assert "run_batch" not in calls
 
 

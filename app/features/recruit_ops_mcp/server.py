@@ -152,6 +152,11 @@ class RecruitmentOpsService:
                 self._pause_during_start.clear()
                 self._runtime_starting = True
                 try:
+                    preflight = await self.manager.preflight()
+                    if preflight.get("ok") is not True:
+                        return ToolExecution(preflight, is_error=True)
+                    if self._pause_during_start.is_set():
+                        return ToolExecution(_paused_before_batch_summary())
                     await self.manager.start_runtime()
                 finally:
                     self._runtime_starting = False
