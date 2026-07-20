@@ -90,6 +90,41 @@ def test_projection_uses_session_fallback_when_manager_run_is_missing(
     assert exported.coverage["fallbackCandidates"] == 1
 
 
+def test_projection_resolves_legacy_manager_conversation_to_session(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    _insert_session(
+        database,
+        session_id="legacy-session",
+        updated_at="2026-07-20T02:00:00+00:00",
+    )
+    record = _contact_result(
+        timestamp="2026-07-20T02:00:00+00:00",
+        session_id="legacy-session",
+        action="request_resume",
+        stage="resume_requested",
+    )
+    record["summary"].pop("canonicalSessionId")
+    record["response"].pop("canonicalSessionId")
+    record["summary"]["conversationId"] = "platform-legacy-session"
+    record["response"]["conversationId"] = "platform-legacy-session"
+    runs = tmp_path / "runs"
+    _write_run(runs, [record])
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=runs,
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert len(exported.events) == 1
+    assert exported.events[0].contact_key == "session|legacy-session"
+    assert exported.coverage["exactCandidates"] == 1
+    assert exported.coverage["fallbackCandidates"] == 0
+
+
 def test_projection_keeps_same_candidate_separate_across_days(tmp_path: Path) -> None:
     database = _database(tmp_path)
     _insert_session(database, session_id="session-2", updated_at="2026-07-20T01:00:00+00:00")

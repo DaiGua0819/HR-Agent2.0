@@ -143,6 +143,15 @@ def build_daily_projections(
         raise ValueError("start_date must not be after end_date")
     database = Path(database_path)
     sessions = _load_sessions(database)
+    sessions_by_conversation = {
+        (
+            str(session.get("platform") or ""),
+            str(session.get("owner") or ""),
+            str(session.get("platform_conversation_id") or ""),
+        ): session_id
+        for session_id, session in sessions.items()
+        if session.get("platform_conversation_id")
+    }
     projections: dict[tuple[date, str], _Projection] = {}
     exact_keys: set[tuple[date, str]] = set()
     fallback_keys: set[tuple[date, str]] = set()
@@ -174,6 +183,10 @@ def build_daily_projections(
             summary.get("selectedConversationId"),
             response.get("selectedConversationId"),
         )
+        if not session_id:
+            session_id = sessions_by_conversation.get(
+                (platform, owner, conversation_id), ""
+            )
         session = sessions.get(session_id, {}) if session_id else {}
         identity = _stable_identity(
             session_id=session_id,
