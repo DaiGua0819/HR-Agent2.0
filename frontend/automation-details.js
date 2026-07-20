@@ -18,6 +18,7 @@ const actionLabels = {
   ask: "发送问题",
   ask_question: "发送问题",
   ask_screening: "发送筛选问题",
+  ask_basic_conditions: "发送基础条件",
   send_screening_question: "发送筛选问题",
   send_company_info: "发送公司信息",
   answer_question: "回复问题",
@@ -26,6 +27,8 @@ const actionLabels = {
   interview_invite: "邀请面试",
   proactive_greet: "主动沟通",
   reject: "判定不合适",
+  escalate: "转人工处理",
+  send_failed: "发送失败",
   skip: "跳过",
   wait: "等待候选人",
 };
@@ -49,6 +52,7 @@ const stageLabels = {
   screening_question_sent: "已发送筛选问题",
   screening_accept: "岗位筛选通过",
   screening_reject: "岗位筛选不通过",
+  screening_unclear: "岗位筛选结果待确认",
   screening_waiting: "等待筛选回复",
   resume_already_downloaded: "简历已下载",
   resume_attachment_downloaded: "附件简历已下载",
@@ -61,10 +65,16 @@ const stageLabels = {
   open_thread_failed: "打开候选人会话失败",
   candidate_timeout: "候选人处理超时",
   stale_resume_overlay_not_closed: "简历窗口未正常关闭",
+  candidate_rejected: "候选人判定不合适",
+  direct_resume_prompt_send_failed: "求简历话术发送失败",
+  ignored_position: "岗位已跳过",
+  last_message_not_candidate: "最后消息非候选人发送",
+  unconfigured_position: "岗位未配置",
   handled: "处理完成",
   completed: "处理完成",
 };
 const anomalyReasonLabels = {
+  basic_phrase_send_failed: "基础条件发送失败",
   knowledge_answer_send_failed: "知识库回复发送失败",
   direct_resume_prompt_send_failed: "求简历话术发送失败",
   screening_question_send_failed: "筛选问题发送失败",
@@ -98,6 +108,15 @@ const anomalyReasonLabels = {
   account_abnormal: "平台账号状态异常",
   download_error: "简历下载失败",
   timeout: "操作超时",
+  send_failed: "消息发送失败",
+  request_resume_failed: "求简历失败",
+  request_resume_action_failed: "求简历操作失败",
+  resume_consent_accept_failed: "简历授权确认失败",
+  resume_request_button_failed: "求简历按钮操作失败",
+  resume_attachment_download_blocked: "附件简历下载受阻",
+  unconfigured_position: "岗位未配置",
+  escalate: "已转人工处理",
+  unknown_question: "问题未命中知识库",
 };
 const resumeHandlingLabels = {
   boss_request_verified_server_imap: "已求简历，等待服务器邮箱入库",
@@ -110,9 +129,18 @@ function stageLabel(value) {
   return stageLabels[value] || "其他阶段";
 }
 
+function actionLabel(value) {
+  if (!value) return "未记录动作";
+  return actionLabels[value] || "其他动作";
+}
+
 function anomalyReasonLabel(value) {
   if (!value) return "异常原因未记录";
-  return anomalyReasonLabels[value] || "其他异常";
+  return String(value).split(";")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => anomalyReasonLabels[item] || "其他异常")
+    .join("；");
 }
 
 function resumeHandlingLabel(value) {
@@ -153,6 +181,23 @@ function formatAutomationDate(value) {
   return `${fullYear.slice(-2)}/${month}/${day}`;
 }
 
+function formatAutomationDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}/${values.month}/${values.day} ${values.hour}:${values.minute}:${values.second}`;
+}
+
 function renderDetailsContext(query) {
   const parts = [formatAutomationDate(query.get("date") || "")];
   if (query.get("platform")) parts.push(detailsPlatformName(query.get("platform")));
@@ -165,12 +210,12 @@ function renderDetailsContext(query) {
 function renderDetailRows(items) {
   byId("automationDetailsRows").innerHTML = items.map((item) => `
     <tr>
-      <td>${escapeDetailsHtml(new Date(item.time).toLocaleString("zh-CN", { hour12: false }))}</td>
+      <td>${escapeDetailsHtml(formatAutomationDateTime(item.time))}</td>
       <td>${escapeDetailsHtml(detailsPlatformName(item.platform))}</td>
       <td>${escapeDetailsHtml(item.owner)}</td>
       <td>${escapeDetailsHtml(item.candidateName || "未识别")}</td>
       <td>${escapeDetailsHtml(item.jobType || "未识别岗位")}</td>
-      <td title="${escapeDetailsHtml(item.action || "")}">${escapeDetailsHtml(actionLabels[item.action] || item.action || "-")}</td>
+      <td title="${escapeDetailsHtml(item.action || "")}">${escapeDetailsHtml(actionLabel(item.action))}</td>
       <td title="${escapeDetailsHtml(item.stage || "")}">${escapeDetailsHtml(stageLabel(item.stage))}</td>
       <td title="${escapeDetailsHtml(item.resumeHandling || "")}">${escapeDetailsHtml(resumeHandlingLabel(item.resumeHandling))}</td>
       <td>${item.resumeDownloadUrl

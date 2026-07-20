@@ -111,12 +111,12 @@ git commit -m "新增候选人每日数据投影"
 **Interfaces:**
 - Consumes: `build_daily_projections(...)`
 - Produces CLI commands:
-  - `export --database PATH --runs PATH --days 7 --output PATH`
-  - `import --database PATH --input PATH [--apply]`
+  - `export --database PATH --runs PATH --days 7 --output PATH --files-dir DIR`
+  - `import --database PATH --input PATH --expected-sha256 HASH --files-dir DIR [--apply]`
 
 - [ ] **Step 1: Write failing export-package test**
 
-Assert the JSON package contains `version`, `timezone`, `startDate`, `endDate`, `events`, `coverage`, `summary`, and a SHA-256 printed by the CLI.
+Assert the JSON package contains `version`, `timezone`, `startDate`, `endDate`, `events`, `artifacts`, `coverage`, `summary`, and a SHA-256 printed by the CLI. Artifact files are stored beside the JSON package and addressed by their SHA-256.
 
 - [ ] **Step 2: Verify RED**
 
@@ -130,11 +130,11 @@ Expected: import failure because the migration script does not exist.
 
 - [ ] **Step 3: Implement export command**
 
-Use `argparse` subcommands. Default the end date to current Beijing date and derive `startDate = endDate - 6 days`. Write UTF-8 JSON only when `--output` is supplied and always print the summary and hash.
+Use `argparse` subcommands. Default the end date to current Beijing date and derive `startDate = endDate - 6 days`. Write UTF-8 JSON only when `--output` is supplied, copy distinct 51job/Zhilian artifacts into `--files-dir`, and always print the summary and hash.
 
 - [ ] **Step 4: Write dry-run import test**
 
-Create a temporary SQLite database, run import without `--apply`, and assert `automation_contact_events` remains empty while validation counts are returned.
+Create a temporary SQLite database, run import without `--apply`, and assert the package SHA-256 plus every artifact hash is validated before `automation_contact_events` remains empty.
 
 - [ ] **Step 5: Write apply and repeat-import tests**
 
@@ -263,18 +263,19 @@ git commit -m "优化招聘数据日期与仪表盘布局"
 
 **Files:**
 - Generated outside Git: `data/migrations/automation-events-2026-07-14_2026-07-20.json`
+- Generated outside Git: `data/migrations/automation-events-2026-07-14_2026-07-20-files/`
 
 - [ ] **Step 1: Export the real seven-day package in dry-run mode**
 
 ```powershell
-python scripts/migrate_automation_daily_events.py export --database data/resumes.sqlite --runs data/agent_manager/runs --end-date 2026-07-20 --days 7 --output data/migrations/automation-events-2026-07-14_2026-07-20.json
+python scripts/migrate_automation_daily_events.py export --database data/resumes.sqlite --runs data/agent_manager/runs --end-date 2026-07-20 --days 7 --output data/migrations/automation-events-2026-07-14_2026-07-20.json --files-dir data/migrations/automation-events-2026-07-14_2026-07-20-files
 ```
 
 Review unique candidates, raw contacts, exact/fallback/unresolved coverage, per-day counts, platform totals and action totals.
 
 - [ ] **Step 2: Import into a database backup copy**
 
-Use SQLite backup API to create a temporary database copy, run import first without `--apply`, then with `--apply` twice. Assert totals are stable after the second apply.
+Use SQLite backup API to create a temporary database copy. Run import with `--expected-sha256` and `--files-dir` first without `--apply`, then with `--apply` twice. Assert totals and artifact counts are stable after the second apply.
 
 - [ ] **Step 3: Start a local preview on an unused port**
 
@@ -311,4 +312,3 @@ Confirm only code, tests, the migration script and the exported JSON intended fo
 - [ ] **Step 4: Prepare guarded server deployment**
 
 Before server apply: compare server files, back up code and SQLite, record `8080/18080` PIDs, deploy code, run server smoke checks, import package dry-run, apply once, verify seven-day totals, and restart only `18080`.
-

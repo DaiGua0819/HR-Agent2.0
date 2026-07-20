@@ -82,6 +82,50 @@ def test_daily_summary_dedupes_contacts_and_uses_platform_resume_contracts(
     assert by_key[("运营B", "job51")]["businessResumeAcquisitions"] == 1
 
 
+def test_daily_summary_assigns_duplicate_resume_hash_to_one_job_group(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationMonitoringRepository(tmp_path / "monitoring.sqlite")
+    service = AutomationMonitoringService(repository)
+    older = _event(
+        event_id="older-resume",
+        contact_key="older-contact",
+        platform="job51",
+        owner="owner",
+        candidate_name="older",
+        job_type="job-a",
+        resume_acquired=True,
+        resume_handling="local_resume_downloaded",
+        resume_file_hash="shared-file",
+    )
+    newer = _event(
+        event_id="newer-resume",
+        contact_key="newer-contact",
+        platform="job51",
+        owner="owner",
+        candidate_name="newer",
+        job_type="job-b",
+        resume_acquired=True,
+        resume_handling="local_resume_downloaded",
+        resume_file_hash="shared-file",
+    )
+    older["occurredAt"] = "2026-07-20T01:00:00+00:00"
+    older["updatedAt"] = older["occurredAt"]
+    newer["occurredAt"] = "2026-07-20T02:00:00+00:00"
+    newer["updatedAt"] = newer["occurredAt"]
+    repository.upsert_events([older, newer])
+
+    summary = service.daily_summary(date="2026-07-20")
+
+    assert summary["totals"]["businessResumeAcquisitions"] == 1
+    assert sum(
+        item["businessResumeAcquisitions"] for item in summary["byJobPlatform"]
+    ) == 1
+    by_job = {item["jobType"]: item for item in summary["byJobPlatform"]}
+    assert by_job["job-b"]["businessResumeAcquisitions"] == 1
+    assert by_job["job-a"]["businessResumeAcquisitions"] == 0
+
+
 def test_daily_summary_uses_latest_candidate_row_and_accumulates_flags(
     tmp_path: Path,
 ) -> None:
@@ -224,6 +268,177 @@ def test_daily_details_defaults_to_ten_and_adds_resume_download_links(
     assert first_page["items"][0]["resumeDownloadUrl"] == "/api/resumes/resume-11/download"
     assert len(second_page["items"]) == 2
     assert all("filePath" not in item for item in first_page["items"])
+
+
+def test_daily_details_resolves_downloaded_resume_by_file_hash(tmp_path: Path) -> None:
+    database = tmp_path / "monitoring.sqlite"
+    repository = AutomationMonitoringRepository(database)
+    service = AutomationMonitoringService(repository)
+    repository.upsert_events(
+        [
+            _event(
+                event_id="event-by-file-hash",
+                contact_key="session|shared-session",
+                platform="job51",
+                owner="owner",
+                candidate_name="candidate",
+                job_type="AI product manager",
+                resume_acquired=True,
+                resume_handling="local_resume_downloaded",
+                resume_file_hash="resume-file-hash",
+            )
+        ]
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO resume_artifacts (
+              id, session_id, platform, owner, platform_conversation_id,
+              candidate_name_from_platform, position, file_path, file_hash,
+              source_kind, parse_status, parsed_name, resume_id, error,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, 'attachment', 'parsed', ?, ?, '', ?, ?)
+            """,
+            (
+                "artifact-by-file-hash",
+                "artifact-session",
+                "job51",
+                "owner",
+                "candidate",
+                "AI product manager",
+                "C:/resumes/candidate.pdf",
+                "resume-file-hash",
+                "candidate",
+                "resume-by-file-hash",
+                "2026-07-20T01:00:00+00:00",
+                "2026-07-20T01:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO resumes (
+              id, payload, phone_key, job_type, match_score, parsed_name,
+              linked_session_id, linked_platform, linked_owner,
+              linked_platform_conversation_id, source_artifact_id, updated_at
+            ) VALUES (?, ?, '', ?, 80, ?, '', 'job51', ?, '', ?, ?)
+            """,
+            (
+                "resume-by-file-hash",
+                json.dumps({"name": "candidate", "filePath": "C:/resumes/candidate.pdf"}),
+                "AI product manager",
+                "candidate",
+                "owner",
+                "artifact-by-file-hash",
+                "2026-07-20T01:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO resumes (
+              id, payload, phone_key, job_type, match_score, parsed_name,
+              linked_session_id, linked_platform, linked_owner,
+              linked_platform_conversation_id, source_artifact_id, updated_at
+            ) VALUES (?, ?, '', ?, 80, ?, ?, 'job51', ?, '', '', ?)
+            """,
+            (
+                "resume-from-session",
+                json.dumps({"name": "wrong", "filePath": "C:/resumes/wrong.pdf"}),
+                "AI product manager",
+                "wrong",
+                "shared-session",
+                "owner",
+                "2026-07-20T02:00:00+00:00",
+            ),
+        )
+        connection.commit()
+
+    details = service.daily_details(date="2026-07-20")
+
+    assert details["items"][0]["resumeId"] == "resume-by-file-hash"
+    assert details["items"][0]["resumeDownloadUrl"] == (
+        "/api/resumes/resume-by-file-hash/download"
+    )
+
+
+def test_pending_artifact_download_is_admin_only(tmp_path: Path, monkeypatch) -> None:
+    database = tmp_path / "monitoring.sqlite"
+    artifact_file = tmp_path / "candidate.docx"
+    artifact_file.write_bytes(b"docx-resume")
+    repository = AutomationMonitoringRepository(database)
+    repository.upsert_events(
+        [
+            _event(
+                event_id="pending-artifact-event",
+                contact_key="session|pending-artifact",
+                platform="job51",
+                owner="owner",
+                candidate_name="candidate",
+                job_type="AI product manager",
+                resume_acquired=True,
+                resume_handling="local_resume_downloaded",
+                resume_file_hash="pending-file-hash",
+            )
+        ]
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO resume_artifacts (
+              id, session_id, platform, owner, platform_conversation_id,
+              candidate_name_from_platform, position, file_path, file_hash,
+              source_kind, parse_status, parsed_name, resume_id, error,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, 'attachment', 'pending', '', '', '', ?, ?)
+            """,
+            (
+                "pending-artifact",
+                "pending-artifact",
+                "job51",
+                "owner",
+                "candidate",
+                "AI product manager",
+                str(artifact_file),
+                "pending-file-hash",
+                "2026-07-20T01:00:00+00:00",
+                "2026-07-20T01:00:00+00:00",
+            ),
+        )
+        connection.commit()
+    monkeypatch.setenv("DATABASE_PATH", str(database))
+    from app.settings import load_settings
+
+    load_settings.cache_clear()
+    app = create_app()
+    try:
+        with TestClient(app) as client:
+            client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "admin"},
+            )
+            details = client.get(
+                "/api/automation-monitoring/daily-details?date=2026-07-20"
+            )
+            download_url = details.json()["items"][0]["resumeDownloadUrl"]
+            downloaded = client.get(download_url)
+            client.post("/api/auth/logout")
+            client.post(
+                "/api/auth/login",
+                json={"username": "member", "password": "member"},
+            )
+            forbidden = client.get(download_url)
+    finally:
+        load_settings.cache_clear()
+
+    assert download_url == (
+        "/api/automation-monitoring/resume-artifacts/pending-artifact/download"
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == artifact_file.read_bytes()
+    assert downloaded.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert forbidden.status_code == 403
+    assert forbidden.json()["detail"] == "monitoring_forbidden"
 
 
 def test_monitoring_api_is_admin_only(tmp_path: Path, monkeypatch) -> None:

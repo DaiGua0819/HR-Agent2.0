@@ -24,8 +24,16 @@ _SENT_COMPANY_ACTIONS = {
 }
 _SENT_COMPANY_STAGES = {"basic_conditions_sent", "screening_question_sent"}
 _QUESTION_ACTIONS = {"answer_question", "escalate"}
-_QUESTION_STAGES = {"knowledge_hit", "unknown_question"}
-_ANOMALY_MARKERS = ("failed", "error", "timeout", "login_required", "security_verification")
+_QUESTION_STAGES = {"knowledge_hit", "silent_question", "unknown_question"}
+_ANOMALY_MARKERS = (
+    "blocked",
+    "error",
+    "failed",
+    "login_required",
+    "security_verification",
+    "timeout",
+)
+_ANOMALY_STAGES = {"unconfigured_position"}
 
 
 @dataclass(frozen=True)
@@ -188,11 +196,21 @@ def build_daily_projections(
                 (platform, owner, conversation_id), ""
             )
         session = sessions.get(session_id, {}) if session_id else {}
+        candidate = _object(response.get("candidate"))
+        candidate_name = _first_text(candidate.get("name"), session.get("candidate_name"))
+        job_type = _first_text(
+            response.get("appliedPosition"),
+            response.get("applied_position"),
+            session.get("applied_position"),
+            session.get("position"),
+        )
         identity = _stable_identity(
             session_id=session_id,
             platform=platform,
             owner=owner,
             conversation_id=conversation_id,
+            candidate_name=candidate_name,
+            job_type=job_type,
         )
         if not identity:
             unresolved_records += 1
@@ -208,10 +226,14 @@ def build_daily_projections(
                 owner=owner,
                 conversation_id=conversation_id,
                 session=session,
+                candidate_name=candidate_name,
+                job_type=job_type,
             ),
         )
         if session_id:
             exact_keys.add(key)
+        else:
+            fallback_keys.add(key)
         action = _first_text(
             summary.get("nextAction"),
             summary.get("next_action"),
@@ -220,19 +242,13 @@ def build_daily_projections(
             _object(response.get("decision")).get("action"),
         )
         stage = _first_text(summary.get("stage"), response.get("stage"))
-        candidate = _object(response.get("candidate"))
         projection.update_latest(
             occurred_at=occurred_at,
             priority=2,
             action=action,
             stage=stage,
-            candidate_name=_first_text(candidate.get("name"), session.get("candidate_name")),
-            job_type=_first_text(
-                response.get("appliedPosition"),
-                response.get("applied_position"),
-                session.get("applied_position"),
-                session.get("position"),
-            ),
+            candidate_name=candidate_name,
+            job_type=job_type,
             owner=owner,
             platform=platform,
             conversation_id=conversation_id,
@@ -258,12 +274,13 @@ def build_daily_projections(
         )
         classification = _object(record.get("classification"))
         reasons = [str(item) for item in classification.get("reasons", []) if str(item)]
-        anomaly_text = " ".join([action, stage, *reasons]).lower()
-        if bool(classification.get("is_anomaly")) or any(
-            marker in anomaly_text for marker in _ANOMALY_MARKERS
-        ):
-            projection.anomaly = True
-            projection.add_anomaly_reasons(reasons or [stage or action])
+        _merge_anomaly_flags(
+            projection,
+            action=action,
+            stage=stage,
+            reasons=reasons,
+            explicit=bool(classification.get("is_anomaly")),
+        )
 
     for session in sessions.values():
         occurred_at = _parse_datetime(session.get("updated_at"))
@@ -293,6 +310,8 @@ def build_daily_projections(
                 owner=str(session.get("owner") or ""),
                 conversation_id=str(session.get("platform_conversation_id") or ""),
                 session=session,
+                candidate_name=str(session.get("candidate_name") or ""),
+                job_type=_first_text(session.get("applied_position"), session.get("position")),
             ),
         )
         action = str(session.get("next_action") or "")
@@ -311,6 +330,7 @@ def build_daily_projections(
         projection.processed = True
         projection.sources.add("session")
         _merge_action_flags(projection, action=action, stage=stage)
+        _merge_anomaly_flags(projection, action=action, stage=stage)
         if created:
             fallback_keys.add(key)
 
@@ -387,6 +407,10 @@ def _merge_resume_artifacts(
             platform=str(artifact.get("platform") or ""),
             owner=str(artifact.get("owner") or ""),
             conversation_id=str(artifact.get("platform_conversation_id") or ""),
+            candidate_name=_first_text(
+                artifact.get("candidate_name_from_platform"), session.get("candidate_name")
+            ),
+            job_type=_first_text(artifact.get("position"), session.get("applied_position")),
         )
         if not identity:
             continue
@@ -402,6 +426,12 @@ def _merge_resume_artifacts(
                 owner=str(artifact.get("owner") or ""),
                 conversation_id=str(artifact.get("platform_conversation_id") or ""),
                 session=session,
+                candidate_name=_first_text(
+                    artifact.get("candidate_name_from_platform"), session.get("candidate_name")
+                ),
+                job_type=_first_text(
+                    artifact.get("position"), session.get("applied_position")
+                ),
             ),
         )
         projection.update_latest(
@@ -436,6 +466,8 @@ def _new_projection(
     owner: str,
     conversation_id: str,
     session: dict[str, object],
+    candidate_name: str = "",
+    job_type: str = "",
 ) -> _Projection:
     return _Projection(
         day=day,
@@ -443,12 +475,17 @@ def _new_projection(
         contact_key=(
             f"session|{session_id}"
             if session_id
-            else f"conversation|{platform}|{owner}|{conversation_id}"
+            else (
+                f"conversation|{platform}|{owner}|{conversation_id}"
+                if conversation_id
+                else f"candidate|{platform}|{owner}|{candidate_name}|{job_type}"
+            )
         ),
         owner=owner or str(session.get("owner") or ""),
         platform=platform or str(session.get("platform") or ""),
-        candidate_name=str(session.get("candidate_name") or ""),
-        job_type=_first_text(session.get("applied_position"), session.get("position")),
+        candidate_name=candidate_name or str(session.get("candidate_name") or ""),
+        job_type=job_type
+        or _first_text(session.get("applied_position"), session.get("position")),
         session_id=session_id,
         conversation_id=conversation_id,
     )
@@ -460,11 +497,15 @@ def _stable_identity(
     platform: str,
     owner: str,
     conversation_id: str,
+    candidate_name: str = "",
+    job_type: str = "",
 ) -> str:
     if session_id:
         return f"session|{session_id}"
     if platform and owner and conversation_id:
         return f"conversation|{platform}|{owner}|{conversation_id}"
+    if platform and owner and candidate_name and job_type:
+        return f"candidate|{platform}|{owner}|{candidate_name}|{job_type}"
     return ""
 
 
@@ -482,6 +523,24 @@ def _merge_action_flags(projection: _Projection, *, action: str, stage: str) -> 
     projection.knowledge_answered = projection.knowledge_answered or (
         action == "answer_question" or stage == "knowledge_hit"
     )
+
+
+def _merge_anomaly_flags(
+    projection: _Projection,
+    *,
+    action: str,
+    stage: str,
+    reasons: list[str] | None = None,
+    explicit: bool = False,
+) -> None:
+    normalized_reasons = reasons or []
+    anomaly_text = " ".join([action, stage, *normalized_reasons]).lower()
+    if not explicit and stage not in _ANOMALY_STAGES and not any(
+        marker in anomaly_text for marker in _ANOMALY_MARKERS
+    ):
+        return
+    projection.anomaly = True
+    projection.add_anomaly_reasons(normalized_reasons or [stage or action])
 
 
 def _merge_resume_result(

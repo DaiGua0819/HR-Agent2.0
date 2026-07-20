@@ -53,8 +53,16 @@ class AutomationMonitoringService:
                 group_key,
                 {"jobType": group_key[0], "platform": group_key[1], **_empty_counts()},
             )
+            resume_count_before = totals["businessResumeAcquisitions"]
             _accumulate(row, totals, seen)
-            _accumulate(row, item, group_seen[group_key])
+            _accumulate(
+                row,
+                item,
+                group_seen[group_key],
+                include_resume=(
+                    totals["businessResumeAcquisitions"] > resume_count_before
+                ),
+            )
         version = (
             f"{len(raw_rows)}:"
             f"{max((str(row['updated_at']) for row in raw_rows), default='')}"
@@ -111,6 +119,7 @@ class AutomationMonitoringService:
         start_index = (safe_page - 1) * safe_size
         page_rows = filtered[start_index : start_index + safe_size]
         resume_ids = self.repository.resolve_resume_ids(page_rows)
+        artifact_ids = self.repository.resolve_artifact_ids(page_rows)
         return {
             "date": date,
             "metric": metric,
@@ -119,10 +128,17 @@ class AutomationMonitoringService:
             "pageSize": safe_size,
             "pages": max(1, (len(filtered) + safe_size - 1) // safe_size),
             "items": [
-                _event_payload(row, resume_id=resume_ids.get(str(row["id"]), ""))
+                _event_payload(
+                    row,
+                    resume_id=resume_ids.get(str(row["id"]), ""),
+                    artifact_id=artifact_ids.get(str(row["id"]), ""),
+                )
                 for row in page_rows
             ],
         }
+
+    def get_artifact(self, artifact_id: str) -> dict[str, object] | None:
+        return self.repository.get_artifact(artifact_id)
 
     def runtime_status(self, *, now: datetime | None = None) -> dict[str, object]:
         current = now or datetime.now(UTC)
@@ -309,14 +325,20 @@ def _metric_key(row: dict[str, object], metric: str) -> str:
     return contact
 
 
-def _accumulate(row: dict[str, object], counts: dict[str, Any], seen: dict[str, set[str]]) -> None:
+def _accumulate(
+    row: dict[str, object],
+    counts: dict[str, Any],
+    seen: dict[str, set[str]],
+    *,
+    include_resume: bool = True,
+) -> None:
     flags = {
         "processedContacts": bool(row["processed"]),
         "sentCompanyInfo": bool(row["sent_company_info"]),
         "requestedResume": bool(row["requested_resume"]),
         "candidateQuestions": bool(row["candidate_question"]),
         "knowledgeAnswered": bool(row["knowledge_answered"]),
-        "businessResumeAcquisitions": bool(row["resume_acquired"]),
+        "businessResumeAcquisitions": bool(row["resume_acquired"]) and include_resume,
         "anomalies": bool(row["anomaly"]),
     }
     for metric, enabled in flags.items():
@@ -351,7 +373,15 @@ def _event_payload(
     row: dict[str, object],
     *,
     resume_id: str = "",
+    artifact_id: str = "",
 ) -> dict[str, object]:
+    download_url = ""
+    if resume_id:
+        download_url = f"/api/resumes/{resume_id}/download"
+    elif artifact_id:
+        download_url = (
+            f"/api/automation-monitoring/resume-artifacts/{artifact_id}/download"
+        )
     return {
         "id": row["id"],
         "time": row["occurred_at"],
@@ -365,5 +395,5 @@ def _event_payload(
         "anomaly": bool(row["anomaly"]),
         "anomalyReason": row["anomaly_reason"],
         "resumeId": resume_id,
-        "resumeDownloadUrl": f"/api/resumes/{resume_id}/download" if resume_id else "",
+        "resumeDownloadUrl": download_url,
     }

@@ -911,7 +911,7 @@ async function loadAutomationMonitoringSummary() {
       renderMonitoringKpis(payload.totals || {});
       renderMonitoringJobs(payload.byJobPlatform || []);
     }
-    $("monitoringCoverage").textContent = `${payload.date} · ${payload.coverage?.events || 0} 条事件 · Asia/Shanghai`;
+    $("monitoringCoverage").textContent = `${formatMonitoringDate(payload.date)} · ${payload.coverage?.events || 0} 条事件 · Asia/Shanghai`;
   } finally {
     state.monitoringSummaryInFlight = false;
   }
@@ -3572,7 +3572,7 @@ function bindPageActions() {
     }
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
     if (state.view === "dashboard") {
-      Promise.allSettled([loadAutomationMonitoringSummary(), loadAutomationRuntimeStatus()]);
+      loadAutomationMonitoringSummary();
       startAutomationMonitoringPolling();
     }
   });
@@ -3580,7 +3580,7 @@ function bindPageActions() {
     if (!isAdminUser() || document.visibilityState !== "visible") return;
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
     if (state.view === "dashboard") {
-      Promise.allSettled([loadAutomationMonitoringSummary(), loadAutomationRuntimeStatus()]);
+      loadAutomationMonitoringSummary();
     }
   });
   document.addEventListener("keydown", (event) => {

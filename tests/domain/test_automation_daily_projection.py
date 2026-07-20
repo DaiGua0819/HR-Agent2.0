@@ -90,6 +90,103 @@ def test_projection_uses_session_fallback_when_manager_run_is_missing(
     assert exported.coverage["fallbackCandidates"] == 1
 
 
+def test_projection_counts_silent_candidate_question_without_knowledge_reply(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    _insert_session(
+        database,
+        session_id="silent-question",
+        updated_at="2026-07-20T02:00:00+00:00",
+    )
+    runs = tmp_path / "runs"
+    _write_run(
+        runs,
+        [
+            _contact_result(
+                timestamp="2026-07-20T02:00:00+00:00",
+                session_id="silent-question",
+                action="wait",
+                stage="silent_question",
+            )
+        ],
+    )
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=runs,
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert exported.events[0].candidate_question is True
+    assert exported.events[0].knowledge_answered is False
+
+
+def test_projection_marks_failed_session_fallback_as_anomaly(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    _insert_session(
+        database,
+        session_id="failed-session",
+        next_action="request_resume_failed",
+        stage="request_resume_action_failed",
+        updated_at="2026-07-20T02:00:00+00:00",
+    )
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=tmp_path / "missing-runs",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    event = exported.events[0]
+    assert event.anomaly is True
+    assert event.anomaly_reason == "request_resume_action_failed"
+
+
+def test_projection_falls_back_to_candidate_identity_without_session(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    first = _contact_result(
+        timestamp="2026-07-20T01:00:00+00:00",
+        session_id="",
+        action="ask_basic_conditions",
+        stage="basic_phrase_sent",
+    )
+    second = _contact_result(
+        timestamp="2026-07-20T02:00:00+00:00",
+        session_id="",
+        action="request_resume",
+        stage="direct_resume",
+    )
+    for record in (first, second):
+        record["summary"].pop("canonicalSessionId")
+        record["summary"].pop("conversationId")
+        record["response"].pop("canonicalSessionId")
+        record["response"].pop("conversationId")
+        record["response"]["candidate"] = {"name": "Candidate A"}
+        record["response"]["appliedPosition"] = "AI product manager"
+    runs = tmp_path / "runs"
+    _write_run(runs, [first, second])
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=runs,
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert len(exported.events) == 1
+    event = exported.events[0]
+    assert event.contact_key == "candidate|job51|和新红|Candidate A|AI product manager"
+    assert event.sent_company_info is True
+    assert event.requested_resume is True
+    assert exported.coverage["fallbackCandidates"] == 1
+    assert exported.coverage["unresolvedRecords"] == 0
+
+
 def test_projection_resolves_legacy_manager_conversation_to_session(
     tmp_path: Path,
 ) -> None:

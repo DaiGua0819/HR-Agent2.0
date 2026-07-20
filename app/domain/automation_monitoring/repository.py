@@ -110,6 +110,7 @@ class AutomationMonitoringRepository:
     ) -> dict[str, str]:
         session_by_event: dict[str, str] = {}
         conversation_by_event: dict[str, tuple[str, str, str]] = {}
+        file_hash_by_event: dict[str, str] = {}
         for event in events:
             event_id = str(event.get("id") or "")
             payload = _json_object(event.get("payload"))
@@ -126,9 +127,13 @@ class AutomationMonitoringRepository:
                     str(event.get("owner") or ""),
                     conversation_id,
                 )
+            file_hash = str(event.get("resume_file_hash") or "")
+            if event_id and file_hash:
+                file_hash_by_event[event_id] = file_hash
 
         session_resume_ids: dict[str, str] = {}
         conversation_resume_ids: dict[tuple[str, str, str], str] = {}
+        file_hash_resume_ids: dict[str, str] = {}
         with connect(self.database_path, read_only=True) as connection:
             session_ids = sorted(set(session_by_event.values()))
             if session_ids:
@@ -162,6 +167,19 @@ class AutomationMonitoringRepository:
                     )
                     conversation_resume_ids.setdefault(identity, str(row["id"]))
 
+            file_hashes = sorted(set(file_hash_by_event.values()))
+            if file_hashes:
+                placeholders = ",".join("?" for _ in file_hashes)
+                rows = connection.execute(
+                    "SELECT a.file_hash, r.id FROM resume_artifacts a "
+                    "JOIN resumes r ON r.id = a.resume_id OR r.source_artifact_id = a.id "
+                    f"WHERE a.file_hash IN ({placeholders}) "
+                    "ORDER BY a.updated_at DESC, r.updated_at DESC, r.id DESC",
+                    file_hashes,
+                ).fetchall()
+                for row in rows:
+                    file_hash_resume_ids.setdefault(str(row["file_hash"]), str(row["id"]))
+
         result = {
             event_id: session_resume_ids[session_id]
             for event_id, session_id in session_by_event.items()
@@ -174,7 +192,47 @@ class AutomationMonitoringRepository:
                 if identity in conversation_resume_ids
             }
         )
+        for event_id, file_hash in file_hash_by_event.items():
+            if file_hash in file_hash_resume_ids:
+                result[event_id] = file_hash_resume_ids[file_hash]
         return result
+
+    def resolve_artifact_ids(
+        self,
+        events: list[dict[str, object]],
+    ) -> dict[str, str]:
+        file_hash_by_event = {
+            str(event.get("id") or ""): str(event.get("resume_file_hash") or "")
+            for event in events
+            if event.get("id") and event.get("resume_file_hash")
+        }
+        file_hashes = sorted(set(file_hash_by_event.values()))
+        if not file_hashes:
+            return {}
+        placeholders = ",".join("?" for _ in file_hashes)
+        artifact_ids: dict[str, str] = {}
+        with connect(self.database_path, read_only=True) as connection:
+            rows = connection.execute(
+                "SELECT id, file_hash FROM resume_artifacts "
+                f"WHERE file_hash IN ({placeholders}) "
+                "ORDER BY updated_at DESC, id DESC",
+                file_hashes,
+            ).fetchall()
+        for row in rows:
+            artifact_ids.setdefault(str(row["file_hash"]), str(row["id"]))
+        return {
+            event_id: artifact_ids[file_hash]
+            for event_id, file_hash in file_hash_by_event.items()
+            if file_hash in artifact_ids
+        }
+
+    def get_artifact(self, artifact_id: str) -> dict[str, object] | None:
+        with connect(self.database_path, read_only=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM resume_artifacts WHERE id = ?",
+                (artifact_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def upsert_runtime_statuses(
         self,

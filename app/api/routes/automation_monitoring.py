@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import mimetypes
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 
 from app.api.routes.auth import require_session_payload
 from app.domain.automation_monitoring.service import AutomationMonitoringService
@@ -60,6 +63,28 @@ async def daily_details(
         job_type=job_type,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/resume-artifacts/{artifact_id}/download")
+async def download_resume_artifact(artifact_id: str, request: Request) -> FileResponse:
+    _require_admin(request)
+    artifact = _service(request).get_artifact(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="resume_artifact_not_found")
+    path = Path(str(artifact.get("file_path") or ""))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="resume_artifact_file_not_found")
+    candidate_name = str(artifact.get("candidate_name_from_platform") or "").strip()
+    position = str(artifact.get("position") or "").strip()
+    platform = str(artifact.get("platform") or "").strip()
+    filename_parts = [part for part in (candidate_name, position, platform) if part]
+    filename = f"{'_'.join(filename_parts)}{path.suffix.lower()}" if filename_parts else path.name
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        filename=filename,
+        content_disposition_type="attachment",
     )
 
 

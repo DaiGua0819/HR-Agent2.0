@@ -29,6 +29,7 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert "/api/automation-monitoring/daily-summary" in script
     assert "/api/automation-monitoring/runtime-status" not in script
     assert "MONITORING_STATUS_POLL_MS" not in script
+    assert "loadAutomationRuntimeStatus" not in script
     assert "MONITORING_SUMMARY_POLL_MS = 15000" in script
     assert "document.visibilityState" in script
     assert "function formatMonitoringDate(value)" in script
@@ -54,7 +55,7 @@ def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
 
     assert 'id="automationDetailsTable"' in html
     assert 'id="detailsPagination"' in html
-    assert "/assets/automation-details.js?v=20260720-weekly-data" in html
+    assert "/assets/automation-details.js?v=20260720-weekly-data-v3" in html
     assert "/api/auth/me" in script
     assert "/api/automation-monitoring/daily-details" in script
     assert 'query.set("page_size", "10")' in script
@@ -65,12 +66,27 @@ def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
     assert 'local_resume_downloaded: "简历已下载并入库"' in script
     assert 'resume_requested_waiting: "已求简历，等待候选人发送"' in script
     assert "function resumeHandlingLabel(value)" in script
+    for action in ("ask_basic_conditions", "escalate", "send_failed"):
+        assert f"{action}:" in script
+    for stage in (
+        "candidate_rejected",
+        "direct_resume_prompt_send_failed",
+        "ignored_position",
+        "last_message_not_candidate",
+        "screening_unclear",
+        "unconfigured_position",
+    ):
+        assert f"{stage}:" in script
+    assert "function actionLabel(value)" in script
+    assert 'String(value).split(";")' in script
+    assert "basic_phrase_send_failed:" in script
     assert 'return resumeHandlingLabels[value] || "其他简历状态"' in script
     assert "function stageLabel(value)" in script
     assert "function formatAutomationDate(value)" in script
+    assert "function formatAutomationDateTime(value)" in script
     assert "formatAutomationDate(query.get(\"date\")" in script
     assert 'return stageLabels[value] || "其他阶段"' in script
-    assert 'return anomalyReasonLabels[value] || "其他异常"' in script
+    assert 'anomalyReasonLabels[item] || "其他异常"' in script
     assert "resumeDownloadUrl" in script
     assert "下载简历" in html
     assert 'window.location.replace("/index.html")' in script
