@@ -15,6 +15,9 @@ from app.agent.persistence import build_persistence_from_settings
 from app.agent.runner import ConversationRunner
 from app.browser.manager import BrowserManager
 from app.core.constants import Platform
+from app.domain.automation_monitoring.events import build_contact_event
+from app.domain.automation_monitoring.repository import AutomationMonitoringRepository
+from app.domain.automation_monitoring.runtime_status import build_runtime_statuses
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.resume.artifacts import ResumeArtifactStore
 from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSink
@@ -44,6 +47,8 @@ class WorkerRuntime:
     events: list[dict[str, object]] = field(default_factory=list)
     conversation_repository: ConversationRepository | None = None
     artifact_store: ResumeArtifactStore | None = None
+    monitoring_repository: AutomationMonitoringRepository | None = None
+    active_platform: str = ""
     _prepared_message_batches: dict[Platform, str] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -76,6 +81,7 @@ class WorkerRuntime:
             try:
                 if platform in self.paused:
                     return {"accepted": False, "paused": True, "platform": platform.value}
+                self.active_platform = platform.value
                 await self.start()
                 adapter = self._adapter(platform)
                 normalized_batch_id = str(batch_id or "").strip()
@@ -104,6 +110,7 @@ class WorkerRuntime:
                     self._clear_prepared_message_batch(platform, normalized_batch_id)
                     return {"accepted": True, "processed": 0, "platform": platform.value}
                 state = await self._run_current_conversation(adapter)
+                self._record_monitoring_event(platform, state)
                 contact = await self._contact_payload(state, fallback_id=ref.conversation_id)
                 processing_identity = _processing_identity_payload(
                     state,
@@ -128,6 +135,7 @@ class WorkerRuntime:
                 raise
             finally:
                 self.events.append({"event": "finish", "platform": platform.value})
+                self.active_platform = ""
                 self.agent_busy = False
 
     async def drain_messages(
@@ -156,6 +164,7 @@ class WorkerRuntime:
                         "drained": False,
                         "stopReason": "paused",
                     }
+                self.active_platform = platform.value
                 await self.start()
                 adapter = self._adapter(platform)
                 await self._prepare_message_adapter(adapter)
@@ -177,6 +186,7 @@ class WorkerRuntime:
                     if ref.conversation_id:
                         seen.add(ref.conversation_id)
                     state = await self._run_current_conversation(adapter)
+                    self._record_monitoring_event(platform, state)
                     contact = await self._contact_payload(
                         state,
                         fallback_id=ref.conversation_id,
@@ -211,6 +221,7 @@ class WorkerRuntime:
                 }
             finally:
                 self.events.append({"event": "drain_finish", "platform": platform.value})
+                self.active_platform = ""
                 self.agent_busy = False
 
     async def proactive_contact(
@@ -225,6 +236,7 @@ class WorkerRuntime:
         async with self._lock:
             self.agent_busy = True
             try:
+                self.active_platform = platform.value
                 await self.start()
                 effective_dry_run = load_settings().dry_run if dry_run is None else dry_run
                 result = await self._adapter(platform).proactive_greet(
@@ -233,6 +245,7 @@ class WorkerRuntime:
                 )
                 return {"accepted": True, "owner": self.owner, "platform": platform.value, **result}
             finally:
+                self.active_platform = ""
                 self.agent_busy = False
 
     async def pause(self, platform: Platform) -> dict[str, object]:
@@ -251,6 +264,7 @@ class WorkerRuntime:
                 await self.start()
                 data = payload or {}
                 platform = Platform(str(data.get("platform") or ""))
+                self.active_platform = platform.value
                 adapter = self._adapter(platform)
                 await adapter.open_chat_page()
                 result = await adapter.invite_to_interview(data)
@@ -260,6 +274,7 @@ class WorkerRuntime:
                     **result,
                 }
             finally:
+                self.active_platform = ""
                 self.agent_busy = False
 
     async def status_payload(self) -> dict[str, object]:
@@ -267,6 +282,21 @@ class WorkerRuntime:
 
         await self.start()
         health = await self.browser.health() if self.browser else None
+        platform_statuses = await build_runtime_statuses(
+            owner=self.owner,
+            browser=self.browser,
+            agent_ready=self.agent_ready,
+            browser_ready=bool(health and health.browser_ready),
+            cdp_ready=bool(health and health.cdp_ready),
+            agent_busy=self.agent_busy,
+            active_platform=self.active_platform,
+            paused=self.paused,
+        )
+        if self.monitoring_repository is not None:
+            try:
+                self.monitoring_repository.upsert_runtime_statuses(platform_statuses)
+            except Exception:
+                pass
         return {
             "status": "ready" if self.agent_ready else "not-ready",
             "owner": self.owner,
@@ -279,6 +309,10 @@ class WorkerRuntime:
             "pageCount": health.page_count if health else 0,
             "paused": sorted(item.value for item in self.paused),
             "dryRun": load_settings().dry_run,
+            "activePlatform": self.active_platform,
+            "platformStatuses": [
+                item.model_dump(by_alias=True) for item in platform_statuses
+            ],
         }
 
     def _adapter(self, platform: Platform):
@@ -342,6 +376,33 @@ class WorkerRuntime:
             conversation_repository=self.conversation_repository,
             artifact_store=self.artifact_store,
         ).run_current()
+
+    def _record_monitoring_event(
+        self,
+        platform: Platform,
+        state: dict[str, object],
+    ) -> None:
+        repository = self.monitoring_repository
+        if repository is None:
+            return
+        try:
+            repository.upsert_events(
+                [
+                    build_contact_event(
+                        owner=self.owner,
+                        platform=platform.value,
+                        state=state,
+                    )
+                ]
+            )
+        except Exception as error:  # monitoring must not replace the business result
+            self.events.append(
+                {
+                    "event": "monitoring_write_failed",
+                    "platform": platform.value,
+                    "error": str(error),
+                }
+            )
 
     async def _contact_payload(
         self,

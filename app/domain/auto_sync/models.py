@@ -6,6 +6,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.automation_monitoring.models import (
+    AutomationContactEvent,
+    AutomationRuntimeStatus,
+)
+
 
 class SyncModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -78,3 +83,11 @@ class SyncBatch(SyncModel):
     resumes: list[SyncResume] = Field(default_factory=list)
     sessions: list[SyncSession] = Field(default_factory=list)
     messages: list[SyncMessage] = Field(default_factory=list)
+    operation_events: list[AutomationContactEvent] = Field(
+        default_factory=list,
+        alias="operationEvents",
+    )
+    runtime_statuses: list[AutomationRuntimeStatus] = Field(
+        default_factory=list,
+        alias="runtimeStatuses",
+    )

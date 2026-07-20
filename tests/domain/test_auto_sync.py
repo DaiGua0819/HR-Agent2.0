@@ -110,6 +110,84 @@ def test_valid_batch_uploads_file_and_merges_records_idempotently(tmp_path: Path
     assert stored_file.is_relative_to(files_root)
 
 
+def test_sync_batch_merges_monitoring_events_and_runtime_statuses(tmp_path: Path) -> None:
+    database = tmp_path / "server.sqlite"
+    run_migrations(database)
+    app = _sync_app(tmp_path, database=database)
+    payload = json.loads(_batch_body())
+    payload["batchId"] = "batch-monitoring"
+    payload["operationEvents"] = [
+        {
+            "id": "event-1",
+            "contactKey": "contact-1",
+            "owner": "宋峰峰",
+            "platform": "boss",
+            "candidateName": "候选人甲",
+            "jobType": "AI产品经理",
+            "occurredAt": "2026-07-20T01:00:00+00:00",
+            "action": "request_resume",
+            "stage": "request_confirmed",
+            "processed": True,
+            "sentCompanyInfo": False,
+            "requestedResume": True,
+            "candidateQuestion": False,
+            "knowledgeAnswered": False,
+            "resumeAcquired": True,
+            "resumeHandling": "boss_request_verified_server_imap",
+            "resumeFileHash": "",
+            "anomaly": False,
+            "anomalyReason": "",
+            "payload": {},
+            "updatedAt": "2026-07-20T01:00:00+00:00",
+        }
+    ]
+    payload["runtimeStatuses"] = [
+        {
+            "targetKey": "宋峰峰:boss",
+            "owner": "宋峰峰",
+            "platform": "boss",
+            "status": "ready",
+            "agentReady": True,
+            "browserReady": True,
+            "cdpReady": True,
+            "agentBusy": False,
+            "authenticated": True,
+            "needsLogin": False,
+            "securityVerification": False,
+            "accountAbnormal": False,
+            "pagePresent": True,
+            "paused": False,
+            "reason": "",
+            "checkedAt": "2026-07-20T01:00:00+00:00",
+            "receivedAt": "2026-07-20T01:00:00+00:00",
+        }
+    ]
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    encrypted_body, headers = build_encrypted_sync_request(body, "shared-secret")
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/internal/sync/batch", content=encrypted_body, headers=headers
+        )
+        second = client.post(
+            "/api/internal/sync/batch", content=encrypted_body, headers=headers
+        )
+
+    assert first.status_code == 200
+    assert first.json()["operationEventsUpserted"] == 1
+    assert first.json()["runtimeStatusesUpserted"] == 1
+    assert second.json()["idempotent"] is True
+    with sqlite3.connect(database) as connection:
+        event_count = connection.execute(
+            "SELECT COUNT(*) FROM automation_contact_events"
+        ).fetchone()[0]
+        status_count = connection.execute(
+            "SELECT COUNT(*) FROM automation_runtime_status"
+        ).fetchone()[0]
+        assert event_count == 1
+        assert status_count == 1
+
+
 def test_existing_resume_keeps_server_fields_but_receives_link_and_file(tmp_path: Path) -> None:
     database = tmp_path / "server.sqlite"
     run_migrations(database)
@@ -190,6 +268,95 @@ def test_worker_persists_batch_until_ack_and_advances_cursors_after_success(
     assert state["resumeCursor"]["id"] == "resume-1"
     assert state["sessionCursor"]["id"] == "session-1"
     assert state["messageCursor"]["id"] == "message-1"
+
+
+def test_worker_collects_incremental_monitoring_rows(tmp_path: Path) -> None:
+    database = tmp_path / "local.sqlite"
+    run_migrations(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO automation_contact_events (
+              id, contact_key, owner, platform, candidate_name, job_type,
+              occurred_at, action, stage, processed, sent_company_info,
+              requested_resume, candidate_question, knowledge_answered,
+              resume_acquired, resume_handling, resume_file_hash, anomaly,
+              anomaly_reason, payload, updated_at
+            ) VALUES (
+              'event-1', 'contact-1', '宋峰峰', 'boss', '候选人甲', 'AI产品经理',
+              '2026-07-20T01:00:00+00:00', 'request_resume', 'request_confirmed',
+              1, 0, 1, 0, 0, 1, 'boss_request_verified_server_imap', '', 0,
+              '', '{}', '2026-07-20T01:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO automation_runtime_status (
+              target_key, owner, platform, status, agent_ready, browser_ready,
+              cdp_ready, agent_busy, authenticated, needs_login,
+              security_verification, account_abnormal, page_present, paused,
+              reason, checked_at, received_at
+            ) VALUES (
+              '宋峰峰:boss', '宋峰峰', 'boss', 'ready', 1, 1, 1, 0, 1, 0,
+              0, 0, 1, 0, '', '2026-07-20T01:00:00+00:00',
+              '2026-07-20T01:00:00+00:00'
+            )
+            """
+        )
+        connection.commit()
+    worker = AutoSyncWorker(
+        AutoSyncWorkerConfig(
+            database_path=database,
+            server_url="http://sync.invalid",
+            secret="shared-secret",
+            state_path=tmp_path / "state.json",
+            pending_dir=tmp_path / "pending",
+        )
+    )
+
+    pending = worker.prepare_pending_batch()
+
+    assert pending is not None
+    assert [item["id"] for item in pending.payload["operationEvents"]] == ["event-1"]
+    assert [item["targetKey"] for item in pending.payload["runtimeStatuses"]] == [
+        "宋峰峰:boss"
+    ]
+    worker.acknowledge(pending)
+    assert worker.prepare_pending_batch() is None
+
+
+def test_worker_upgrades_legacy_state_with_monitoring_cursors(tmp_path: Path) -> None:
+    database = tmp_path / "local.sqlite"
+    state_path = tmp_path / "state.json"
+    run_migrations(database)
+    state_path.write_text(
+        json.dumps(
+            {
+                "resumeCursor": {"timestamp": "", "id": ""},
+                "sessionCursor": {"timestamp": "", "id": ""},
+                "messageCursor": {"timestamp": "", "id": ""},
+                "lastSuccessAt": "",
+                "lastError": "",
+                "consecutiveFailures": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    worker = AutoSyncWorker(
+        AutoSyncWorkerConfig(
+            database_path=database,
+            server_url="http://sync.invalid",
+            secret="shared-secret",
+            state_path=state_path,
+            pending_dir=tmp_path / "pending",
+        )
+    )
+
+    assert worker.prepare_pending_batch() is None
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["operationEventCursor"] == {"timestamp": "", "id": ""}
+    assert state["runtimeStatusCursor"] == {"timestamp": "", "id": ""}
 
 
 def test_worker_bootstrap_skips_existing_rows_but_collects_future_changes(tmp_path: Path) -> None:

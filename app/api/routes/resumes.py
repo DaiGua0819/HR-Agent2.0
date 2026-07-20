@@ -34,6 +34,14 @@ router = APIRouter(prefix="/api/resumes", tags=["resumes"])
 _PDF_PREVIEW_IMAGE_CACHE_MAX = 256
 _PDF_PREVIEW_IMAGE_CACHE: dict[tuple[str, str, int, int, int], tuple[bytes, str]] = {}
 _PDF_PREVIEW_CACHE_VERSION = "pdf-preview-v2-scale2"
+_DOWNLOAD_PLATFORM_LABELS = {
+    "boss": "BOSS",
+    "job51": "51",
+    "51job": "51",
+    "51": "51",
+    "zhilian": "智联",
+    "智联": "智联",
+}
 
 
 class ResumeUpdateRequest(BaseModel):
@@ -245,7 +253,9 @@ async def download_resume(resume_id: str, request: Request) -> FileResponse:
     name = (resume.name or resume.parsed_name or "").strip()
     job = (resume.job_type or resume.applied_position or "").strip()
     suffix = path.suffix.lower()
-    filename = f"{name}_{job}{suffix}" if name and job else path.name
+    source_label = _download_source_label(resume)
+    filename_parts = [part for part in (name, job, source_label) if part]
+    filename = f"{'_'.join(filename_parts)}{suffix}" if name and job else path.name
     return FileResponse(
         path,
         media_type=preview_media_type(path),
@@ -447,6 +457,37 @@ def _payload_value(resume: Resume, *keys: str) -> str:
         if value not in (None, ""):
             return clean_text(value)
     return ""
+
+
+def _download_source_label(resume: Resume) -> str:
+    platform = clean_text(
+        resume.linked_platform
+        or _payload_value(
+            resume,
+            "linkedPlatform",
+            "linked_platform",
+            "sourcePlatform",
+            "source_platform",
+            "platform",
+        )
+    )
+    owner = clean_text(
+        resume.linked_owner
+        or _payload_value(
+            resume,
+            "linkedOwner",
+            "linked_owner",
+            "sourceOwner",
+            "source_owner",
+            "owner",
+            "accountName",
+            "account_name",
+        )
+    )
+    platform_label = _DOWNLOAD_PLATFORM_LABELS.get(platform.lower(), "")
+    if not platform_label or not owner:
+        return ""
+    return f"{platform_label}＊{owner[0]}"
 
 
 def _resume_school(resume: Resume) -> str:

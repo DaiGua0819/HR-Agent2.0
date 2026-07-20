@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from app.accounts.manager import AccountManager
@@ -13,6 +14,7 @@ from app.control_plane.dispatcher import Dispatcher
 from app.control_plane.main import create_app
 from app.control_plane.worker_client import InProcessWorkerClient, WorkerClient
 from app.core.constants import Platform
+from app.domain.automation_monitoring.repository import AutomationMonitoringRepository
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.types import ConversationRef
 from app.worker.runtime import WorkerRuntime
@@ -63,16 +65,53 @@ def test_dispatcher_is_serial_not_parallel() -> None:
     ]
 
 
-def test_worker_status_ready_with_fake_pages() -> None:
+def test_worker_status_ready_with_fake_pages(tmp_path: Path) -> None:
     """worker runtime 在 FakePage 装配下返回 ready。"""
 
-    runtime = WorkerRuntime(owner="和新红", port=8801, cdp_port=9222)
+    repository = AutomationMonitoringRepository(tmp_path / "monitoring.sqlite")
+    runtime = WorkerRuntime(
+        owner="和新红",
+        port=8801,
+        cdp_port=9222,
+        monitoring_repository=repository,
+    )
     status = asyncio.run(runtime.status_payload())
     assert status["status"] == "ready"
     assert status["browserReady"] is True
     assert status["cdpReady"] is True
     assert status["agentReady"] is True
     assert status["pageCount"] == 3
+    assert len(status["platformStatuses"]) == 3
+    assert {item["platform"] for item in status["platformStatuses"]} == {
+        "boss",
+        "job51",
+        "zhilian",
+    }
+    assert len(repository.list_runtime_statuses()) == 3
+
+
+def test_worker_tracks_active_platform_only_while_processing() -> None:
+    runtime = ActivePlatformRuntime()
+
+    payload = asyncio.run(runtime.process_messages(Platform.JOB51))
+
+    assert payload["processed"] == 1
+    assert runtime.active_platform_seen == "job51"
+    assert runtime.active_platform == ""
+
+
+def test_worker_status_survives_monitoring_repository_failure() -> None:
+    runtime = WorkerRuntime(
+        owner="owner",
+        port=8801,
+        cdp_port=9222,
+        monitoring_repository=FailingMonitoringRepository(),
+    )
+
+    status = asyncio.run(runtime.status_payload())
+
+    assert status["status"] == "ready"
+    assert len(status["platformStatuses"]) == 3
 
 
 def test_worker_drain_counts_unique_contact_payloads() -> None:
@@ -129,6 +168,25 @@ def test_worker_process_messages_excludes_prior_contact_and_returns_selected_id(
         "session|conv-candidate-b|message|fingerprint-b"
     )
     assert result["identityWarnings"] == []
+
+
+def test_worker_records_normalized_monitoring_event(tmp_path: Path) -> None:
+    runtime = ExcludingContactRuntime()
+    repository = AutomationMonitoringRepository(tmp_path / "monitoring.sqlite")
+    runtime.monitoring_repository = repository
+
+    asyncio.run(runtime.process_messages(Platform.JOB51, exclude_ids={"row-a"}))
+
+    rows = repository.list_events(
+        start="2000-01-01T00:00:00+00:00",
+        end="2100-01-01T00:00:00+00:00",
+    )
+    assert len(rows) == 1
+    assert rows[0]["owner"] == "owner"
+    assert rows[0]["platform"] == "job51"
+    assert rows[0]["contact_key"] == (
+        "session|conv-candidate-b|message|fingerprint-b"
+    )
 
 
 def test_worker_reuses_message_preparation_within_same_batch() -> None:
@@ -309,6 +367,22 @@ class DuplicateContactRuntime(WorkerRuntime):
     async def _graph_stage(self, state: dict[str, object]) -> str:
         _ = state
         return "rules_loaded"
+
+
+class ActivePlatformRuntime(DuplicateContactRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_platform_seen = ""
+
+    async def _run_current_conversation(self, adapter: object) -> dict[str, object]:
+        self.active_platform_seen = self.active_platform
+        return await super()._run_current_conversation(adapter)
+
+
+class FailingMonitoringRepository:
+    def upsert_runtime_statuses(self, statuses: object) -> None:
+        _ = statuses
+        raise OSError("monitoring database unavailable")
 
 
 class BlockedPreparationRuntime(WorkerRuntime):

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>每日处理明细 · Carh HR</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260720-automation-monitoring" />
+  </head>
+  <body class="automation-details-body">
+    <main id="automationDetailsApp" class="automation-details-shell" hidden>
+      <header class="automation-details-head">
+        <div>
+          <button id="detailsBackBtn" class="ts-btn ts-btn--quiet" type="button">返回仪表盘</button>
+          <p class="eyebrow">Automation Details</p>
+          <h1>每日处理明细</h1>
+          <p id="detailsContext" class="muted"></p>
+        </div>
+        <div class="automation-details-total">
+          <span id="detailsMetricLabel">处理联系人</span>
+          <strong id="detailsTotal">0</strong>
+        </div>
+      </header>
+
+      <section class="panel automation-details-panel">
+        <div class="panel-head">
+          <h3>联系人记录</h3>
+          <button id="detailsRefreshBtn" class="ts-btn" type="button">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table id="automationDetailsTable">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>平台</th>
+                <th>负责人</th>
+                <th>候选人</th>
+                <th>岗位</th>
+                <th>动作</th>
+                <th>阶段</th>
+                <th>简历处理</th>
+                <th>下载简历</th>
+                <th>异常</th>
+              </tr>
+            </thead>
+            <tbody id="automationDetailsRows"></tbody>
+          </table>
+          <div id="automationDetailsEmpty" class="empty">暂无符合条件的记录</div>
+        </div>
+        <footer id="detailsPagination" class="automation-details-pagination"></footer>
+      </section>
+    </main>
+    <div id="automationDetailsLoading" class="automation-details-loading">正在读取管理员数据...</div>
+    <script src="/assets/automation-details.js?v=20260720-chinese-resume-status"></script>
+  </body>
+</html>

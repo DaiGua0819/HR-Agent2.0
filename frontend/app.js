@@ -2,6 +2,14 @@ const state = {
   view: "dashboard",
   user: null,
   dashboard: null,
+  monitoringSummary: null,
+  monitoringRuntime: null,
+  monitoringSummaryVersion: "",
+  monitoringSummaryTimer: null,
+  monitoringStatusTimer: null,
+  monitoringSummaryInFlight: false,
+  monitoringStatusInFlight: false,
+  monitoringFacets: { owners: [], platforms: [], jobTypes: [] },
   resumes: [],
   selectedId: "",
   context: null,
@@ -76,6 +84,8 @@ const state = {
 };
 const RESUME_FILTER_DEBOUNCE_MS = 250;
 const QUEUE_SUMMARY_POLL_MS = 3000;
+const MONITORING_STATUS_POLL_MS = 5000;
+const MONITORING_SUMMARY_POLL_MS = 15000;
 const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
 const RESUME_PREVIEW_PREFETCH_CONCURRENCY = 2;
@@ -167,6 +177,7 @@ function handleAuthExpired(error) {
   state.interviewSessions = [];
   state.selectedInterviewId = "";
   stopQueueSummaryPolling();
+  stopAutomationMonitoringPolling();
   clearResumePrefetchCache();
   state.resumeContextCache.clear();
   state.resumePreviewPagesCache.clear();
@@ -732,6 +743,8 @@ function setView(view) {
   $("pageEyebrow").textContent = eyebrow;
   $("pageTitle").textContent = title;
   if (view === "dashboard") loadDashboard();
+  if (view === "dashboard") startAutomationMonitoringPolling();
+  else stopAutomationMonitoringPolling();
   if (view === "resumes") loadCurrentResumeCollection();
   if (view === "queue") loadQueue();
   if (view === "interviews") loadInterviewSessions();
@@ -749,14 +762,222 @@ async function loadUser() {
   return data;
 }
 async function loadDashboard() {
+  if (!isAdminUser()) return;
   const payload = await api("/api/dashboard/overview");
   state.dashboard = payload;
   renderSafety(payload);
-  renderKpis(payload.kpis || []);
-  renderServices(payload.services || []);
   renderQuickFilters(payload.quickFilters || []);
   renderDailyRows(payload.recentRecords || []);
   renderAutomationControls();
+  await Promise.allSettled([
+    loadAutomationMonitoringSummary(),
+    loadAutomationRuntimeStatus(),
+  ]);
+}
+function monitoringToday() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((item) => [item.type, item.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+function monitoringFilters() {
+  return {
+    date: $("monitoringDate")?.value || monitoringToday(),
+    platform: $("monitoringPlatform")?.value || "",
+    owner: $("monitoringOwner")?.value || "",
+    jobType: $("monitoringJobType")?.value || "",
+  };
+}
+function monitoringQuery({ metric = "", jobType = "", page = 0 } = {}) {
+  const filters = monitoringFilters();
+  const query = new URLSearchParams({ date: filters.date });
+  if (filters.platform) query.set("platform", filters.platform);
+  if (filters.owner) query.set("owner", filters.owner);
+  if (jobType || filters.jobType) query.set("job_type", jobType || filters.jobType);
+  if (metric) query.set("metric", metric);
+  if (page) query.set("page", String(page));
+  return query;
+}
+function setMonitoringOptions(id, values, allLabel, labeler = (value) => value) {
+  const select = $(id);
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = [
+    `<option value="">${escapeHtml(allLabel)}</option>`,
+    ...(values || []).map(
+      (value) => `<option value="${escapeHtml(value)}">${escapeHtml(labeler(value))}</option>`,
+    ),
+  ].join("");
+  select.value = values.includes(current) ? current : "";
+}
+function syncMonitoringFilters(facets = {}) {
+  state.monitoringFacets = {
+    owners: facets.owners || state.monitoringFacets.owners || [],
+    platforms: facets.platforms || state.monitoringFacets.platforms || [],
+    jobTypes: facets.jobTypes || state.monitoringFacets.jobTypes || [],
+  };
+  setMonitoringOptions("monitoringPlatform", state.monitoringFacets.platforms, "全部平台", platformName);
+  setMonitoringOptions("monitoringOwner", state.monitoringFacets.owners, "全部负责人");
+  setMonitoringOptions("monitoringJobType", state.monitoringFacets.jobTypes, "全部岗位", displayResumeJobType);
+}
+const MONITORING_METRICS = [
+  ["processedContacts", "处理联系人", "primary"],
+  ["sentCompanyInfo", "发送公司信息", "info"],
+  ["requestedResume", "发起求简历", "warning"],
+  ["businessResumeAcquisitions", "业务简历获取", "success"],
+  ["candidateQuestions", "候选人提问", "default"],
+  ["anomalies", "异常", "danger"],
+];
+function renderMonitoringKpis(totals = {}) {
+  $("monitoringKpiGrid").innerHTML = MONITORING_METRICS.map(
+    ([metric, label, tone]) => `
+      <button class="monitoring-kpi monitoring-kpi--${tone}" type="button" data-monitoring-metric="${metric}">
+        <span>${label}</span>
+        <strong>${escapeHtml(totals[metric] || 0)}</strong>
+        <small>查看明细</small>
+      </button>
+    `,
+  ).join("");
+  document.querySelectorAll("[data-monitoring-metric]").forEach((button) => {
+    button.onclick = () => openAutomationDetails(button.dataset.monitoringMetric || "processedContacts");
+  });
+}
+function renderMonitoringJobs(items = []) {
+  const grouped = new Map();
+  items.forEach((item) => {
+    const jobType = item.jobType || "未识别岗位";
+    const current = grouped.get(jobType) || {
+      jobType,
+      processedContacts: 0,
+      businessResumeAcquisitions: 0,
+      anomalies: 0,
+    };
+    current.processedContacts += Number(item.processedContacts || 0);
+    current.businessResumeAcquisitions += Number(item.businessResumeAcquisitions || 0);
+    current.anomalies += Number(item.anomalies || 0);
+    grouped.set(jobType, current);
+  });
+  const rows = [...grouped.values()].sort(
+    (left, right) => right.processedContacts - left.processedContacts || left.jobType.localeCompare(right.jobType, "zh-CN"),
+  );
+  const maximum = Math.max(1, ...rows.map((item) => item.processedContacts));
+  $("monitoringJobRows").innerHTML = rows.length
+    ? rows.map((item) => `
+        <button class="monitoring-job-row" type="button" data-monitoring-job="${escapeHtml(item.jobType)}">
+          <span class="monitoring-job-main">
+            <strong>${escapeHtml(displayResumeJobType(item.jobType) || item.jobType)}</strong>
+            <span class="monitoring-job-bar"><i style="width:${Math.max(4, Math.round((item.processedContacts / maximum) * 100))}%"></i></span>
+          </span>
+          <span class="monitoring-job-stat"><small>处理</small><strong>${item.processedContacts}</strong></span>
+          <span class="monitoring-job-stat"><small>简历</small><strong>${item.businessResumeAcquisitions}</strong></span>
+          <span class="monitoring-job-stat monitoring-job-stat--danger"><small>异常</small><strong>${item.anomalies}</strong></span>
+        </button>
+      `).join("")
+    : '<div class="empty-inline">当前筛选条件下暂无处理数据</div>';
+  document.querySelectorAll("[data-monitoring-job]").forEach((button) => {
+    button.onclick = () => openAutomationDetails("processedContacts", button.dataset.monitoringJob || "");
+  });
+}
+function monitoringStatusMeta(item) {
+  if (item.accountAbnormal) return ["账号异常", "danger"];
+  if (item.securityVerification) return ["安全验证", "danger"];
+  if (item.needsLogin) return ["需要登录", "warning"];
+  if (item.paused) return ["已暂停", "muted"];
+  if (item.agentBusy) return ["处理中", "busy"];
+  return ({
+    ready: ["就绪", "success"],
+    stale: ["状态延迟", "warning"],
+    worker_offline: ["离线", "muted"],
+  }[item.status] || [item.status || "未知", "muted"]);
+}
+const MONITORING_REASON_LABELS = {
+  heartbeat_timeout: "Worker 心跳超时",
+  heartbeat_stale: "Worker 状态延迟",
+  no_heartbeat: "尚未收到状态",
+  login_required: "账号需要重新登录",
+  processing_messages: "正在处理消息",
+};
+function renderRuntimeStatuses(payload = {}) {
+  const targets = payload.targets || [];
+  $("runtimeStatusGrid").innerHTML = targets.map((item) => {
+    const [label, tone] = monitoringStatusMeta(item);
+    const age = item.ageSeconds === null || item.ageSeconds === undefined
+      ? "从未上报"
+      : item.ageSeconds < 60
+        ? `${item.ageSeconds} 秒前`
+        : `${Math.floor(item.ageSeconds / 60)} 分钟前`;
+    return `
+      <article class="runtime-target runtime-target--${tone}">
+        <div class="runtime-target-head">
+          <span><strong>${escapeHtml(item.owner)}</strong><small>${escapeHtml(platformName(item.platform))}</small></span>
+          <span class="runtime-state">${escapeHtml(label)}</span>
+        </div>
+        <div class="runtime-signal-row" aria-label="运行信号">
+          <i class="${item.browserReady ? "on" : ""}" title="浏览器"></i>
+          <i class="${item.cdpReady ? "on" : ""}" title="CDP"></i>
+          <i class="${item.authenticated ? "on" : ""}" title="登录状态"></i>
+        </div>
+        <p>${escapeHtml(MONITORING_REASON_LABELS[item.reason] || item.reason || (item.agentBusy ? "正在处理消息" : "运行正常"))}</p>
+        <time>${escapeHtml(age)}</time>
+      </article>
+    `;
+  }).join("") || '<div class="empty-inline">暂未收到 Worker 状态</div>';
+  if ($("runtimeStatusUpdatedAt")) {
+    $("runtimeStatusUpdatedAt").textContent = payload.updatedAt
+      ? `更新于 ${new Date(payload.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}`
+      : "每 5 秒刷新";
+  }
+}
+async function loadAutomationMonitoringSummary() {
+  if (!isAdminUser()) return;
+  if (state.monitoringSummaryInFlight) return;
+  state.monitoringSummaryInFlight = true;
+  try {
+    const payload = await api(`/api/automation-monitoring/daily-summary?${monitoringQuery()}`);
+    const versionChanged = payload.version !== state.monitoringSummaryVersion;
+    state.monitoringSummary = payload;
+    state.monitoringSummaryVersion = payload.version || "";
+    syncMonitoringFilters(payload.facets || {});
+    if (versionChanged || !$("monitoringKpiGrid").children.length) {
+      renderMonitoringKpis(payload.totals || {});
+      renderMonitoringJobs(payload.byJobPlatform || []);
+    }
+    $("monitoringCoverage").textContent = `${payload.date} · ${payload.coverage?.events || 0} 条事件 · Asia/Shanghai`;
+  } finally {
+    state.monitoringSummaryInFlight = false;
+  }
+}
+async function loadAutomationRuntimeStatus() {
+  if (!isAdminUser()) return;
+  if (state.monitoringStatusInFlight) return;
+  state.monitoringStatusInFlight = true;
+  try {
+    const payload = await api("/api/automation-monitoring/runtime-status");
+    state.monitoringRuntime = payload;
+    renderRuntimeStatuses(payload);
+  } finally {
+    state.monitoringStatusInFlight = false;
+  }
+}
+function openAutomationDetails(metric = "processedContacts", jobType = "") {
+  const query = monitoringQuery({ metric, jobType });
+  window.location.assign(`/app/automation-details?${query}`);
+}
+function stopAutomationMonitoringPolling() {
+  if (state.monitoringSummaryTimer) clearInterval(state.monitoringSummaryTimer);
+  if (state.monitoringStatusTimer) clearInterval(state.monitoringStatusTimer);
+  state.monitoringSummaryTimer = null;
+  state.monitoringStatusTimer = null;
+}
+function startAutomationMonitoringPolling() {
+  stopAutomationMonitoringPolling();
+  if (!isAdminUser() || state.view !== "dashboard" || document.visibilityState !== "visible") return;
+  state.monitoringStatusTimer = setInterval(loadAutomationRuntimeStatus, MONITORING_STATUS_POLL_MS);
+  state.monitoringSummaryTimer = setInterval(loadAutomationMonitoringSummary, MONITORING_SUMMARY_POLL_MS);
 }
 function renderSafety(payload) {
   const text = payload.dryRun ? "DRY_RUN 已开启：真实副作用受保护" : "LIVE 模式：操作前请二次确认";
@@ -3393,16 +3614,24 @@ function bindPageActions() {
   document.addEventListener("visibilitychange", () => {
     if (!isAdminUser()) return;
     if (document.visibilityState !== "visible") {
+      stopAutomationMonitoringPolling();
       if (state.queueSummaryTimer) clearTimeout(state.queueSummaryTimer);
       if (state.queueSummaryAbortController) state.queueSummaryAbortController.abort();
       state.queueSummaryTimer = null;
       return;
     }
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
+    if (state.view === "dashboard") {
+      Promise.allSettled([loadAutomationMonitoringSummary(), loadAutomationRuntimeStatus()]);
+      startAutomationMonitoringPolling();
+    }
   });
   window.addEventListener("focus", () => {
     if (!isAdminUser() || document.visibilityState !== "visible") return;
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
+    if (state.view === "dashboard") {
+      Promise.allSettled([loadAutomationMonitoringSummary(), loadAutomationRuntimeStatus()]);
+    }
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideReviewerDecisionPopover();
@@ -3423,6 +3652,12 @@ function bindPageActions() {
     }, 0),
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
+  $("monitoringDate").value = monitoringToday();
+  $("monitoringFilters").addEventListener("change", () => {
+    state.monitoringSummaryVersion = "";
+    loadAutomationMonitoringSummary();
+  });
+  $("openAllMonitoringDetails").onclick = () => openAutomationDetails("processedContacts");
   $("refreshQueueBtn").onclick = refreshQueueNow;
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
@@ -3453,6 +3688,7 @@ function bindPageActions() {
 }
 async function afterLogin(user) {
   stopQueueSummaryPolling();
+  stopAutomationMonitoringPolling();
   clearResumePrefetchCache();
   state.resumeContextCache.clear();
   state.resumePreviewPagesCache.clear();
@@ -3474,6 +3710,7 @@ async function afterLogin(user) {
 }
 async function logout() {
   stopQueueSummaryPolling();
+  stopAutomationMonitoringPolling();
   await api("/api/auth/logout", { method: "POST" });
   state.user = null;
   closeResumeConversation({ immediate: true });

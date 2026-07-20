@@ -214,6 +214,62 @@ CREATE INDEX IF NOT EXISTS idx_decision_logs_created_at
 CREATE INDEX IF NOT EXISTS idx_decision_logs_platform
   ON decision_logs(platform, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS automation_contact_events (
+  id TEXT PRIMARY KEY,
+  contact_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  candidate_name TEXT NOT NULL DEFAULT '',
+  job_type TEXT NOT NULL DEFAULT '',
+  occurred_at TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT '',
+  processed INTEGER NOT NULL DEFAULT 1,
+  sent_company_info INTEGER NOT NULL DEFAULT 0,
+  requested_resume INTEGER NOT NULL DEFAULT 0,
+  candidate_question INTEGER NOT NULL DEFAULT 0,
+  knowledge_answered INTEGER NOT NULL DEFAULT 0,
+  resume_acquired INTEGER NOT NULL DEFAULT 0,
+  resume_handling TEXT NOT NULL DEFAULT '',
+  resume_file_hash TEXT NOT NULL DEFAULT '',
+  anomaly INTEGER NOT NULL DEFAULT 0,
+  anomaly_reason TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_events_occurred
+  ON automation_contact_events(occurred_at, id);
+CREATE INDEX IF NOT EXISTS idx_automation_events_filters
+  ON automation_contact_events(platform, owner, job_type, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_automation_events_contact
+  ON automation_contact_events(contact_key, occurred_at);
+
+CREATE TABLE IF NOT EXISTS automation_runtime_status (
+  target_key TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  status TEXT NOT NULL,
+  agent_ready INTEGER NOT NULL DEFAULT 0,
+  browser_ready INTEGER NOT NULL DEFAULT 0,
+  cdp_ready INTEGER NOT NULL DEFAULT 0,
+  agent_busy INTEGER NOT NULL DEFAULT 0,
+  authenticated INTEGER NOT NULL DEFAULT 0,
+  needs_login INTEGER NOT NULL DEFAULT 0,
+  security_verification INTEGER NOT NULL DEFAULT 0,
+  account_abnormal INTEGER NOT NULL DEFAULT 0,
+  page_present INTEGER NOT NULL DEFAULT 0,
+  paused INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  checked_at TEXT NOT NULL,
+  received_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runtime_owner_platform
+  ON automation_runtime_status(owner, platform);
+CREATE INDEX IF NOT EXISTS idx_automation_runtime_checked
+  ON automation_runtime_status(checked_at DESC);
+
 CREATE TABLE IF NOT EXISTS batch_reports (
   id TEXT PRIMARY KEY,
   report_type TEXT NOT NULL,

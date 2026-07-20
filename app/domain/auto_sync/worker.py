@@ -83,6 +83,17 @@ class AutoSyncWorker:
                 "conversation_messages",
                 "created_at",
             )
+            state["operationEventCursor"] = _max_cursor(
+                connection,
+                "automation_contact_events",
+                "updated_at",
+            )
+            state["runtimeStatusCursor"] = _max_cursor(
+                connection,
+                "automation_runtime_status",
+                "checked_at",
+                id_column="target_key",
+            )
             state["bootstrappedAt"] = _now_iso()
             self._write_state(state)
             return state
@@ -114,7 +125,30 @@ class AutoSyncWorker:
                 state["messageCursor"],
                 limit=self.config.max_messages_per_batch,
             )
-            if not changed_resumes and not changed_sessions and not changed_messages:
+            changed_operation_events = _incremental_rows(
+                connection,
+                "automation_contact_events",
+                "updated_at",
+                state["operationEventCursor"],
+                limit=self.config.max_sessions_per_batch,
+            )
+            changed_runtime_statuses = _incremental_rows(
+                connection,
+                "automation_runtime_status",
+                "checked_at",
+                state["runtimeStatusCursor"],
+                limit=50,
+                id_column="target_key",
+            )
+            if not any(
+                (
+                    changed_resumes,
+                    changed_sessions,
+                    changed_messages,
+                    changed_operation_events,
+                    changed_runtime_statuses,
+                )
+            ):
                 return None
             session_rows = {str(row["id"]): row for row in changed_sessions}
             dependency_ids = {
@@ -142,6 +176,12 @@ class AutoSyncWorker:
                 "resumes": [self._resume_payload(row) for row in changed_resumes],
                 "sessions": [_session_payload(row) for row in session_rows.values()],
                 "messages": [_message_payload(row) for row in changed_messages],
+                "operationEvents": [
+                    _operation_event_payload(row) for row in changed_operation_events
+                ],
+                "runtimeStatuses": [
+                    _runtime_status_payload(row) for row in changed_runtime_statuses
+                ],
             }
             canonical = json.dumps(
                 payload,
@@ -162,6 +202,17 @@ class AutoSyncWorker:
                     changed_messages,
                     "created_at",
                     state["messageCursor"],
+                ),
+                "operationEventCursor": _cursor_after(
+                    changed_operation_events,
+                    "updated_at",
+                    state["operationEventCursor"],
+                ),
+                "runtimeStatusCursor": _cursor_after(
+                    changed_runtime_statuses,
+                    "checked_at",
+                    state["runtimeStatusCursor"],
+                    id_column="target_key",
                 ),
             }
         self.config.pending_dir.mkdir(parents=True, exist_ok=True)
@@ -292,11 +343,31 @@ class AutoSyncWorker:
 
     def _load_state(self) -> dict[str, Any]:
         if self.config.state_path.is_file():
-            return json.loads(self.config.state_path.read_text(encoding="utf-8"))
+            state = json.loads(self.config.state_path.read_text(encoding="utf-8"))
+            changed = False
+            defaults = {
+                "resumeCursor": _empty_cursor(),
+                "sessionCursor": _empty_cursor(),
+                "messageCursor": _empty_cursor(),
+                "operationEventCursor": _empty_cursor(),
+                "runtimeStatusCursor": _empty_cursor(),
+                "lastSuccessAt": "",
+                "lastError": "",
+                "consecutiveFailures": 0,
+            }
+            for key, value in defaults.items():
+                if key not in state:
+                    state[key] = value
+                    changed = True
+            if changed:
+                self._write_state(state)
+            return state
         return {
             "resumeCursor": _empty_cursor(),
             "sessionCursor": _empty_cursor(),
             "messageCursor": _empty_cursor(),
+            "operationEventCursor": _empty_cursor(),
+            "runtimeStatusCursor": _empty_cursor(),
             "lastSuccessAt": "",
             "lastError": "",
             "consecutiveFailures": 0,
@@ -318,14 +389,15 @@ def _incremental_rows(
     cursor: dict[str, str],
     *,
     limit: int,
+    id_column: str = "id",
 ) -> list[sqlite3.Row]:
     return list(
         connection.execute(
             f"""
             SELECT * FROM {table}
             WHERE {timestamp_column} > ?
-               OR ({timestamp_column} = ? AND id > ?)
-            ORDER BY {timestamp_column}, id
+               OR ({timestamp_column} = ? AND {id_column} > ?)
+            ORDER BY {timestamp_column}, {id_column}
             LIMIT ?
             """,
             (cursor["timestamp"], cursor["timestamp"], cursor["id"], limit),
@@ -337,10 +409,12 @@ def _max_cursor(
     connection: sqlite3.Connection,
     table: str,
     timestamp_column: str,
+    *,
+    id_column: str = "id",
 ) -> dict[str, str]:
     row = connection.execute(
-        f"SELECT {timestamp_column}, id FROM {table} "
-        f"ORDER BY {timestamp_column} DESC, id DESC LIMIT 1"
+        f"SELECT {timestamp_column}, {id_column} FROM {table} "
+        f"ORDER BY {timestamp_column} DESC, {id_column} DESC LIMIT 1"
     ).fetchone()
     return (
         {"timestamp": str(row[0]), "id": str(row[1])}
@@ -353,11 +427,13 @@ def _cursor_after(
     rows: list[sqlite3.Row],
     timestamp_column: str,
     fallback: dict[str, str],
+    *,
+    id_column: str = "id",
 ) -> dict[str, str]:
     if not rows:
         return dict(fallback)
     row = rows[-1]
-    return {"timestamp": str(row[timestamp_column]), "id": str(row["id"])}
+    return {"timestamp": str(row[timestamp_column]), "id": str(row[id_column])}
 
 
 def _session_payload(row: sqlite3.Row) -> dict[str, Any]:
@@ -392,6 +468,54 @@ def _message_payload(row: sqlite3.Row) -> dict[str, Any]:
         "platformMessageId": str(row["platform_message_id"]),
         "messageHash": str(row["message_hash"]),
         "createdAt": str(row["created_at"]),
+    }
+
+
+def _operation_event_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "contactKey": str(row["contact_key"]),
+        "owner": str(row["owner"]),
+        "platform": str(row["platform"]),
+        "candidateName": str(row["candidate_name"]),
+        "jobType": str(row["job_type"]),
+        "occurredAt": str(row["occurred_at"]),
+        "action": str(row["action"]),
+        "stage": str(row["stage"]),
+        "processed": bool(row["processed"]),
+        "sentCompanyInfo": bool(row["sent_company_info"]),
+        "requestedResume": bool(row["requested_resume"]),
+        "candidateQuestion": bool(row["candidate_question"]),
+        "knowledgeAnswered": bool(row["knowledge_answered"]),
+        "resumeAcquired": bool(row["resume_acquired"]),
+        "resumeHandling": str(row["resume_handling"]),
+        "resumeFileHash": str(row["resume_file_hash"]),
+        "anomaly": bool(row["anomaly"]),
+        "anomalyReason": str(row["anomaly_reason"]),
+        "payload": json.loads(str(row["payload"] or "{}")),
+        "updatedAt": str(row["updated_at"]),
+    }
+
+
+def _runtime_status_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "targetKey": str(row["target_key"]),
+        "owner": str(row["owner"]),
+        "platform": str(row["platform"]),
+        "status": str(row["status"]),
+        "agentReady": bool(row["agent_ready"]),
+        "browserReady": bool(row["browser_ready"]),
+        "cdpReady": bool(row["cdp_ready"]),
+        "agentBusy": bool(row["agent_busy"]),
+        "authenticated": bool(row["authenticated"]),
+        "needsLogin": bool(row["needs_login"]),
+        "securityVerification": bool(row["security_verification"]),
+        "accountAbnormal": bool(row["account_abnormal"]),
+        "pagePresent": bool(row["page_present"]),
+        "paused": bool(row["paused"]),
+        "reason": str(row["reason"]),
+        "checkedAt": str(row["checked_at"]),
+        "receivedAt": str(row["received_at"]),
     }
 
 

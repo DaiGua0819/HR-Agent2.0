@@ -13,6 +13,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from app.api.routes.auth import router as auth_router
 from app.api.routes.auto_sync import router as auto_sync_router
 from app.api.routes.automation import router as automation_router
+from app.api.routes.automation_monitoring import router as automation_monitoring_router
 from app.api.routes.batch import router as batch_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.email_import import router as email_import_router
@@ -24,6 +25,8 @@ from app.api.routes.resumes import router as resumes_router
 from app.api.routes.scoring import router as scoring_router
 from app.control_plane.dispatcher import Dispatcher
 from app.domain.auto_sync.service import AutoSyncService
+from app.domain.automation_monitoring.repository import AutomationMonitoringRepository
+from app.domain.automation_monitoring.service import AutomationMonitoringService
 from app.domain.batch.service import BatchService
 from app.domain.conversation.repository import ConversationRepository
 from app.domain.conversation.service import ResumeConversationService
@@ -57,6 +60,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     conversation_repository = ConversationRepository(settings.resolved_database_path)
     scoring_service = ScoringService(repository)
     review_repository = ResumeReviewRepository(settings.resolved_database_path)
+    monitoring_repository = AutomationMonitoringRepository(settings.resolved_database_path)
 
     app.state.dispatcher = dispatcher or Dispatcher()
     app.state.resume_repository = repository
@@ -74,6 +78,9 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
         resume_repository=repository,
         shared_admin_inbox=SHARED_ADMIN_INBOX,
     )
+    app.state.automation_monitoring_service = AutomationMonitoringService(
+        monitoring_repository
+    )
     app.state.batch_service = BatchService()
     app.state.email_import_service = GLOBAL_EMAIL_IMPORT_SERVICE
     app.state.interview_center_service = InterviewCenterService(
@@ -84,6 +91,7 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(auto_sync_router)
     app.include_router(health_router)
+    app.include_router(automation_monitoring_router)
     app.include_router(dashboard_router)
     app.include_router(automation_router)
     app.include_router(resumes_router)
@@ -109,6 +117,11 @@ def create_app(dispatcher: Dispatcher | None = None) -> FastAPI:
     @app.get("/interview-center.html")
     async def interview_center() -> FileResponse:
         return FileResponse(_frontend_file("interview-center.html"))
+
+    @app.get("/automation-details.html")
+    @app.get("/app/automation-details")
+    async def automation_details() -> FileResponse:
+        return FileResponse(_frontend_file("automation-details.html"))
 
     @app.get("/app/{path:path}")
     async def app_entry(path: str) -> FileResponse:

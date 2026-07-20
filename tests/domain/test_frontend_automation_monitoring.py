@@ -1,0 +1,74 @@
+from pathlib import Path
+
+from app.control_plane.main import create_app
+from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "monitoringDate",
+        "monitoringPlatform",
+        "monitoringOwner",
+        "monitoringJobType",
+        "monitoringKpiGrid",
+        "monitoringJobRows",
+        "runtimeStatusGrid",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert "/api/automation-monitoring/daily-summary" in script
+    assert "/api/automation-monitoring/runtime-status" in script
+    assert "MONITORING_STATUS_POLL_MS = 5000" in script
+    assert "MONITORING_SUMMARY_POLL_MS = 15000" in script
+    assert "document.visibilityState" in script
+    assert "openAutomationDetails" in script
+    assert "window.location.assign(`/app/automation-details?${query}`)" in script
+    assert "if (!isAdminUser()) return" in script
+    assert ".monitoring-kpi" in styles
+    assert ".runtime-target" in styles
+    assert "@media (max-width: 1320px)" in styles
+    assert 'heartbeat_timeout: "Worker 心跳超时"' in script
+
+
+def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
+    html_path = ROOT / "frontend" / "automation-details.html"
+    script_path = ROOT / "frontend" / "automation-details.js"
+
+    assert html_path.is_file()
+    assert script_path.is_file()
+    html = html_path.read_text(encoding="utf-8")
+    script = script_path.read_text(encoding="utf-8")
+
+    assert 'id="automationDetailsTable"' in html
+    assert 'id="detailsPagination"' in html
+    assert "/assets/automation-details.js?v=20260720-chinese-resume-status" in html
+    assert "/api/auth/me" in script
+    assert "/api/automation-monitoring/daily-details" in script
+    assert 'query.set("page_size", "10")' in script
+    assert 'request_resume: "求简历"' in script
+    assert 'request_resume_action_failed: "求简历失败"' in script
+    assert 'online_resume_button_not_found: "未找到在线简历按钮"' in script
+    assert 'boss_request_verified_server_imap: "已求简历，等待服务器邮箱入库"' in script
+    assert 'local_resume_downloaded: "简历已下载并入库"' in script
+    assert 'resume_requested_waiting: "已求简历，等待候选人发送"' in script
+    assert "function resumeHandlingLabel(value)" in script
+    assert 'return resumeHandlingLabels[value] || "其他简历状态"' in script
+    assert "function stageLabel(value)" in script
+    assert 'return stageLabels[value] || "其他阶段"' in script
+    assert 'return anomalyReasonLabels[value] || "其他异常"' in script
+    assert "resumeDownloadUrl" in script
+    assert "下载简历" in html
+    assert 'window.location.replace("/index.html")' in script
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/app/automation-details")
+
+    assert response.status_code == 200
+    assert "每日处理明细" in response.text

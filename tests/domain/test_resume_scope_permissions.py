@@ -243,8 +243,11 @@ def test_digital_members_only_read_ai_solution_and_product_manager_resumes(
     load_settings.cache_clear()
 
 
-def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: Path) -> None:
-    """点击简历预览下载时使用 姓名_岗位.pdf 文件名，不额外限制岗位范围。"""
+def test_resume_download_uses_candidate_job_platform_and_owner_filename(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """下载文件名包含姓名、岗位、平台和账号简称。"""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
@@ -265,6 +268,8 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
                 name="候选人甲",
                 phone="13800138000",
                 job_type="AI应用开发实习生",
+                linked_platform="job51",
+                linked_owner="和新红",
                 payload={"downloadPath": str(pdf_path)},
             ).to_record(),
             Resume(
@@ -272,6 +277,8 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
                 name="运营候选人",
                 phone="13800138001",
                 job_type="企业内容运营负责人（B2B/短视频方向）",
+                linked_platform="zhilian",
+                linked_owner="宋峰峰",
                 payload={"downloadPath": str(operation_pdf_path)},
             ).to_record(),
         ]
@@ -289,9 +296,14 @@ def test_resume_download_uses_candidate_and_job_filename(monkeypatch, tmp_path: 
     assert downloaded.content == content
     disposition = downloaded.headers["content-disposition"]
     assert disposition.startswith("attachment;")
-    assert quote("候选人甲_AI应用开发实习生.pdf") in disposition
+    assert quote("候选人甲_AI应用开发实习生_51＊和.pdf") in disposition
     assert out_of_scope_downloaded.status_code == 200
     assert out_of_scope_downloaded.content == operation_content
+    operation_disposition = out_of_scope_downloaded.headers["content-disposition"]
+    expected_operation_filename = (
+        "运营候选人_企业内容运营负责人(B2B/短视频方向)_智联＊宋.pdf"
+    )
+    assert quote(expected_operation_filename) in operation_disposition
 
 
 def _app_for_member(open_id: str, name: str):

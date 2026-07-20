@@ -94,6 +94,8 @@ class AutoSyncService:
             "sessionsUnchanged": 0,
             "messagesInserted": 0,
             "messagesDuplicate": 0,
+            "operationEventsUpserted": 0,
+            "runtimeStatusesUpserted": 0,
             "filesStored": files_stored,
             "filesReused": files_reused,
         }
@@ -117,6 +119,8 @@ class AutoSyncService:
                     stored_files,
                     result,
                 )
+                self._merge_operation_events(connection, batch, result)
+                self._merge_runtime_statuses(connection, batch, result)
                 connection.execute(
                     """
                     INSERT INTO sync_receipts (batch_id, body_hash, source, result, applied_at)
@@ -138,6 +142,112 @@ class AutoSyncService:
                 connection.rollback()
                 raise
         return result
+
+    @staticmethod
+    def _merge_operation_events(
+        connection: sqlite3.Connection,
+        batch: SyncBatch,
+        result: dict[str, object],
+    ) -> None:
+        for item in batch.operation_events:
+            connection.execute(
+                """
+                INSERT INTO automation_contact_events (
+                  id, contact_key, owner, platform, candidate_name, job_type,
+                  occurred_at, action, stage, processed, sent_company_info,
+                  requested_resume, candidate_question, knowledge_answered,
+                  resume_acquired, resume_handling, resume_file_hash, anomaly,
+                  anomaly_reason, payload, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  contact_key=excluded.contact_key, owner=excluded.owner,
+                  platform=excluded.platform, candidate_name=excluded.candidate_name,
+                  job_type=excluded.job_type, occurred_at=excluded.occurred_at,
+                  action=excluded.action, stage=excluded.stage,
+                  processed=excluded.processed,
+                  sent_company_info=excluded.sent_company_info,
+                  requested_resume=excluded.requested_resume,
+                  candidate_question=excluded.candidate_question,
+                  knowledge_answered=excluded.knowledge_answered,
+                  resume_acquired=excluded.resume_acquired,
+                  resume_handling=excluded.resume_handling,
+                  resume_file_hash=excluded.resume_file_hash,
+                  anomaly=excluded.anomaly, anomaly_reason=excluded.anomaly_reason,
+                  payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (
+                    item.id,
+                    item.contact_key,
+                    item.owner,
+                    item.platform,
+                    item.candidate_name,
+                    item.job_type,
+                    item.occurred_at,
+                    item.action,
+                    item.stage,
+                    int(item.processed),
+                    int(item.sent_company_info),
+                    int(item.requested_resume),
+                    int(item.candidate_question),
+                    int(item.knowledge_answered),
+                    int(item.resume_acquired),
+                    item.resume_handling,
+                    item.resume_file_hash,
+                    int(item.anomaly),
+                    item.anomaly_reason,
+                    json.dumps(item.payload, ensure_ascii=False, sort_keys=True),
+                    item.updated_at,
+                ),
+            )
+            result["operationEventsUpserted"] = int(result["operationEventsUpserted"]) + 1
+
+    @staticmethod
+    def _merge_runtime_statuses(
+        connection: sqlite3.Connection,
+        batch: SyncBatch,
+        result: dict[str, object],
+    ) -> None:
+        for item in batch.runtime_statuses:
+            connection.execute(
+                """
+                INSERT INTO automation_runtime_status (
+                  target_key, owner, platform, status, agent_ready, browser_ready,
+                  cdp_ready, agent_busy, authenticated, needs_login,
+                  security_verification, account_abnormal, page_present, paused,
+                  reason, checked_at, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_key) DO UPDATE SET
+                  owner=excluded.owner, platform=excluded.platform, status=excluded.status,
+                  agent_ready=excluded.agent_ready, browser_ready=excluded.browser_ready,
+                  cdp_ready=excluded.cdp_ready, agent_busy=excluded.agent_busy,
+                  authenticated=excluded.authenticated, needs_login=excluded.needs_login,
+                  security_verification=excluded.security_verification,
+                  account_abnormal=excluded.account_abnormal,
+                  page_present=excluded.page_present, paused=excluded.paused,
+                  reason=excluded.reason, checked_at=excluded.checked_at,
+                  received_at=excluded.received_at
+                """,
+                (
+                    item.target_key,
+                    item.owner,
+                    item.platform,
+                    item.status,
+                    int(item.agent_ready),
+                    int(item.browser_ready),
+                    int(item.cdp_ready),
+                    int(item.agent_busy),
+                    int(item.authenticated),
+                    int(item.needs_login),
+                    int(item.security_verification),
+                    int(item.account_abnormal),
+                    int(item.page_present),
+                    int(item.paused),
+                    item.reason,
+                    item.checked_at,
+                    item.received_at,
+                ),
+            )
+            result["runtimeStatusesUpserted"] = int(result["runtimeStatusesUpserted"]) + 1
 
     def _existing_receipt(
         self,
