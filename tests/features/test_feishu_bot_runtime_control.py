@@ -812,3 +812,75 @@ def test_agent_manager_client_surfaces_structured_failure(tmp_path: Path) -> Non
 
     with pytest.raises(RuntimeError, match="platform_page_missing"):
         asyncio.run(client.run_batch())
+
+
+def test_agent_manager_client_exposes_fixed_read_only_json_commands(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def runner(argv, *, cwd, env):
+        del cwd, env
+        command_index = argv.index("--topology") + 2
+        arguments = tuple(argv[command_index:])
+        calls.append(arguments)
+        payloads = {
+            "preflight": {"ok": False, "errors": [{"reason": "cdp_not_ready"}]},
+            "data-health": {"generatedAt": "2026-07-20T08:00:00+00:00"},
+            "daily-report": {"date": "2026-07-20", "processedContacts": 4},
+        }
+        return AgentManagerCommandResult(
+            returncode=2 if arguments[0] == "preflight" else 0,
+            stdout=json.dumps(payloads[arguments[0]]),
+            stderr="",
+        )
+
+    client = AgentManagerSubprocessClient(
+        python_executable=tmp_path / "python.exe",
+        manager_script=tmp_path / "agent_manager.py",
+        topology_path=tmp_path / "topology.json",
+        project_root=tmp_path,
+        runner=runner,
+    )
+
+    async def scenario() -> tuple[dict[str, object], ...]:
+        return (
+            await client.preflight(),
+            await client.data_health(),
+            await client.daily_report("2026-07-20"),
+        )
+
+    preflight, health, report = asyncio.run(scenario())
+
+    assert preflight == {"ok": False, "errors": [{"reason": "cdp_not_ready"}]}
+    assert health == {"generatedAt": "2026-07-20T08:00:00+00:00"}
+    assert report == {"date": "2026-07-20", "processedContacts": 4}
+    assert calls == [
+        ("preflight",),
+        ("data-health",),
+        ("daily-report", "--date", "2026-07-20"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "date_text",
+    ["2026-7-20", "20-07-2026", "2026-07-20 --timezone UTC", ""],
+)
+def test_agent_manager_client_rejects_non_iso_daily_report_dates(
+    tmp_path: Path,
+    date_text: str,
+) -> None:
+    async def runner(argv, *, cwd, env):
+        del argv, cwd, env
+        raise AssertionError("runner must not be called for invalid dates")
+
+    client = AgentManagerSubprocessClient(
+        python_executable=tmp_path / "python.exe",
+        manager_script=tmp_path / "agent_manager.py",
+        topology_path=tmp_path / "topology.json",
+        project_root=tmp_path,
+        runner=runner,
+    )
+
+    with pytest.raises(ValueError, match="invalid_agent_manager_report_date"):
+        asyncio.run(client.daily_report(date_text))

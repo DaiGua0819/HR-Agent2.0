@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -32,6 +33,7 @@ _TRANSIENT_ANOMALY_PREFIXES = (
     "cdp_unavailable",
     "target_closed",
 )
+_REPORT_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,14 @@ class AgentManagerSubprocessClient:
     async def start_runtime(self) -> None:
         await self._execute("start", "--adopt-running")
 
+    async def preflight(self) -> dict[str, object]:
+        return await self._execute_json(
+            "preflight",
+            allowed_returncodes={0, 2},
+            invalid_json_error="agent_manager_preflight_invalid_json",
+            invalid_payload_error="agent_manager_preflight_invalid_payload",
+        )
+
     async def run_batch(self) -> AgentManagerBatchResult:
         arguments = [
             "run",
@@ -180,13 +190,49 @@ class AgentManagerSubprocessClient:
         await self._execute("stop", "--reason", reason)
 
     async def status(self) -> dict[str, object]:
-        result = await self._execute("status", "--tail", "8")
+        return await self._execute_json(
+            "status",
+            "--tail",
+            "8",
+            invalid_json_error="agent_manager_status_invalid_json",
+            invalid_payload_error="agent_manager_status_invalid_payload",
+        )
+
+    async def data_health(self) -> dict[str, object]:
+        return await self._execute_json(
+            "data-health",
+            invalid_json_error="agent_manager_data_health_invalid_json",
+            invalid_payload_error="agent_manager_data_health_invalid_payload",
+        )
+
+    async def daily_report(self, date_text: str) -> dict[str, object]:
+        if not isinstance(date_text, str) or _REPORT_DATE_PATTERN.fullmatch(date_text) is None:
+            raise ValueError("invalid_agent_manager_report_date")
+        return await self._execute_json(
+            "daily-report",
+            "--date",
+            date_text,
+            invalid_json_error="agent_manager_daily_report_invalid_json",
+            invalid_payload_error="agent_manager_daily_report_invalid_payload",
+        )
+
+    async def _execute_json(
+        self,
+        *arguments: str,
+        allowed_returncodes: set[int] | None = None,
+        invalid_json_error: str,
+        invalid_payload_error: str,
+    ) -> dict[str, object]:
+        result = await self._execute(
+            *arguments,
+            allowed_returncodes=allowed_returncodes,
+        )
         try:
             value = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("agent_manager_status_invalid_json") from exc
+            raise RuntimeError(invalid_json_error) from exc
         if not isinstance(value, dict):
-            raise RuntimeError("agent_manager_status_invalid_payload")
+            raise RuntimeError(invalid_payload_error)
         return value
 
     async def _execute(
