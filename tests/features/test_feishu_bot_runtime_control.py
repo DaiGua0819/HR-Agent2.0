@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from app.features.feishu_bot import runtime_control as runtime_control_module
 from app.features.feishu_bot.models import BotActor, BotEvent, BotQueryPlan, BotQueryResult
 from app.features.feishu_bot.repository import FeishuBotRepository
 from app.features.feishu_bot.runtime_control import (
@@ -780,6 +781,38 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
     assert all(env["SAFE_MANAGER_VALUE"] == "kept" for env in environments)
     assert all(env["PYTHONUTF8"] == "1" for env in environments)
     assert all(env["PYTHONIOENCODING"] == "utf-8" for env in environments)
+
+
+def test_manager_subprocess_does_not_inherit_persistent_mcp_stdin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Process:
+        returncode = 0
+
+        @staticmethod
+        async def communicate() -> tuple[bytes, bytes]:
+            return b"{}", b""
+
+    async def create_subprocess_exec(*argv: str, **kwargs: object) -> _Process:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return _Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+
+    result = asyncio.run(
+        runtime_control_module._run_manager_command(
+            ("python.exe", "agent_manager.py", "preflight"),
+            cwd=tmp_path,
+            env={"PYTHONUTF8": "1"},
+        )
+    )
+
+    assert result.returncode == 0
+    assert captured.get("stdin") is asyncio.subprocess.DEVNULL
 
 
 def test_agent_manager_client_surfaces_structured_failure(tmp_path: Path) -> None:

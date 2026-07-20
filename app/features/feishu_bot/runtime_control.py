@@ -691,6 +691,7 @@ async def _run_manager_command(
         *argv,
         cwd=str(cwd),
         env=env,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
