@@ -466,6 +466,11 @@ def test_initialize_requires_protocol_fields_and_allows_request_meta() -> None:
             "capabilities": {"roots": "yes"},
             "clientInfo": {"name": "codex", "version": "0.130.0"},
         },
+        {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"experimental": {"feature": 123}},
+            "clientInfo": {"name": "codex", "version": "0.130.0"},
+        },
     ),
 )
 def test_initialize_rejects_invalid_known_nested_fields(

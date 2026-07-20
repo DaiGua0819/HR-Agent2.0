@@ -437,6 +437,11 @@ def _valid_client_capabilities(value: object) -> bool:
         roots.get("listChanged"), bool
     ):
         return False
+    experimental = value.get("experimental")
+    if isinstance(experimental, dict) and any(
+        not isinstance(item, dict) for item in experimental.values()
+    ):
+        return False
     return True
 
 
