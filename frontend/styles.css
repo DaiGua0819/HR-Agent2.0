@@ -1862,6 +1862,44 @@ h3 { font-size: 15px; }
   border-radius: 6px;
   background: #fff;
 }
+.monitoring-date-control {
+  position: relative;
+  min-width: 0;
+}
+.monitoring-date-control button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ts-on-surface);
+  font: inherit;
+  text-align: left;
+}
+.monitoring-date-control button:hover,
+.monitoring-date-control button:focus-visible {
+  border-color: #93b4f5;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+.monitoring-date-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.monitoring-date-icon {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid #64748b;
+  border-radius: 3px;
+  background: linear-gradient(#64748b, #64748b) 2px 3px / 8px 1px no-repeat;
+}
 .monitoring-kpi-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1904,12 +1942,11 @@ h3 { font-size: 15px; }
 .monitoring-kpi--danger { border-top: 3px solid #b91c1c; }
 .monitoring-dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(440px, 1.35fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
 }
-.monitoring-job-panel,
-.monitoring-runtime-panel {
+.monitoring-job-panel {
   border-radius: 8px;
 }
 .monitoring-job-rows {
@@ -1965,67 +2002,6 @@ h3 { font-size: 15px; }
 .monitoring-job-stat small { color: var(--muted); font-size: 10px; }
 .monitoring-job-stat strong { font-size: 14px; }
 .monitoring-job-stat--danger strong { color: var(--danger); }
-.runtime-status-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  align-content: start;
-  padding: 10px;
-  overflow: auto;
-}
-.runtime-target {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(191, 219, 254, 0.48);
-  border-left-width: 3px;
-  border-radius: 8px;
-  background: #fff;
-}
-.runtime-target--success { border-left-color: #15803d; }
-.runtime-target--busy { border-left-color: #2563eb; }
-.runtime-target--warning { border-left-color: #b45309; }
-.runtime-target--danger { border-left-color: #b91c1c; }
-.runtime-target--muted { border-left-color: #94a3b8; }
-.runtime-target-head,
-.runtime-target-head > span:first-child {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-.runtime-target-head > span:first-child {
-  min-width: 0;
-  justify-content: flex-start;
-}
-.runtime-target-head strong { font-size: 13px; }
-.runtime-target-head small,
-.runtime-target time,
-.runtime-target p { color: var(--muted); font-size: 10px; }
-.runtime-state {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-weight: 800;
-}
-.runtime-signal-row {
-  display: flex;
-  gap: 5px;
-}
-.runtime-signal-row i {
-  width: 18px;
-  height: 4px;
-  border-radius: 2px;
-  background: #d7dee9;
-}
-.runtime-signal-row i.on { background: #16a34a; }
-.runtime-target p {
-  min-height: 14px;
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .automation-details-body {
   min-height: 100vh;
   overflow: auto;
@@ -2517,8 +2493,7 @@ h3 { font-size: 15px; }
     flex-direction: column;
   }
   .monitoring-filter-bar,
-  .monitoring-kpi-grid,
-  .runtime-status-grid {
+  .monitoring-kpi-grid {
     grid-template-columns: 1fr;
   }
   .monitoring-job-row {

@@ -3,12 +3,9 @@ const state = {
   user: null,
   dashboard: null,
   monitoringSummary: null,
-  monitoringRuntime: null,
   monitoringSummaryVersion: "",
   monitoringSummaryTimer: null,
-  monitoringStatusTimer: null,
   monitoringSummaryInFlight: false,
-  monitoringStatusInFlight: false,
   monitoringFacets: { owners: [], platforms: [], jobTypes: [] },
   resumes: [],
   selectedId: "",
@@ -84,7 +81,6 @@ const state = {
 };
 const RESUME_FILTER_DEBOUNCE_MS = 250;
 const QUEUE_SUMMARY_POLL_MS = 3000;
-const MONITORING_STATUS_POLL_MS = 5000;
 const MONITORING_SUMMARY_POLL_MS = 15000;
 const RESUME_PREFETCH_AFTER_FILTER_MS = 500;
 const RESUME_PREVIEW_PREFETCH_LIMIT = 10;
@@ -769,10 +765,7 @@ async function loadDashboard() {
   renderQuickFilters(payload.quickFilters || []);
   renderDailyRows(payload.recentRecords || []);
   renderAutomationControls();
-  await Promise.allSettled([
-    loadAutomationMonitoringSummary(),
-    loadAutomationRuntimeStatus(),
-  ]);
+  await loadAutomationMonitoringSummary();
 }
 function monitoringToday() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -783,6 +776,28 @@ function monitoringToday() {
   }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((item) => [item.type, item.value]));
   return `${values.year}-${values.month}-${values.day}`;
+}
+function formatMonitoringDate(value) {
+  const [fullYear = "", month = "", day = ""] = String(value || "").split("-");
+  if (!fullYear || !month || !day) return "--/--/--";
+  const year = fullYear.slice(-2);
+  return `${year}/${month}/${day}`;
+}
+function syncMonitoringDateLabel() {
+  const input = $("monitoringDate");
+  if ($("monitoringDateLabel")) {
+    $("monitoringDateLabel").textContent = formatMonitoringDate(input?.value);
+  }
+}
+function openMonitoringDatePicker() {
+  const monitoringDate = $("monitoringDate");
+  if (!monitoringDate) return;
+  if (typeof monitoringDate.showPicker === "function") {
+    monitoringDate.showPicker();
+    return;
+  }
+  monitoringDate.focus();
+  monitoringDate.click();
 }
 function monitoringFilters() {
   return {
@@ -882,56 +897,6 @@ function renderMonitoringJobs(items = []) {
     button.onclick = () => openAutomationDetails("processedContacts", button.dataset.monitoringJob || "");
   });
 }
-function monitoringStatusMeta(item) {
-  if (item.accountAbnormal) return ["账号异常", "danger"];
-  if (item.securityVerification) return ["安全验证", "danger"];
-  if (item.needsLogin) return ["需要登录", "warning"];
-  if (item.paused) return ["已暂停", "muted"];
-  if (item.agentBusy) return ["处理中", "busy"];
-  return ({
-    ready: ["就绪", "success"],
-    stale: ["状态延迟", "warning"],
-    worker_offline: ["离线", "muted"],
-  }[item.status] || [item.status || "未知", "muted"]);
-}
-const MONITORING_REASON_LABELS = {
-  heartbeat_timeout: "Worker 心跳超时",
-  heartbeat_stale: "Worker 状态延迟",
-  no_heartbeat: "尚未收到状态",
-  login_required: "账号需要重新登录",
-  processing_messages: "正在处理消息",
-};
-function renderRuntimeStatuses(payload = {}) {
-  const targets = payload.targets || [];
-  $("runtimeStatusGrid").innerHTML = targets.map((item) => {
-    const [label, tone] = monitoringStatusMeta(item);
-    const age = item.ageSeconds === null || item.ageSeconds === undefined
-      ? "从未上报"
-      : item.ageSeconds < 60
-        ? `${item.ageSeconds} 秒前`
-        : `${Math.floor(item.ageSeconds / 60)} 分钟前`;
-    return `
-      <article class="runtime-target runtime-target--${tone}">
-        <div class="runtime-target-head">
-          <span><strong>${escapeHtml(item.owner)}</strong><small>${escapeHtml(platformName(item.platform))}</small></span>
-          <span class="runtime-state">${escapeHtml(label)}</span>
-        </div>
-        <div class="runtime-signal-row" aria-label="运行信号">
-          <i class="${item.browserReady ? "on" : ""}" title="浏览器"></i>
-          <i class="${item.cdpReady ? "on" : ""}" title="CDP"></i>
-          <i class="${item.authenticated ? "on" : ""}" title="登录状态"></i>
-        </div>
-        <p>${escapeHtml(MONITORING_REASON_LABELS[item.reason] || item.reason || (item.agentBusy ? "正在处理消息" : "运行正常"))}</p>
-        <time>${escapeHtml(age)}</time>
-      </article>
-    `;
-  }).join("") || '<div class="empty-inline">暂未收到 Worker 状态</div>';
-  if ($("runtimeStatusUpdatedAt")) {
-    $("runtimeStatusUpdatedAt").textContent = payload.updatedAt
-      ? `更新于 ${new Date(payload.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}`
-      : "每 5 秒刷新";
-  }
-}
 async function loadAutomationMonitoringSummary() {
   if (!isAdminUser()) return;
   if (state.monitoringSummaryInFlight) return;
@@ -951,32 +916,17 @@ async function loadAutomationMonitoringSummary() {
     state.monitoringSummaryInFlight = false;
   }
 }
-async function loadAutomationRuntimeStatus() {
-  if (!isAdminUser()) return;
-  if (state.monitoringStatusInFlight) return;
-  state.monitoringStatusInFlight = true;
-  try {
-    const payload = await api("/api/automation-monitoring/runtime-status");
-    state.monitoringRuntime = payload;
-    renderRuntimeStatuses(payload);
-  } finally {
-    state.monitoringStatusInFlight = false;
-  }
-}
 function openAutomationDetails(metric = "processedContacts", jobType = "") {
   const query = monitoringQuery({ metric, jobType });
   window.location.assign(`/app/automation-details?${query}`);
 }
 function stopAutomationMonitoringPolling() {
   if (state.monitoringSummaryTimer) clearInterval(state.monitoringSummaryTimer);
-  if (state.monitoringStatusTimer) clearInterval(state.monitoringStatusTimer);
   state.monitoringSummaryTimer = null;
-  state.monitoringStatusTimer = null;
 }
 function startAutomationMonitoringPolling() {
   stopAutomationMonitoringPolling();
   if (!isAdminUser() || state.view !== "dashboard" || document.visibilityState !== "visible") return;
-  state.monitoringStatusTimer = setInterval(loadAutomationRuntimeStatus, MONITORING_STATUS_POLL_MS);
   state.monitoringSummaryTimer = setInterval(loadAutomationMonitoringSummary, MONITORING_SUMMARY_POLL_MS);
 }
 function renderSafety(payload) {
@@ -3653,7 +3603,10 @@ function bindPageActions() {
   );
   $("refreshDashboardBtn").onclick = loadDashboard;
   $("monitoringDate").value = monitoringToday();
+  syncMonitoringDateLabel();
+  $("monitoringDateButton").onclick = openMonitoringDatePicker;
   $("monitoringFilters").addEventListener("change", () => {
+    syncMonitoringDateLabel();
     state.monitoringSummaryVersion = "";
     loadAutomationMonitoringSummary();
   });

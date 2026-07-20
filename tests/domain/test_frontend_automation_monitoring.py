@@ -13,27 +13,34 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
 
     for element_id in (
         "monitoringDate",
+        "monitoringDateButton",
+        "monitoringDateLabel",
         "monitoringPlatform",
         "monitoringOwner",
         "monitoringJobType",
         "monitoringKpiGrid",
         "monitoringJobRows",
-        "runtimeStatusGrid",
     ):
         assert f'id="{element_id}"' in html
 
+    assert 'type="date" tabindex="-1" aria-hidden="true"' in html
+    assert 'id="runtimeStatusGrid"' not in html
+    assert 'id="runtimeStatusUpdatedAt"' not in html
     assert "/api/automation-monitoring/daily-summary" in script
-    assert "/api/automation-monitoring/runtime-status" in script
-    assert "MONITORING_STATUS_POLL_MS = 5000" in script
+    assert "/api/automation-monitoring/runtime-status" not in script
+    assert "MONITORING_STATUS_POLL_MS" not in script
     assert "MONITORING_SUMMARY_POLL_MS = 15000" in script
     assert "document.visibilityState" in script
+    assert "function formatMonitoringDate(value)" in script
+    assert 'return `${year}/${month}/${day}`' in script
+    assert "monitoringDate.showPicker()" in script
     assert "openAutomationDetails" in script
     assert "window.location.assign(`/app/automation-details?${query}`)" in script
     assert "if (!isAdminUser()) return" in script
     assert ".monitoring-kpi" in styles
-    assert ".runtime-target" in styles
+    assert ".monitoring-date-control" in styles
+    assert ".runtime-target" not in styles
     assert "@media (max-width: 1320px)" in styles
-    assert 'heartbeat_timeout: "Worker 心跳超时"' in script
 
 
 def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
@@ -47,7 +54,7 @@ def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
 
     assert 'id="automationDetailsTable"' in html
     assert 'id="detailsPagination"' in html
-    assert "/assets/automation-details.js?v=20260720-chinese-resume-status" in html
+    assert "/assets/automation-details.js?v=20260720-weekly-data" in html
     assert "/api/auth/me" in script
     assert "/api/automation-monitoring/daily-details" in script
     assert 'query.set("page_size", "10")' in script
@@ -60,6 +67,8 @@ def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
     assert "function resumeHandlingLabel(value)" in script
     assert 'return resumeHandlingLabels[value] || "其他简历状态"' in script
     assert "function stageLabel(value)" in script
+    assert "function formatAutomationDate(value)" in script
+    assert "formatAutomationDate(query.get(\"date\")" in script
     assert 'return stageLabels[value] || "其他阶段"' in script
     assert 'return anomalyReasonLabels[value] || "其他异常"' in script
     assert "resumeDownloadUrl" in script

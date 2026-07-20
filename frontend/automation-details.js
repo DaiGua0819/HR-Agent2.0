@@ -147,8 +147,14 @@ function detailsQuery(page = detailsState.page) {
   return query;
 }
 
+function formatAutomationDate(value) {
+  const [fullYear = "", month = "", day = ""] = String(value || "").split("-");
+  if (!fullYear || !month || !day) return "";
+  return `${fullYear.slice(-2)}/${month}/${day}`;
+}
+
 function renderDetailsContext(query) {
-  const parts = [query.get("date") || ""];
+  const parts = [formatAutomationDate(query.get("date") || "")];
   if (query.get("platform")) parts.push(detailsPlatformName(query.get("platform")));
   if (query.get("owner")) parts.push(query.get("owner"));
   if (query.get("job_type")) parts.push(query.get("job_type"));

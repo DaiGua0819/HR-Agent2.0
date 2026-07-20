@@ -92,7 +92,13 @@
           <form id="monitoringFilters" class="monitoring-filter-bar">
             <label>
               <span>日期</span>
-              <input id="monitoringDate" name="date" type="date" />
+              <div class="monitoring-date-control">
+                <button id="monitoringDateButton" type="button" aria-label="选择统计日期">
+                  <span id="monitoringDateLabel">--/--/--</span>
+                  <span class="monitoring-date-icon" aria-hidden="true"></span>
+                </button>
+                <input id="monitoringDate" name="date" type="date" tabindex="-1" aria-hidden="true" />
+              </div>
             </label>
             <label>
               <span>平台</span>
@@ -124,15 +130,6 @@
                 <button id="openAllMonitoringDetails" class="ts-btn ts-btn--quiet" type="button">查看全部</button>
               </div>
               <div class="monitoring-job-rows" id="monitoringJobRows"></div>
-            </section>
-            <section class="panel monitoring-runtime-panel">
-              <div class="panel-head">
-                <div>
-                  <h3>账号平台状态</h3>
-                  <span class="muted" id="runtimeStatusUpdatedAt">每 5 秒刷新</span>
-                </div>
-              </div>
-              <div class="runtime-status-grid" id="runtimeStatusGrid"></div>
             </section>
           </div>
           <div class="dashboard-shortcuts" id="quickFilters"></div>
@@ -412,6 +409,6 @@
     </div>
     <div id="reviewerDecisionPopoverRoot" class="reviewer-decision-popover-root" role="tooltip" hidden></div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260720-automation-monitoring"></script>
+    <script src="/assets/app.js?v=20260720-weekly-data"></script>
   </body>
 </html>
