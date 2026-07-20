@@ -38,8 +38,8 @@ def build_contact_event(
     fingerprint = str(state.get("recent_messages_fingerprint") or "").strip()
     conversation_id = str(state.get("conversation_id") or "").strip()
     contact_key = (
-        f"session|{session_id}|message|{fingerprint}"
-        if session_id and fingerprint
+        f"session|{session_id}"
+        if session_id
         else f"conversation|{platform}|{owner}|{conversation_id}"
     )
     resume_handling = _resume_handling(
@@ -88,6 +88,7 @@ def build_contact_event(
             "decision": decision,
             "sessionId": session_id,
             "conversationId": conversation_id,
+            "recentMessagesFingerprint": fingerprint,
         },
         updatedAt=timestamp,
     )

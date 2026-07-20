@@ -82,6 +82,60 @@ def test_daily_summary_dedupes_contacts_and_uses_platform_resume_contracts(
     assert by_key[("运营B", "job51")]["businessResumeAcquisitions"] == 1
 
 
+def test_daily_summary_uses_latest_candidate_row_and_accumulates_flags(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationMonitoringRepository(tmp_path / "monitoring.sqlite")
+    service = AutomationMonitoringService(repository)
+    older = _event(
+        event_id="older",
+        contact_key="session|session-1|message|old-fingerprint",
+        platform="job51",
+        owner="和新红",
+        candidate_name="张三",
+        job_type="AI产品经理",
+        requested_resume=True,
+    )
+    older["occurredAt"] = "2026-07-20T01:00:00+00:00"
+    older["updatedAt"] = "2026-07-20T01:00:00+00:00"
+    newer = _event(
+        event_id="newer",
+        contact_key="session|session-1|message|new-fingerprint",
+        platform="job51",
+        owner="和新红",
+        candidate_name="张三",
+        job_type="AI产品经理",
+    )
+    newer["occurredAt"] = "2026-07-20T02:00:00+00:00"
+    newer["updatedAt"] = "2026-07-20T02:00:00+00:00"
+    newer["action"] = "answer_question"
+    newer["stage"] = "knowledge_hit"
+    newer["candidateQuestion"] = True
+    newer["knowledgeAnswered"] = True
+    repository.upsert_events([older, newer])
+
+    summary = service.daily_summary(date="2026-07-20")
+    processed_details = service.daily_details(date="2026-07-20")
+    requested_details = service.daily_details(
+        date="2026-07-20", metric="requestedResume"
+    )
+
+    assert summary["totals"]["processedContacts"] == 1
+    assert summary["totals"]["requestedResume"] == 1
+    assert summary["totals"]["candidateQuestions"] == 1
+    assert summary["totals"]["knowledgeAnswered"] == 1
+    assert summary["coverage"] == {
+        "source": "automation_contact_events",
+        "events": 2,
+        "candidates": 1,
+    }
+    assert processed_details["total"] == 1
+    assert processed_details["items"][0]["id"] == "newer"
+    assert processed_details["items"][0]["action"] == "answer_question"
+    assert requested_details["total"] == 1
+    assert requested_details["items"][0]["id"] == "newer"
+
+
 def test_runtime_status_marks_old_heartbeats_stale_and_offline(tmp_path: Path) -> None:
     repository = AutomationMonitoringRepository(tmp_path / "monitoring.sqlite")
     service = AutomationMonitoringService(repository)
@@ -224,13 +278,14 @@ def test_contact_event_builder_applies_boss_resume_and_question_semantics() -> N
         occurred_at="2026-07-20T01:00:00+00:00",
     )
 
-    assert event.contact_key == "session|session-1|message|message-hash"
+    assert event.contact_key == "session|session-1"
     assert event.requested_resume is True
     assert event.resume_acquired is True
     assert event.resume_handling == "boss_request_verified_server_imap"
     assert event.candidate_name == "候选人甲"
     assert event.payload["sessionId"] == "session-1"
     assert event.payload["conversationId"] == "conversation-1"
+    assert event.payload["recentMessagesFingerprint"] == "message-hash"
 
 
 def _event(

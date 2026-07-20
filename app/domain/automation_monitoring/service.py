@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
@@ -24,18 +25,21 @@ class AutomationMonitoringService:
         job_type: str = "",
     ) -> dict[str, object]:
         start, end = _utc_bounds(date)
-        rows = self.repository.list_events(
+        raw_rows = self.repository.list_events(
             start=start.isoformat(),
             end=end.isoformat(),
             platform=platform,
             owner=owner,
             job_type=job_type,
         )
+        rows = _daily_candidate_rows(raw_rows)
         facet_rows = rows
         if platform or owner or job_type:
-            facet_rows = self.repository.list_events(
-                start=start.isoformat(),
-                end=end.isoformat(),
+            facet_rows = _daily_candidate_rows(
+                self.repository.list_events(
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                )
             )
         totals = _empty_counts()
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
@@ -51,7 +55,10 @@ class AutomationMonitoringService:
             )
             _accumulate(row, totals, seen)
             _accumulate(row, item, group_seen[group_key])
-        version = f"{len(rows)}:{max((str(row['updated_at']) for row in rows), default='')}"
+        version = (
+            f"{len(raw_rows)}:"
+            f"{max((str(row['updated_at']) for row in raw_rows), default='')}"
+        )
         return {
             "date": date,
             "timezone": "Asia/Shanghai",
@@ -59,7 +66,11 @@ class AutomationMonitoringService:
             "byJobPlatform": sorted(
                 grouped.values(), key=lambda item: (str(item["jobType"]), str(item["platform"]))
             ),
-            "coverage": {"source": "automation_contact_events", "events": len(rows)},
+            "coverage": {
+                "source": "automation_contact_events",
+                "events": len(raw_rows),
+                "candidates": len(rows),
+            },
             "facets": {
                 "owners": sorted({str(row["owner"]) for row in facet_rows if row["owner"]}),
                 "platforms": sorted(
@@ -85,12 +96,14 @@ class AutomationMonitoringService:
         page_size: int = 10,
     ) -> dict[str, object]:
         start, end = _utc_bounds(date)
-        rows = self.repository.list_events(
-            start=start.isoformat(),
-            end=end.isoformat(),
-            platform=platform,
-            owner=owner,
-            job_type=job_type,
+        rows = _daily_candidate_rows(
+            self.repository.list_events(
+                start=start.isoformat(),
+                end=end.isoformat(),
+                platform=platform,
+                owner=owner,
+                job_type=job_type,
+            )
         )
         filtered = _dedupe_details(rows, metric)
         safe_size = max(1, min(page_size, 100))
@@ -204,6 +217,89 @@ def _empty_counts() -> dict[str, int]:
         "businessResumeAcquisitions": 0,
         "anomalies": 0,
     }
+
+
+def _daily_candidate_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[_candidate_key(row)].append(row)
+
+    merged_rows: list[dict[str, object]] = []
+    flag_columns = (
+        "processed",
+        "sent_company_info",
+        "requested_resume",
+        "candidate_question",
+        "knowledge_answered",
+        "resume_acquired",
+        "anomaly",
+    )
+    fallback_columns = (
+        "owner",
+        "platform",
+        "candidate_name",
+        "job_type",
+        "resume_handling",
+        "resume_file_hash",
+    )
+    for candidate_key, candidate_rows in grouped.items():
+        ordered = sorted(
+            candidate_rows,
+            key=lambda row: (
+                str(row.get("occurred_at") or ""),
+                str(row.get("updated_at") or ""),
+                str(row.get("id") or ""),
+            ),
+            reverse=True,
+        )
+        latest = dict(ordered[0])
+        latest["contact_key"] = candidate_key
+        for column in flag_columns:
+            latest[column] = int(any(bool(row.get(column)) for row in ordered))
+        for column in fallback_columns:
+            if latest.get(column):
+                continue
+            latest[column] = next(
+                (row.get(column) for row in ordered if row.get(column)),
+                latest.get(column),
+            )
+        reasons: list[str] = []
+        for row in ordered:
+            reason = str(row.get("anomaly_reason") or "").strip()
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        if reasons:
+            latest["anomaly_reason"] = "; ".join(reasons)
+        merged_rows.append(latest)
+    return sorted(
+        merged_rows,
+        key=lambda row: (
+            str(row.get("occurred_at") or ""),
+            str(row.get("updated_at") or ""),
+            str(row.get("id") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def _candidate_key(row: dict[str, object]) -> str:
+    contact_key = str(row.get("contact_key") or "")
+    if contact_key.startswith("session|"):
+        parts = contact_key.split("|")
+        return "|".join(parts[:2]) if len(parts) >= 2 else contact_key
+    payload = row.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+    if isinstance(payload, dict):
+        session_id = str(payload.get("sessionId") or "")
+        if session_id:
+            return f"session|{session_id}"
+    return contact_key or str(row.get("id") or "")
 
 
 def _metric_key(row: dict[str, object], metric: str) -> str:
