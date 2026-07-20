@@ -59,7 +59,19 @@ def _assert_denied(
     }
 
 
-@pytest.mark.parametrize("tool_name", ("Bash", "apply_patch", "Edit", "Write"))
+@pytest.mark.parametrize(
+    "tool_name",
+    (
+        "Bash",
+        "shell",
+        "Shell",
+        "exec_command",
+        "unified_exec",
+        "apply_patch",
+        "Edit",
+        "Write",
+    ),
+)
 def test_denies_managed_local_mutation_tools(tool_name: str) -> None:
     completed = _run_hook(_event(tool_name))
 

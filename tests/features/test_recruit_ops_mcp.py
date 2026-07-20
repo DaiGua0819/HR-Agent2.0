@@ -4,7 +4,10 @@ import asyncio
 import importlib
 import io
 import json
+import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from types import ModuleType
 
@@ -87,7 +90,7 @@ def _request(
     server,
     method: str,
     *,
-    request_id: int = 1,
+    request_id: object = 1,
     params: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     message: dict[str, object] = {
@@ -105,7 +108,7 @@ def _call_tool(
     name: str,
     arguments: dict[str, object] | None = None,
     *,
-    request_id: int = 1,
+    request_id: object = 1,
 ) -> dict[str, object]:
     params: dict[str, object] = {"name": name}
     if arguments is not None:
@@ -206,7 +209,7 @@ def test_tools_list_exposes_only_narrow_schemas_and_accurate_annotations() -> No
         "properties": {
             "date": {
                 "type": "string",
-                "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
             }
         },
         "required": ["date"],
@@ -224,7 +227,7 @@ def test_tools_list_exposes_only_narrow_schemas_and_accurate_annotations() -> No
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
-            "openWorldHint": True,
+            "openWorldHint": False,
         }
     assert by_name["processing_start"]["annotations"] == {
         "readOnlyHint": False,
@@ -236,7 +239,7 @@ def test_tools_list_exposes_only_narrow_schemas_and_accurate_annotations() -> No
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": True,
+        "openWorldHint": False,
     }
 
 
@@ -351,6 +354,8 @@ def test_pause_and_read_only_tools_use_only_fixed_manager_operations() -> None:
         ("data_health", {"path": "C:/data"}),
         ("daily_report", {"date": "2026-07-20", "environment": "prod"}),
         ("daily_report", {"date": "2026-07-20 --timezone UTC"}),
+        ("daily_report", {"date": "２０２６-０７-２０"}),
+        ("daily_report", {"date": "2026-02-30"}),
     ],
 )
 def test_tool_calls_reject_all_non_schema_inputs(
@@ -381,6 +386,155 @@ def test_unknown_methods_and_tools_return_json_rpc_errors() -> None:
         "jsonrpc": "2.0",
         "id": 8,
         "error": {"code": -32602, "message": "Unknown tool: shell"},
+    }
+
+
+@pytest.mark.parametrize("request_id", (None, True, 1.25, {"nested": 1}))
+def test_invalid_mcp_request_ids_fail_closed(request_id: object) -> None:
+    server = _server(_FakeManager())
+
+    response = _request(server, "ping", request_id=request_id)
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        {"jsonrpc": "1.0", "id": {"nested": 1}, "method": "ping"},
+        {"jsonrpc": "2.0", "id": True, "method": 7},
+    ),
+)
+def test_malformed_envelopes_never_echo_invalid_request_ids(
+    message: dict[str, object],
+) -> None:
+    server = _server(_FakeManager())
+
+    response = asyncio.run(server.handle(message))
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }
+
+
+def test_initialize_requires_protocol_fields_and_allows_request_meta() -> None:
+    server = _server(_FakeManager())
+
+    invalid = _request(server, "initialize", params={})
+    valid = _request(
+        server,
+        "initialize",
+        request_id="init-1",
+        params={
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "codex", "version": "0.130.0"},
+            "_meta": {"traceId": "trace-1"},
+        },
+    )
+
+    assert invalid == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32602, "message": "Invalid params"},
+    }
+    assert valid is not None
+    assert valid["id"] == "init-1"
+    assert valid["result"]["protocolVersion"] == "2025-06-18"
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "codex",
+                "version": "0.130.0",
+                "title": 123,
+            },
+        },
+        {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"roots": "yes"},
+            "clientInfo": {"name": "codex", "version": "0.130.0"},
+        },
+    ),
+)
+def test_initialize_rejects_invalid_known_nested_fields(
+    params: dict[str, object],
+) -> None:
+    server = _server(_FakeManager())
+
+    response = _request(server, "initialize", params=params)
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32602, "message": "Invalid params"},
+    }
+
+
+def test_ping_list_and_tool_call_accept_valid_request_meta() -> None:
+    manager = _FakeManager()
+    server = _server(manager)
+
+    ping = _request(server, "ping", params={"_meta": {"progressToken": "ping"}})
+    listed = _request(
+        server,
+        "tools/list",
+        request_id=2,
+        params={"_meta": {"progressToken": "list"}},
+    )
+    health = _request(
+        server,
+        "tools/call",
+        request_id=3,
+        params={
+            "name": "data_health",
+            "arguments": {},
+            "_meta": {"progressToken": "health"},
+        },
+    )
+
+    assert ping == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert listed is not None
+    assert listed["id"] == 2
+    assert health is not None
+    assert health["id"] == 3
+    assert manager.calls == ["data_health"]
+
+
+def test_non_json_numbers_are_rejected_and_never_emitted() -> None:
+    manager = _FakeManager()
+    manager.health_result = {"ok": True, "score": float("nan")}
+    server = _server(manager)
+
+    parsed = asyncio.run(server.handle_line('{"jsonrpc":"2.0","id":NaN,"method":"ping"}'))
+    response = _call_tool(server, "data_health")
+
+    assert parsed is not None
+    assert json.loads(parsed) == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32700, "message": "Parse error"},
+    }
+    assert response["result"] == {
+        "content": [
+            {
+                "type": "text",
+                "text": '{"ok":false,"error":"tool_result_not_json"}',
+            }
+        ],
+        "structuredContent": {"ok": False, "error": "tool_result_not_json"},
+        "isError": True,
     }
 
 
@@ -444,12 +598,151 @@ def test_stdio_server_emits_one_json_response_per_request_line() -> None:
 
     lines = output_stream.getvalue().splitlines()
     assert len(lines) == 2
-    assert json.loads(lines[0]) == {"jsonrpc": "2.0", "id": 1, "result": {}}
-    assert json.loads(lines[1]) == {
+    responses = {response["id"]: response for response in map(json.loads, lines)}
+    assert responses[1] == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert responses[None] == {
         "jsonrpc": "2.0",
         "id": None,
         "error": {"code": -32700, "message": "Parse error"},
     }
+
+
+def test_stdio_server_handles_pause_and_ping_while_start_is_running() -> None:
+    class _BlockingManager(_FakeManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+
+        async def run_batch(self) -> AgentManagerBatchResult:
+            self.calls.append("run_batch")
+            await self.release.wait()
+            return self.batch_result
+
+        async def request_stop(self, reason: str) -> None:
+            self.calls.append(("request_stop", reason))
+            self.release.set()
+
+    manager = _BlockingManager()
+    server = _server(manager)
+    input_stream = io.StringIO(
+        "\n".join(
+            json.dumps(message)
+            for message in (
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "processing_start", "arguments": {}},
+                },
+                {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "processing_pause", "arguments": {}},
+                },
+            )
+        )
+        + "\n"
+    )
+    output_stream = io.StringIO()
+
+    asyncio.run(
+        asyncio.wait_for(
+            server.serve(input_stream=input_stream, output_stream=output_stream),
+            timeout=1,
+        )
+    )
+
+    responses = {
+        response["id"]: response
+        for response in map(json.loads, output_stream.getvalue().splitlines())
+    }
+    assert responses[2] == {"jsonrpc": "2.0", "id": 2, "result": {}}
+    assert responses[3]["result"]["structuredContent"] == {
+        "ok": True,
+        "status": "pause_requested",
+    }
+    assert responses[1]["result"]["structuredContent"]["status"] == "complete"
+    assert ("request_stop", "feishu_admin_pause") in manager.calls
+
+
+def test_pause_during_runtime_start_prevents_batch_launch() -> None:
+    class _StartupBlockingManager(_FakeManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_entered = asyncio.Event()
+            self.release_start = asyncio.Event()
+
+        async def start_runtime(self) -> None:
+            self.calls.append("start_runtime")
+            self.start_entered.set()
+            await self.release_start.wait()
+
+        async def request_stop(self, reason: str) -> None:
+            self.calls.append(("request_stop", reason))
+            self.release_start.set()
+
+    async def scenario() -> tuple[object, object, list[object]]:
+        manager = _StartupBlockingManager()
+        service = _mcp_module().RecruitmentOpsService(manager)
+        start_task = asyncio.create_task(service.call_tool("processing_start", {}))
+        await manager.start_entered.wait()
+        pause_result = await service.call_tool("processing_pause", {})
+        start_result = await asyncio.wait_for(start_task, timeout=1)
+        return start_result, pause_result, manager.calls
+
+    start_result, pause_result, calls = asyncio.run(scenario())
+
+    assert start_result.payload == {
+        "ok": True,
+        "status": "pause_requested_before_batch",
+        "processedContacts": 0,
+        "businessResumeAcquisitions": 0,
+        "resumeRequestsWaiting": 0,
+        "anomalies": 0,
+        "anomalyReasons": [],
+        "byPlatform": {},
+    }
+    assert pause_result.payload == {"ok": True, "status": "pause_requested"}
+    assert "run_batch" not in calls
+
+
+def test_second_processing_start_is_rejected_while_batch_is_active() -> None:
+    class _ActiveBatchManager(_FakeManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.run_entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run_batch(self) -> AgentManagerBatchResult:
+            self.calls.append("run_batch")
+            self.run_entered.set()
+            await self.release.wait()
+            return self.batch_result
+
+    async def scenario() -> tuple[object, object, list[object]]:
+        manager = _ActiveBatchManager()
+        service = _mcp_module().RecruitmentOpsService(manager)
+        first_task = asyncio.create_task(service.call_tool("processing_start", {}))
+        await manager.run_entered.wait()
+        second_result = await asyncio.wait_for(
+            service.call_tool("processing_start", {}),
+            timeout=0.2,
+        )
+        manager.release.set()
+        first_result = await first_task
+        return first_result, second_result, manager.calls
+
+    first_result, second_result, calls = asyncio.run(scenario())
+
+    assert first_result.is_error is False
+    assert second_result == _mcp_module().ToolExecution(
+        {"ok": False, "error": "processing_already_running"},
+        is_error=True,
+    )
+    assert calls.count("start_runtime") == 1
+    assert calls.count("run_batch") == 1
 
 
 def test_launcher_accepts_only_validated_launch_configuration(
@@ -489,6 +782,55 @@ def test_launcher_accepts_only_validated_launch_configuration(
         with pytest.raises(SystemExit):
             parser.parse_args(argv)
     assert capsys.readouterr().out == ""
+
+
+def test_launcher_forces_real_stdio_pipes_to_utf8(tmp_path: Path) -> None:
+    topology = tmp_path / "topology.json"
+    topology.write_text("{}", encoding="utf-8")
+    wrapper = textwrap.dedent(
+        """
+        import os
+        import scripts.run_recruit_ops_mcp as launcher
+        from app.features.recruit_ops_mcp.server import RecruitmentOpsService
+
+        class Manager:
+            async def data_health(self):
+                return {"状态": "正常"}
+
+        launcher.build_service = lambda args: RecruitmentOpsService(Manager())
+        raise SystemExit(launcher.main(["--topology", os.environ["TEST_TOPOLOGY"]]))
+        """
+    )
+    request = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "data_health", "arguments": {}},
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "cp936",
+        "PYTHONUTF8": "0",
+        "TEST_TOPOLOGY": str(topology),
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-c", wrapper],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        input=request,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    response = json.loads(completed.stdout.decode("utf-8"))
+    assert response["result"]["structuredContent"] == {"状态": "正常"}
 
 
 def test_launcher_constructs_sanitized_client_and_serves_json_only(

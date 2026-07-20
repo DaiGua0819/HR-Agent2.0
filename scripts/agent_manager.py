@@ -681,6 +681,7 @@ def launch_process(
 
 
 def start_runtime(topology: dict[str, Any], *, adopt_running: bool) -> dict[str, Any]:
+    clear_stop(runtime_dir(topology) / "stop.requested")
     records: dict[str, Any] = {"startedAt": now_iso(), "projectRoot": topology["projectRoot"]}
     for item in topology["owners"]:
         cdp = cdp_inventory(item)
@@ -1019,6 +1020,7 @@ def _run_guarded(
     max_contacts: int,
     max_anomalies: int,
     sleep_seconds: float,
+    preserve_stop: bool = False,
 ) -> dict[str, Any]:
     check = preflight(topology, skipped=skipped, require_runtime=True)
     if not check["ok"]:
@@ -1033,7 +1035,8 @@ def _run_guarded(
     if snapshot_database_path is not None:
         ensure_processing_snapshot_table(snapshot_database_path)
     stop_path = state_dir / "stop.requested"
-    clear_stop(stop_path)
+    if not preserve_stop:
+        clear_stop(stop_path)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_path = state_dir / "runs" / f"{run_id}.jsonl"
     current_path = state_dir / "current_run.json"
@@ -1302,6 +1305,7 @@ def run_guarded(
     max_contacts: int,
     max_anomalies: int,
     sleep_seconds: float,
+    preserve_stop: bool = False,
 ) -> dict[str, Any]:
     state_dir = runtime_dir(topology)
     with AgentManagerRunLock(state_dir / "run.lock"):
@@ -1312,6 +1316,7 @@ def run_guarded(
             max_contacts=max_contacts,
             max_anomalies=max_anomalies,
             sleep_seconds=sleep_seconds,
+            preserve_stop=preserve_stop,
         )
 
 
@@ -1765,6 +1770,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--max-contacts", type=int, default=20)
     run_parser.add_argument("--max-anomalies", type=int, default=0)
     run_parser.add_argument("--sleep", type=float, default=2.0)
+    run_parser.add_argument("--preserve-stop", action="store_true")
 
     status_parser = sub.add_parser("status")
     status_parser.add_argument("--tail", type=int, default=8)
@@ -1814,6 +1820,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_contacts=args.max_contacts,
                 max_anomalies=args.max_anomalies,
                 sleep_seconds=args.sleep,
+                preserve_stop=args.preserve_stop,
             )
             print_json(result)
             return 0 if result.get("status") == "complete" else 3

@@ -8,6 +8,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Protocol
@@ -33,7 +34,7 @@ _TRANSIENT_ANOMALY_PREFIXES = (
     "cdp_unavailable",
     "target_closed",
 )
-_REPORT_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+_REPORT_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ class AgentManagerSubprocessClient:
         ]
         for target in self.skip_targets:
             arguments.extend(("--skip", target))
+        arguments.append("--preserve-stop")
         result = await self._execute(
             *arguments,
             allowed_returncodes={0, 3},
@@ -206,7 +208,7 @@ class AgentManagerSubprocessClient:
         )
 
     async def daily_report(self, date_text: str) -> dict[str, object]:
-        if not isinstance(date_text, str) or _REPORT_DATE_PATTERN.fullmatch(date_text) is None:
+        if not _is_report_date(date_text):
             raise ValueError("invalid_agent_manager_report_date")
         return await self._execute_json(
             "daily-report",
@@ -228,8 +230,8 @@ class AgentManagerSubprocessClient:
             allowed_returncodes=allowed_returncodes,
         )
         try:
-            value = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
+            value = json.loads(result.stdout, parse_constant=_reject_json_constant)
+        except (json.JSONDecodeError, ValueError) as exc:
             raise RuntimeError(invalid_json_error) from exc
         if not isinstance(value, dict):
             raise RuntimeError(invalid_payload_error)
@@ -698,6 +700,20 @@ async def _run_manager_command(
         stdout=stdout.decode("utf-8", errors="replace"),
         stderr=stderr.decode("utf-8", errors="replace"),
     )
+
+
+def _is_report_date(value: object) -> bool:
+    if not isinstance(value, str) or _REPORT_DATE_PATTERN.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_json_constant(value: str) -> object:
+    raise ValueError(f"non_json_constant:{value}")
 
 
 def _manager_environment(

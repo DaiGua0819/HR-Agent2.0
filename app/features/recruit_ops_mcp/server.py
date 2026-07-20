@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date
 from typing import Protocol, TextIO
 
 from app.features.feishu_bot.runtime_control import (
@@ -18,17 +20,17 @@ MCP_PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "recruit-ops-mcp"
 SERVER_VERSION = "1.0.0"
 
-_REPORT_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+_REPORT_DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 _EMPTY_INPUT_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {},
     "additionalProperties": False,
 }
-_READ_ONLY_ANNOTATIONS: dict[str, object] = {
+_LOCAL_READ_ONLY_ANNOTATIONS: dict[str, object] = {
     "readOnlyHint": True,
     "destructiveHint": False,
     "idempotentHint": True,
-    "openWorldHint": True,
+    "openWorldHint": False,
 }
 
 TOOL_DEFINITIONS: tuple[dict[str, object], ...] = (
@@ -37,7 +39,7 @@ TOOL_DEFINITIONS: tuple[dict[str, object], ...] = (
         "description": "Run the fixed recruitment runtime preflight checks.",
         "inputSchema": _EMPTY_INPUT_SCHEMA,
         "outputSchema": {"type": "object"},
-        "annotations": _READ_ONLY_ANNOTATIONS,
+        "annotations": _LOCAL_READ_ONLY_ANNOTATIONS,
     },
     {
         "name": "processing_start",
@@ -60,7 +62,7 @@ TOOL_DEFINITIONS: tuple[dict[str, object], ...] = (
             "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
-            "openWorldHint": True,
+            "openWorldHint": False,
         },
     },
     {
@@ -68,14 +70,14 @@ TOOL_DEFINITIONS: tuple[dict[str, object], ...] = (
         "description": "Read the parsed recruitment processing status.",
         "inputSchema": _EMPTY_INPUT_SCHEMA,
         "outputSchema": {"type": "object"},
-        "annotations": _READ_ONLY_ANNOTATIONS,
+        "annotations": _LOCAL_READ_ONLY_ANNOTATIONS,
     },
     {
         "name": "data_health",
         "description": "Read local recruitment data and synchronization health.",
         "inputSchema": _EMPTY_INPUT_SCHEMA,
         "outputSchema": {"type": "object"},
-        "annotations": _READ_ONLY_ANNOTATIONS,
+        "annotations": _LOCAL_READ_ONLY_ANNOTATIONS,
     },
     {
         "name": "daily_report",
@@ -85,14 +87,14 @@ TOOL_DEFINITIONS: tuple[dict[str, object], ...] = (
             "properties": {
                 "date": {
                     "type": "string",
-                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                    "pattern": r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                 }
             },
             "required": ["date"],
             "additionalProperties": False,
         },
         "outputSchema": {"type": "object"},
-        "annotations": _READ_ONLY_ANNOTATIONS,
+        "annotations": _LOCAL_READ_ONLY_ANNOTATIONS,
     },
 )
 
@@ -127,6 +129,9 @@ class RecruitmentOpsService:
 
     def __init__(self, manager: RecruitmentOpsManager) -> None:
         self.manager = manager
+        self._start_lock = asyncio.Lock()
+        self._runtime_starting = False
+        self._pause_during_start = asyncio.Event()
 
     async def call_tool(
         self,
@@ -138,11 +143,26 @@ class RecruitmentOpsService:
             payload = await self.manager.preflight()
             return ToolExecution(payload, is_error=payload.get("ok") is False)
         if name == "processing_start":
-            await self.manager.start_runtime()
-            batch = await self.manager.run_batch()
-            payload = _completion_summary(batch)
-            return ToolExecution(payload, is_error=payload["ok"] is False)
+            if self._start_lock.locked():
+                return ToolExecution(
+                    {"ok": False, "error": "processing_already_running"},
+                    is_error=True,
+                )
+            async with self._start_lock:
+                self._pause_during_start.clear()
+                self._runtime_starting = True
+                try:
+                    await self.manager.start_runtime()
+                finally:
+                    self._runtime_starting = False
+                if self._pause_during_start.is_set():
+                    return ToolExecution(_paused_before_batch_summary())
+                batch = await self.manager.run_batch()
+                payload = _completion_summary(batch)
+                return ToolExecution(payload, is_error=payload["ok"] is False)
         if name == "processing_pause":
+            if self._runtime_starting:
+                self._pause_during_start.set()
             await self.manager.request_stop("feishu_admin_pause")
             return ToolExecution({"ok": True, "status": "pause_requested"})
         if name == "processing_status":
@@ -176,15 +196,19 @@ class RecruitmentOpsMcpServer:
 
         has_id = "id" in message
         request_id = message.get("id") if has_id else None
+        response_id = request_id if _valid_request_id(request_id) else None
         if message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
-            return _error_response(request_id, -32600, "Invalid Request")
+            return _error_response(response_id, -32600, "Invalid Request")
         if not has_id:
             return None
+        if response_id is None:
+            return _error_response(None, -32600, "Invalid Request")
+        request_id = response_id
 
         method = message["method"]
         params = message.get("params", {})
         if method == "initialize":
-            if not isinstance(params, dict):
+            if not _valid_initialize_params(params):
                 return _error_response(request_id, -32602, "Invalid params")
             return _success_response(
                 request_id,
@@ -195,11 +219,11 @@ class RecruitmentOpsMcpServer:
                 },
             )
         if method == "ping":
-            if not _empty_params(params):
+            if not _params_with_meta_only(params):
                 return _error_response(request_id, -32602, "Invalid params")
             return _success_response(request_id, {})
         if method == "tools/list":
-            if not _empty_params(params):
+            if not _params_with_meta_only(params):
                 return _error_response(request_id, -32602, "Invalid params")
             return _success_response(request_id, {"tools": deepcopy(TOOL_DEFINITIONS)})
         if method == "tools/call":
@@ -210,30 +234,55 @@ class RecruitmentOpsMcpServer:
         if not line.strip():
             return None
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            message = json.loads(line, parse_constant=_reject_json_constant)
+        except (json.JSONDecodeError, ValueError):
             response = _error_response(None, -32700, "Parse error")
         else:
             response = await self.handle(message)
         if response is None:
             return None
-        return _json_text(response)
+        try:
+            return _json_text(response)
+        except (TypeError, ValueError):
+            return _json_text(_error_response(None, -32603, "Internal error"))
 
     async def serve(self, *, input_stream: TextIO, output_stream: TextIO) -> None:
-        for line in input_stream:
-            response = await self.handle_line(line)
+        write_lock = asyncio.Lock()
+        tasks: set[asyncio.Task[None]] = set()
+
+        async def dispatch(line: str) -> None:
+            try:
+                response = await self.handle_line(line)
+            except Exception:
+                response = _json_text(_error_response(None, -32603, "Internal error"))
             if response is None:
-                continue
-            output_stream.write(response)
-            output_stream.write("\n")
-            output_stream.flush()
+                return
+            async with write_lock:
+                output_stream.write(response)
+                output_stream.write("\n")
+                output_stream.flush()
+
+        while True:
+            line = await asyncio.to_thread(input_stream.readline)
+            if line == "":
+                break
+            task = asyncio.create_task(dispatch(line))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def _handle_tool_call(
         self,
         request_id: object,
         params: object,
     ) -> dict[str, object]:
-        if not isinstance(params, dict) or not set(params) <= {"name", "arguments"}:
+        if (
+            not isinstance(params, dict)
+            or not set(params) <= {"name", "arguments", "_meta"}
+            or not _valid_meta(params)
+        ):
             return _error_response(request_id, -32602, "Invalid params")
         name = params.get("name")
         arguments = params.get("arguments", {})
@@ -250,9 +299,16 @@ class RecruitmentOpsMcpServer:
                 {"ok": False, "error": _public_error(exc)},
                 is_error=True,
             )
+        try:
+            result = _tool_result(execution.payload, is_error=execution.is_error)
+        except (TypeError, ValueError):
+            result = _tool_result(
+                {"ok": False, "error": "tool_result_not_json"},
+                is_error=True,
+            )
         return _success_response(
             request_id,
-            _tool_result(execution.payload, is_error=execution.is_error),
+            result,
         )
 
 
@@ -265,7 +321,7 @@ def _validate_tool_arguments(name: str, arguments: Mapping[str, object]) -> None
         if set(arguments) != {"date"}:
             raise InvalidToolArguments("daily_report_date_required")
         date_text = arguments["date"]
-        if not isinstance(date_text, str) or _REPORT_DATE_PATTERN.fullmatch(date_text) is None:
+        if not _is_report_date(date_text):
             raise InvalidToolArguments("daily_report_date_invalid")
         return
     raise UnknownToolError(name)
@@ -294,6 +350,19 @@ def _completion_summary(batch: AgentManagerBatchResult) -> dict[str, object]:
     }
 
 
+def _paused_before_batch_summary() -> dict[str, object]:
+    return {
+        "ok": True,
+        "status": "pause_requested_before_batch",
+        "processedContacts": 0,
+        "businessResumeAcquisitions": 0,
+        "resumeRequestsWaiting": 0,
+        "anomalies": 0,
+        "anomalyReasons": [],
+        "byPlatform": {},
+    }
+
+
 def _tool_result(payload: dict[str, object], *, is_error: bool) -> dict[str, object]:
     return {
         "content": [{"type": "text", "text": _json_text(payload)}],
@@ -318,8 +387,79 @@ def _error_response(
     }
 
 
-def _empty_params(value: object) -> bool:
-    return isinstance(value, dict) and not value
+def _valid_request_id(value: object) -> bool:
+    return isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
+
+
+def _valid_initialize_params(value: object) -> bool:
+    if not isinstance(value, dict) or not _valid_meta(value):
+        return False
+    required = {"protocolVersion", "capabilities", "clientInfo"}
+    if not required <= set(value):
+        return False
+    client_info = value.get("clientInfo")
+    return (
+        isinstance(value.get("protocolVersion"), str)
+        and bool(str(value["protocolVersion"]).strip())
+        and _valid_client_capabilities(value.get("capabilities"))
+        and _valid_client_info(client_info)
+    )
+
+
+def _valid_client_info(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not isinstance(value.get("name"), str) or not str(value["name"]).strip():
+        return False
+    if not isinstance(value.get("version"), str) or not str(value["version"]).strip():
+        return False
+    for key in ("title", "websiteUrl"):
+        if key in value and not isinstance(value.get(key), str):
+            return False
+    icons = value.get("icons")
+    if icons is not None:
+        if not isinstance(icons, list):
+            return False
+        for icon in icons:
+            if not isinstance(icon, dict) or not isinstance(icon.get("src"), str):
+                return False
+    return True
+
+
+def _valid_client_capabilities(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for key in ("roots", "sampling", "elicitation", "experimental"):
+        if key in value and not isinstance(value.get(key), dict):
+            return False
+    roots = value.get("roots")
+    if isinstance(roots, dict) and "listChanged" in roots and not isinstance(
+        roots.get("listChanged"), bool
+    ):
+        return False
+    return True
+
+
+def _params_with_meta_only(value: object) -> bool:
+    return isinstance(value, dict) and set(value) <= {"_meta"} and _valid_meta(value)
+
+
+def _valid_meta(value: Mapping[str, object]) -> bool:
+    return "_meta" not in value or isinstance(value.get("_meta"), dict)
+
+
+def _is_report_date(value: object) -> bool:
+    if not isinstance(value, str) or _REPORT_DATE_PATTERN.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_json_constant(value: str) -> object:
+    raise ValueError(f"non_json_constant:{value}")
 
 
 def _public_error(error: Exception) -> str:
@@ -328,4 +468,9 @@ def _public_error(error: Exception) -> str:
 
 
 def _json_text(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )

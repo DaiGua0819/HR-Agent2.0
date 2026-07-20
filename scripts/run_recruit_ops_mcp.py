@@ -65,12 +65,17 @@ def main(
     input_stream: TextIO | None = None,
     output_stream: TextIO | None = None,
 ) -> int:
+    resolved_input = input_stream or sys.stdin
+    resolved_output = output_stream or sys.stdout
+    _configure_text_stream(resolved_input, errors="strict")
+    _configure_text_stream(resolved_output, errors="backslashreplace")
+    _configure_text_stream(sys.stderr, errors="backslashreplace")
     args = build_parser().parse_args(argv)
     server = RecruitmentOpsMcpServer(build_service(args))
     asyncio.run(
         server.serve(
-            input_stream=input_stream or sys.stdin,
-            output_stream=output_stream or sys.stdout,
+            input_stream=resolved_input,
+            output_stream=resolved_output,
         )
     )
     return 0
@@ -81,6 +86,16 @@ def _existing_file(value: str) -> Path:
     if not path.is_file():
         raise argparse.ArgumentTypeError("topology must be an existing file")
     return path
+
+
+def _configure_text_stream(stream: TextIO, *, errors: str) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(encoding="utf-8", errors=errors)
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def _non_negative_int(value: str) -> int:

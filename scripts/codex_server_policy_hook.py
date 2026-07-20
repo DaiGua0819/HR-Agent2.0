@@ -3,7 +3,18 @@ from __future__ import annotations
 import json
 import sys
 
-DENIED_LOCAL_TOOLS = frozenset({"Bash", "apply_patch", "Edit", "Write"})
+DENIED_LOCAL_TOOLS = frozenset(
+    {
+        "Bash",
+        "shell",
+        "Shell",
+        "exec_command",
+        "unified_exec",
+        "apply_patch",
+        "Edit",
+        "Write",
+    }
+)
 ALLOWED_MCP_TOOLS = frozenset(
     {
         "mcp__codegraph__codegraph_explore",

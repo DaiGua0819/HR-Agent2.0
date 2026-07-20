@@ -258,6 +258,66 @@ class AgentManagerTests(unittest.TestCase):
             agent_manager.clear_stop(path)
             self.assertFalse(path.exists())
 
+    def test_start_runtime_clears_stale_stop_before_adoption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            stop_path = runtime_root / "stop.requested"
+            agent_manager.request_stop(stop_path, reason="previous_run")
+            topology = {
+                "projectRoot": directory,
+                "owners": [],
+                "controlPlane": {"port": 18081},
+            }
+
+            with (
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(
+                    agent_manager,
+                    "listener_info",
+                    return_value={"pid": 123, "commandLine": "run_control_plane.py"},
+                ),
+                patch.object(agent_manager, "control_health", return_value={"status": "ok"}),
+            ):
+                agent_manager.start_runtime(topology, adopt_running=True)
+
+            self.assertFalse(stop_path.exists())
+
+    def test_run_guarded_can_preserve_a_pause_requested_before_batch_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory) / "agent-manager"
+            stop_path = runtime_root / "stop.requested"
+            agent_manager.request_stop(stop_path, reason="pause_during_start")
+            topology = {
+                "controlPlane": {"port": 18081},
+                "owners": [{"owner": "和新红"}],
+            }
+            dispatched: list[str] = []
+
+            def fake_http_json(url: str, *, method: str, timeout: float) -> dict[str, object]:
+                del method, timeout
+                dispatched.append(url)
+                return {"accepted": True, "processed": 0}
+
+            with (
+                patch.object(agent_manager, "preflight", return_value={"ok": True}),
+                patch.object(agent_manager, "runtime_dir", return_value=runtime_root),
+                patch.object(agent_manager, "cdp_inventory", return_value={"blockers": []}),
+                patch.object(agent_manager, "worker_status", return_value={"agentBusy": False}),
+                patch.object(agent_manager, "http_json", side_effect=fake_http_json),
+            ):
+                result = agent_manager.run_guarded(
+                    topology,
+                    targets=[("和新红", "boss")],
+                    skipped=set(),
+                    max_contacts=0,
+                    max_anomalies=0,
+                    sleep_seconds=0,
+                    preserve_stop=True,
+                )
+
+            self.assertEqual(result["status"], "stop_requested")
+            self.assertEqual(dispatched, [])
+
     def test_run_guarded_processes_distinct_owners_concurrently(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime_root = Path(directory) / "agent-manager"

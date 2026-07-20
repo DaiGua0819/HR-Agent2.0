@@ -758,7 +758,7 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
     assert len(batch.events) == 1
     assert batch.skipped_targets == ("宋峰峰:job51",)
     assert calls[0][-2:] == ("start", "--adopt-running")
-    assert calls[1][-9:] == (
+    assert calls[1][-10:] == (
         "run",
         "--max-contacts",
         "0",
@@ -768,6 +768,7 @@ def test_agent_manager_client_uses_fixed_argv_and_reads_sanitized_run_log(
         "1.0",
         "--skip",
         "宋峰峰:job51",
+        "--preserve-stop",
     )
     assert calls[-1][-3:] == ("stop", "--reason", "feishu_admin_pause")
     assert all("启动处理程序" not in part for call in calls for part in call)
@@ -864,7 +865,15 @@ def test_agent_manager_client_exposes_fixed_read_only_json_commands(
 
 @pytest.mark.parametrize(
     "date_text",
-    ["2026-7-20", "20-07-2026", "2026-07-20 --timezone UTC", ""],
+    [
+        "2026-7-20",
+        "20-07-2026",
+        "2026-07-20 --timezone UTC",
+        "２０２６-０７-２０",
+        "2026-02-30",
+        "2026-13-01",
+        "",
+    ],
 )
 def test_agent_manager_client_rejects_non_iso_daily_report_dates(
     tmp_path: Path,
