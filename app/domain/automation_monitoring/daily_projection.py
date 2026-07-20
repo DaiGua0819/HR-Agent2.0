@@ -33,7 +33,7 @@ _ANOMALY_MARKERS = (
     "security_verification",
     "timeout",
 )
-_ANOMALY_STAGES = {"unconfigured_position"}
+_ANOMALY_STAGES = {"account_abnormal", "unconfigured_position"}
 
 
 @dataclass(frozen=True)
@@ -160,6 +160,23 @@ def build_daily_projections(
         for session_id, session in sessions.items()
         if session.get("platform_conversation_id")
     }
+    candidate_session_ids: dict[tuple[str, str, str, str], set[str]] = {}
+    for session_id, session in sessions.items():
+        candidate_key = (
+            str(session.get("platform") or ""),
+            str(session.get("owner") or ""),
+            str(session.get("candidate_name") or ""),
+            canonical_resume_job_type(
+                _first_text(session.get("applied_position"), session.get("position"))
+            ),
+        )
+        if all(candidate_key):
+            candidate_session_ids.setdefault(candidate_key, set()).add(session_id)
+    sessions_by_candidate = {
+        key: next(iter(session_ids))
+        for key, session_ids in candidate_session_ids.items()
+        if len(session_ids) == 1
+    }
     projections: dict[tuple[date, str], _Projection] = {}
     exact_keys: set[tuple[date, str]] = set()
     fallback_keys: set[tuple[date, str]] = set()
@@ -204,6 +221,18 @@ def build_daily_projections(
             session.get("applied_position"),
             session.get("position"),
         )
+        if not session_id:
+            session_id = sessions_by_candidate.get(
+                (
+                    platform,
+                    owner,
+                    candidate_name,
+                    canonical_resume_job_type(job_type),
+                ),
+                "",
+            )
+            if session_id:
+                session = sessions.get(session_id, {})
         identity = _stable_identity(
             session_id=session_id,
             platform=platform,

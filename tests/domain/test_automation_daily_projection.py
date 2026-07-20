@@ -145,6 +145,29 @@ def test_projection_marks_failed_session_fallback_as_anomaly(tmp_path: Path) -> 
     assert event.anomaly_reason == "request_resume_action_failed"
 
 
+def test_projection_marks_account_abnormal_session_fallback_as_anomaly(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    _insert_session(
+        database,
+        session_id="account-abnormal",
+        next_action="wait",
+        stage="account_abnormal",
+        updated_at="2026-07-20T02:00:00+00:00",
+    )
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=tmp_path / "missing-runs",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert exported.events[0].anomaly is True
+    assert exported.events[0].anomaly_reason == "account_abnormal"
+
+
 def test_projection_falls_back_to_candidate_identity_without_session(
     tmp_path: Path,
 ) -> None:
@@ -185,6 +208,45 @@ def test_projection_falls_back_to_candidate_identity_without_session(
     assert event.requested_resume is True
     assert exported.coverage["fallbackCandidates"] == 1
     assert exported.coverage["unresolvedRecords"] == 0
+
+
+def test_projection_matches_candidate_fallback_to_existing_unique_session(
+    tmp_path: Path,
+) -> None:
+    database = _database(tmp_path)
+    _insert_session(
+        database,
+        session_id="existing-session",
+        candidate_name="Candidate A",
+        job_type="AI product manager",
+        updated_at="2026-07-20T02:00:00+00:00",
+    )
+    record = _contact_result(
+        timestamp="2026-07-20T02:00:00+00:00",
+        session_id="",
+        action="request_resume",
+        stage="direct_resume",
+    )
+    record["summary"].pop("canonicalSessionId")
+    record["summary"].pop("conversationId")
+    record["response"].pop("canonicalSessionId")
+    record["response"].pop("conversationId")
+    record["response"]["candidate"] = {"name": "Candidate A"}
+    record["response"]["appliedPosition"] = "AI product manager"
+    runs = tmp_path / "runs"
+    _write_run(runs, [record])
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=runs,
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert len(exported.events) == 1
+    assert exported.events[0].contact_key == "session|existing-session"
+    assert exported.coverage["exactCandidates"] == 1
+    assert exported.coverage["fallbackCandidates"] == 0
 
 
 def test_projection_resolves_legacy_manager_conversation_to_session(
