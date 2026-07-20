@@ -1902,7 +1902,7 @@ h3 { font-size: 15px; }
 }
 .monitoring-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 .monitoring-kpi {
@@ -1942,11 +1942,12 @@ h3 { font-size: 15px; }
 .monitoring-kpi--danger { border-top: 3px solid #b91c1c; }
 .monitoring-dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(430px, 0.95fr);
   gap: 14px;
   min-height: 0;
 }
-.monitoring-job-panel {
+.monitoring-job-panel,
+.monitoring-chart-panel {
   border-radius: 8px;
 }
 .monitoring-job-rows {
@@ -1955,7 +1956,7 @@ h3 { font-size: 15px; }
 }
 .monitoring-job-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 58px 58px 58px;
+  grid-template-columns: minmax(240px, 1fr) 76px 76px;
   align-items: center;
   width: 100%;
   min-height: 52px;
@@ -1997,11 +1998,154 @@ h3 { font-size: 15px; }
 .monitoring-job-stat {
   display: grid;
   justify-items: end;
-  gap: 2px;
+  gap: 3px;
 }
-.monitoring-job-stat small { color: var(--muted); font-size: 10px; }
-.monitoring-job-stat strong { font-size: 14px; }
-.monitoring-job-stat--danger strong { color: var(--danger); }
+.monitoring-job-stat small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.monitoring-job-stat strong {
+  font-size: 17px;
+  line-height: 1.1;
+}
+.monitoring-job-chart-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 210px) minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  min-height: 300px;
+  padding: 18px;
+}
+.monitoring-job-chart {
+  --monitoring-chart-gradient: #eef2f7;
+  position: relative;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  width: min(210px, 100%);
+  aspect-ratio: 1;
+  overflow: visible;
+  border-radius: 50%;
+  background: #eef2f7;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+.monitoring-job-chart::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--monitoring-chart-gradient);
+  mask: conic-gradient(#000 0 var(--monitoring-chart-reveal, 100%), transparent 0 100%);
+  -webkit-mask: conic-gradient(#000 0 var(--monitoring-chart-reveal, 100%), transparent 0 100%);
+  will-change: --monitoring-chart-reveal;
+}
+.monitoring-job-chart::after {
+  content: "";
+  z-index: 2;
+  width: 46%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+.monitoring-job-chart > span {
+  position: absolute;
+  z-index: 3;
+  color: var(--ts-on-surface);
+  font-size: 25px;
+  font-weight: 800;
+}
+.monitoring-job-chart-slices {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  mask: conic-gradient(#000 0 var(--monitoring-chart-reveal, 100%), transparent 0 100%);
+  -webkit-mask: conic-gradient(#000 0 var(--monitoring-chart-reveal, 100%), transparent 0 100%);
+  filter: drop-shadow(0 8px 18px rgba(15, 23, 42, 0.1));
+  will-change: --monitoring-chart-reveal;
+}
+.monitoring-job-chart-slice {
+  cursor: help;
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: 0.75;
+  transition: opacity 180ms ease, filter 180ms ease, stroke-width 180ms ease;
+}
+.monitoring-job-chart-slice:hover,
+.monitoring-job-chart-slice.is-active {
+  opacity: 0.96;
+  filter: saturate(1.08) brightness(1.03);
+  stroke-width: 1.45;
+}
+.monitoring-job-chart-tooltip {
+  position: absolute;
+  z-index: 4;
+  width: max-content;
+  min-width: 140px;
+  max-width: 220px;
+  padding: 7px 9px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 7px;
+  color: #243244;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, calc(-100% - 12px)) scale(0.98);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.monitoring-job-chart-tooltip.is-visible {
+  opacity: 1;
+  transform: translate(-50%, calc(-100% - 12px)) scale(1);
+}
+.monitoring-job-chart-legend {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.monitoring-job-chart-legend-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 13px;
+}
+.monitoring-job-chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+.monitoring-job-chart-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitoring-job-chart-legend-row strong {
+  color: var(--ts-on-surface);
+  font-size: 12px;
+  white-space: nowrap;
+}
+@property --monitoring-chart-reveal {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+@keyframes monitoringJobChartDraw {
+  from { --monitoring-chart-reveal: 0%; }
+  to { --monitoring-chart-reveal: 100%; }
+}
+.monitoring-job-chart.is-animating::before,
+.monitoring-job-chart.is-animating .monitoring-job-chart-slices {
+  animation: monitoringJobChartDraw 920ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
 .automation-details-body {
   min-height: 100vh;
   overflow: auto;
@@ -2280,6 +2424,30 @@ h3 { font-size: 15px; }
     transition-duration: 1ms !important;
     transform: none !important;
   }
+  .monitoring-job-chart.is-animating::before,
+  .monitoring-job-chart.is-animating .monitoring-job-chart-slices {
+    animation-duration: 1ms;
+  }
+}
+
+@media (min-width: 1181px) {
+  .ts-app-shell {
+    height: 100vh;
+    overflow: hidden;
+  }
+  .ts-main {
+    overflow: hidden;
+  }
+  [data-page="dashboard"].active {
+    height: 100%;
+    align-content: start;
+    grid-template-rows: max-content max-content max-content max-content max-content minmax(180px, max-content);
+    padding-right: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
 }
 
 @media (max-width: 1320px) {
@@ -2343,7 +2511,7 @@ h3 { font-size: 15px; }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .monitoring-kpi-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .ts-interview-workspace {
     height: auto;
@@ -2497,8 +2665,20 @@ h3 { font-size: 15px; }
     grid-template-columns: 1fr;
   }
   .monitoring-job-row {
-    grid-template-columns: minmax(120px, 1fr) 48px 48px 48px;
+    grid-template-columns: minmax(120px, 1fr) 58px 58px;
     padding-inline: 10px;
+  }
+  .monitoring-job-chart-body {
+    grid-template-columns: 1fr;
+  }
+  .monitoring-job-chart {
+    width: min(220px, 100%);
+  }
+  .monitoring-job-chart-legend-row {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+  .monitoring-job-chart-legend-row strong {
+    grid-column: 2;
   }
 
   .candidate-card__heading {

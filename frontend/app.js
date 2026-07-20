@@ -845,6 +845,17 @@ const MONITORING_METRICS = [
   ["businessResumeAcquisitions", "业务简历获取", "success"],
   ["candidateQuestions", "候选人提问", "default"],
 ];
+const MONITORING_JOB_CHART_COLORS = [
+  "#8aaeea",
+  "#efbd7d",
+  "#86cfa9",
+  "#e79ab8",
+  "#aaa0df",
+  "#7fcbd7",
+  "#d4c77d",
+  "#ed9990",
+  "#b5bdc8",
+];
 function renderMonitoringKpis(totals = {}) {
   $("monitoringKpiGrid").innerHTML = MONITORING_METRICS.map(
     ([metric, label, tone]) => `
@@ -859,6 +870,10 @@ function renderMonitoringKpis(totals = {}) {
     button.onclick = () => openAutomationDetails(button.dataset.monitoringMetric || "processedContacts");
   });
 }
+function normalizeMonitoringCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
 function groupMonitoringJobs(items = []) {
   const grouped = new Map();
   items.forEach((item) => {
@@ -868,13 +883,28 @@ function groupMonitoringJobs(items = []) {
       processedContacts: 0,
       businessResumeAcquisitions: 0,
     };
-    current.processedContacts += Number(item.processedContacts || 0);
-    current.businessResumeAcquisitions += Number(item.businessResumeAcquisitions || 0);
+    current.processedContacts += normalizeMonitoringCount(item.processedContacts);
+    current.businessResumeAcquisitions += normalizeMonitoringCount(item.businessResumeAcquisitions);
     grouped.set(jobType, current);
   });
   return [...grouped.values()].sort(
     (left, right) => right.processedContacts - left.processedContacts || left.jobType.localeCompare(right.jobType, "zh-CN"),
   );
+}
+function buildMonitoringJobChartSlices(items = []) {
+  const rows = groupMonitoringJobs(items).filter((item) => item.processedContacts > 0);
+  let slices = rows.map((item) => ({
+    label: displayResumeJobType(item.jobType) || item.jobType,
+    value: item.processedContacts,
+  }));
+  if (slices.length > 8) {
+    const otherValue = slices.slice(8).reduce((total, item) => total + item.value, 0);
+    slices = [...slices.slice(0, 8), { label: "其他岗位", value: otherValue }];
+  }
+  return {
+    slices,
+    total: slices.reduce((sum, item) => sum + item.value, 0),
+  };
 }
 function renderMonitoringJobs(items = []) {
   const rows = groupMonitoringJobs(items);
@@ -895,6 +925,94 @@ function renderMonitoringJobs(items = []) {
     button.onclick = () => openAutomationDetails("processedContacts", button.dataset.monitoringJob || "");
   });
 }
+function monitoringJobChartPoint(angleDeg, radius = 48) {
+  const angle = (angleDeg * Math.PI) / 180;
+  return {
+    x: 50 + radius * Math.cos(angle),
+    y: 50 + radius * Math.sin(angle),
+  };
+}
+function monitoringJobChartSlicePath(startPercent, endPercent) {
+  const startAngle = -90 + startPercent * 3.6;
+  const endAngle = -90 + Math.min(endPercent, 99.999) * 3.6;
+  const start = monitoringJobChartPoint(startAngle);
+  const end = monitoringJobChartPoint(endAngle);
+  const largeArc = endPercent - startPercent > 50 ? 1 : 0;
+  return `M 50 50 L ${start.x.toFixed(3)} ${start.y.toFixed(3)} A 48 48 0 ${largeArc} 1 ${end.x.toFixed(3)} ${end.y.toFixed(3)} Z`;
+}
+function moveMonitoringJobChartTooltip(event, tooltip, chart) {
+  const rect = chart.getBoundingClientRect();
+  tooltip.style.left = `${event.clientX - rect.left}px`;
+  tooltip.style.top = `${event.clientY - rect.top}px`;
+}
+function renderMonitoringJobChart(items = []) {
+  const chart = $("monitoringJobChart");
+  const totalNode = $("monitoringJobChartTotal");
+  const legend = $("monitoringJobChartLegend");
+  if (!chart || !totalNode || !legend) return;
+  const { slices, total } = buildMonitoringJobChartSlices(items);
+  chart.querySelectorAll(".monitoring-job-chart-slices, .monitoring-job-chart-tooltip").forEach((node) => node.remove());
+  chart.setAttribute("aria-label", `岗位处理占比，总计 ${total} 人`);
+  totalNode.textContent = String(total);
+  if (!total) {
+    chart.classList.remove("is-animating");
+    chart.style.setProperty("--monitoring-chart-gradient", "#eef2f7");
+    legend.innerHTML = '<div class="empty-inline">暂无可统计数据</div>';
+    return;
+  }
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("monitoring-job-chart-slices");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("aria-hidden", "true");
+  const tooltip = document.createElement("div");
+  tooltip.className = "monitoring-job-chart-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  let cursor = 0;
+  const gradientParts = [];
+  slices.forEach((slice, index) => {
+    const start = cursor;
+    const next = cursor + (slice.value / total) * 100;
+    cursor = next;
+    const color = MONITORING_JOB_CHART_COLORS[index % MONITORING_JOB_CHART_COLORS.length];
+    const percent = ((slice.value / total) * 100).toFixed(1);
+    const info = `${slice.label}：${slice.value} 人，占比 ${percent}%`;
+    gradientParts.push(`${color} ${start.toFixed(3)}% ${next.toFixed(3)}%`);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.classList.add("monitoring-job-chart-slice");
+    path.setAttribute("d", monitoringJobChartSlicePath(start, next));
+    path.setAttribute("fill", color);
+    path.addEventListener("mouseenter", (event) => {
+      path.classList.add("is-active");
+      tooltip.textContent = info;
+      tooltip.classList.add("is-visible");
+      moveMonitoringJobChartTooltip(event, tooltip, chart);
+    });
+    path.addEventListener("mousemove", (event) => moveMonitoringJobChartTooltip(event, tooltip, chart));
+    path.addEventListener("mouseleave", () => {
+      path.classList.remove("is-active");
+      tooltip.classList.remove("is-visible");
+    });
+    svg.append(path);
+  });
+  chart.style.setProperty("--monitoring-chart-gradient", `conic-gradient(${gradientParts.join(", ")})`);
+  chart.append(svg, tooltip);
+  chart.classList.remove("is-animating");
+  void chart.offsetWidth;
+  chart.classList.add("is-animating");
+  legend.innerHTML = slices.map((slice, index) => {
+    const color = MONITORING_JOB_CHART_COLORS[index % MONITORING_JOB_CHART_COLORS.length];
+    const percent = ((slice.value / total) * 100).toFixed(1);
+    const label = escapeHtml(slice.label);
+    return `
+      <div class="monitoring-job-chart-legend-row">
+        <span class="monitoring-job-chart-swatch" style="background:${color}"></span>
+        <span class="monitoring-job-chart-label" title="${label}">${label}</span>
+        <strong>${slice.value} 人 · ${percent}%</strong>
+      </div>
+    `;
+  }).join("");
+}
 async function loadAutomationMonitoringSummary() {
   if (!isAdminUser()) return;
   if (state.monitoringSummaryInFlight) return;
@@ -908,6 +1026,7 @@ async function loadAutomationMonitoringSummary() {
     if (versionChanged || !$("monitoringKpiGrid").children.length) {
       renderMonitoringKpis(payload.totals || {});
       renderMonitoringJobs(payload.byJobPlatform || []);
+      renderMonitoringJobChart(payload.byJobPlatform || []);
     }
     $("monitoringCoverage").textContent = `${formatMonitoringDate(payload.date)} · ${payload.coverage?.events || 0} 条事件 · Asia/Shanghai`;
   } finally {

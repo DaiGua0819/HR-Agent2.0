@@ -44,6 +44,8 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert '["sentCompanyInfo",' not in script
     assert '["anomalies",' not in script
     assert "monitoring-job-stat--danger" not in script
+    assert "function normalizeMonitoringCount(value)" in script
+    assert "Number.isFinite(number) ? number : 0" in script
     assert "function groupMonitoringJobs(items = [])" in script
     assert "function buildMonitoringJobChartSlices(items = [])" in script
     assert "function renderMonitoringJobChart(items = [])" in script
@@ -55,6 +57,8 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert ".monitoring-job-chart-tooltip" in styles
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
     assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
+    assert "grid-template-rows: max-content max-content max-content max-content max-content minmax(180px, max-content)" in styles
+    assert "min-width: 140px" in styles
     assert "@media (min-width: 1181px)" in styles
     assert "height: 100vh" in styles
     assert "overflow-y: auto" in styles
