@@ -250,6 +250,52 @@ def test_projection_maps_resume_acquisition_and_anomaly(tmp_path: Path) -> None:
     assert by_session["session|job51-session"].anomaly_reason == "download_error"
 
 
+def test_projection_summary_dedupes_local_resume_hashes(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    for session_id in ("session-a", "session-b"):
+        _insert_session(
+            database,
+            session_id=session_id,
+            updated_at="2026-07-20T02:00:00+00:00",
+        )
+    with sqlite3.connect(database) as connection:
+        for index, session_id in enumerate(("session-a", "session-b"), start=1):
+            connection.execute(
+                """
+                INSERT INTO resume_artifacts (
+                  id, session_id, platform, owner, platform_conversation_id,
+                  candidate_name_from_platform, position, file_path, file_hash,
+                  source_kind, parse_status, parsed_name, resume_id, error,
+                  created_at, updated_at
+                ) VALUES (?, ?, 'job51', '和新红', ?, '张三', 'AI产品经理',
+                          ?, 'shared-file-hash', 'attachment', 'parsed', '张三',
+                          ?, '', ?, ?)
+                """,
+                (
+                    f"artifact-{index}",
+                    session_id,
+                    f"platform-{session_id}",
+                    f"C:/resumes/{index}.pdf",
+                    f"resume-{index}",
+                    "2026-07-20T02:00:00+00:00",
+                    "2026-07-20T02:00:00+00:00",
+                ),
+            )
+        connection.commit()
+
+    exported = build_daily_projections(
+        database_path=database,
+        run_dir=tmp_path / "missing-runs",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+
+    assert len(exported.events) == 2
+    assert exported.summary["byDate"]["2026-07-20"][
+        "businessResumeAcquisitions"
+    ] == 1
+
+
 def _database(tmp_path: Path) -> Path:
     database = tmp_path / "resumes.sqlite"
     run_migrations(database)

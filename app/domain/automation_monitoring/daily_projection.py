@@ -510,6 +510,7 @@ def _merge_resume_result(
 
 def _summary(events: list[AutomationContactEvent]) -> dict[str, object]:
     by_date: dict[str, dict[str, int]] = {}
+    resume_keys_by_date: dict[str, set[str]] = {}
     for event in events:
         day = event.payload.get("date") or event.occurred_at[:10]
         counts = by_date.setdefault(
@@ -524,12 +525,21 @@ def _summary(events: list[AutomationContactEvent]) -> dict[str, object]:
                 "anomalies": 0,
             },
         )
+        resume_keys = resume_keys_by_date.setdefault(str(day), set())
         counts["processedContacts"] += int(event.processed)
         counts["sentCompanyInfo"] += int(event.sent_company_info)
         counts["requestedResume"] += int(event.requested_resume)
         counts["candidateQuestions"] += int(event.candidate_question)
         counts["knowledgeAnswered"] += int(event.knowledge_answered)
-        counts["businessResumeAcquisitions"] += int(event.resume_acquired)
+        if event.resume_acquired:
+            resume_key = (
+                event.contact_key
+                if event.platform == "boss"
+                else event.resume_file_hash
+            )
+            if resume_key and resume_key not in resume_keys:
+                resume_keys.add(resume_key)
+                counts["businessResumeAcquisitions"] += 1
         counts["anomalies"] += int(event.anomaly)
     return {"byDate": by_date, "totalEvents": len(events)}
 
