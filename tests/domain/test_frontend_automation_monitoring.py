@@ -20,6 +20,9 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
         "monitoringJobType",
         "monitoringKpiGrid",
         "monitoringJobRows",
+        "monitoringJobChart",
+        "monitoringJobChartTotal",
+        "monitoringJobChartLegend",
     ):
         assert f'id="{element_id}"' in html
 
@@ -38,8 +41,23 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert "openAutomationDetails" in script
     assert "window.location.assign(`/app/automation-details?${query}`)" in script
     assert "if (!isAdminUser()) return" in script
+    assert '["sentCompanyInfo",' not in script
+    assert '["anomalies",' not in script
+    assert "monitoring-job-stat--danger" not in script
+    assert "function groupMonitoringJobs(items = [])" in script
+    assert "function buildMonitoringJobChartSlices(items = [])" in script
+    assert "function renderMonitoringJobChart(items = [])" in script
+    assert 'label: "其他岗位"' in script
+    assert "MONITORING_JOB_CHART_COLORS" in script
     assert ".monitoring-kpi" in styles
     assert ".monitoring-date-control" in styles
+    assert ".monitoring-job-chart" in styles
+    assert ".monitoring-job-chart-tooltip" in styles
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
+    assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
+    assert "@media (min-width: 1181px)" in styles
+    assert "height: 100vh" in styles
+    assert "overflow-y: auto" in styles
     assert ".runtime-target" not in styles
     assert "@media (max-width: 1320px)" in styles
 
