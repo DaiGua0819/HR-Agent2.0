@@ -562,6 +562,69 @@ def test_ai_basic_acceptance_with_interview_question_answers_then_requests_resum
     assert page.resume_requests == 1
 
 
+def test_ai_basic_short_internship_rejects_without_reply_or_resume() -> None:
+    """明确只能短期实习时，不回复、不求简历并判定不合适。"""
+
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {
+                    "sender": "other",
+                    "text": (
+                        "您好，非常感谢告知岗位福利，但我是2027届在读学生，学校还有固定课程安排，"
+                        "没办法长期离岗，最多只能到岗实习2个月，无法满足公司6个月最低实习期限要求。"
+                        "想跟您沟通下，是否支持短期2个月实习？"
+                    ),
+                },
+            ],
+        ),
+        llm=FakeLLM("accept"),
+        rules=rules,
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "candidate_policy_reject"
+    assert state["decision"]["policyId"] == "ai_intern_duration_below_minimum"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
+def test_ai_basic_job_content_question_rejects_without_reply_or_resume() -> None:
+    """AI 实习生询问日常工作内容时，不回复、不求简历并判定不合适。"""
+
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {
+                    "sender": "other",
+                    "text": (
+                        "您好，感谢您的介绍。工作地点和至少6个月的实习时间我都可以接受。"
+                        "想再了解一下，这个岗位日常主要负责哪些工作内容呢？"
+                    ),
+                },
+            ],
+        ),
+        llm=FakeLLM("accept"),
+        rules=rules,
+    )
+
+    assert state["next_action"] == "skip"
+    assert state["stage"] == "candidate_policy_reject"
+    assert state["decision"]["policyId"] == "ai_intern_job_content_question"
+    assert page.sent_messages == []
+    assert page.resume_requests == 0
+
+
 def test_loaded_rules_use_qualified_online_interview_answer() -> None:
     answer = find_knowledge_answer(
         "可以线上面试吗",

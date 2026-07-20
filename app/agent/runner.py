@@ -22,6 +22,7 @@ from app.agent.policy import (
 )
 from app.agent.rules import (
     find_knowledge_answers,
+    find_reject_without_reply_policy,
     initial_common_phrase,
     is_ai_basic_rule,
     is_direct_resume_rule,
@@ -123,6 +124,17 @@ class ConversationRunner:
                 "wait",
                 "candidate_closing",
                 evidence=turn_text,
+            )
+        reject_policy = find_reject_without_reply_policy(turn_text, rule)
+        if reject_policy:
+            return self._finish(
+                state,
+                "skip",
+                "candidate_policy_reject",
+                evidence=turn_text,
+                policyId=reject_policy["id"],
+                policyReason=reject_policy["reason"],
+                matchedPattern=reject_policy["matchedPattern"],
             )
         if is_direct_resume_rule(rule):
             return await self._handle_direct_resume(state, conversation, rule)

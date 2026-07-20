@@ -172,6 +172,40 @@ def should_prioritize_screening(text: str, rule: dict[str, Any] | None) -> bool:
     return False
 
 
+def find_reject_without_reply_policy(
+    text: str,
+    rule: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    """匹配岗位配置的静默淘汰规则。"""
+
+    compact_text = _compact(text)
+    if not compact_text or not rule:
+        return None
+    policies = rule.get("rejectWithoutReplyRules")
+    if not isinstance(policies, list):
+        return None
+    for item in policies:
+        if not isinstance(item, dict):
+            continue
+        if item.get("requireQuestion") and not looks_like_question(text):
+            continue
+        patterns = _string_list(item.get("patterns"))
+        for pattern in patterns:
+            compact_pattern = _compact(pattern)
+            if not compact_pattern:
+                continue
+            if compact_pattern in compact_text or _ellipsis_wildcard_match(
+                compact_pattern,
+                compact_text,
+            ):
+                return {
+                    "id": str(item.get("id") or "candidate_policy_reject"),
+                    "reason": str(item.get("reason") or "candidate_policy_reject"),
+                    "matchedPattern": pattern,
+                }
+    return None
+
+
 def is_silent_question(
     question: str,
     rules: dict[str, Any] | None = None,
