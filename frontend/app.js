@@ -841,11 +841,9 @@ function syncMonitoringFilters(facets = {}) {
 }
 const MONITORING_METRICS = [
   ["processedContacts", "处理联系人", "primary"],
-  ["sentCompanyInfo", "发送公司信息", "info"],
   ["requestedResume", "发起求简历", "warning"],
   ["businessResumeAcquisitions", "业务简历获取", "success"],
   ["candidateQuestions", "候选人提问", "default"],
-  ["anomalies", "异常", "danger"],
 ];
 function renderMonitoringKpis(totals = {}) {
   $("monitoringKpiGrid").innerHTML = MONITORING_METRICS.map(
@@ -861,7 +859,7 @@ function renderMonitoringKpis(totals = {}) {
     button.onclick = () => openAutomationDetails(button.dataset.monitoringMetric || "processedContacts");
   });
 }
-function renderMonitoringJobs(items = []) {
+function groupMonitoringJobs(items = []) {
   const grouped = new Map();
   items.forEach((item) => {
     const jobType = item.jobType || "未识别岗位";
@@ -869,16 +867,17 @@ function renderMonitoringJobs(items = []) {
       jobType,
       processedContacts: 0,
       businessResumeAcquisitions: 0,
-      anomalies: 0,
     };
     current.processedContacts += Number(item.processedContacts || 0);
     current.businessResumeAcquisitions += Number(item.businessResumeAcquisitions || 0);
-    current.anomalies += Number(item.anomalies || 0);
     grouped.set(jobType, current);
   });
-  const rows = [...grouped.values()].sort(
+  return [...grouped.values()].sort(
     (left, right) => right.processedContacts - left.processedContacts || left.jobType.localeCompare(right.jobType, "zh-CN"),
   );
+}
+function renderMonitoringJobs(items = []) {
+  const rows = groupMonitoringJobs(items);
   const maximum = Math.max(1, ...rows.map((item) => item.processedContacts));
   $("monitoringJobRows").innerHTML = rows.length
     ? rows.map((item) => `
@@ -889,7 +888,6 @@ function renderMonitoringJobs(items = []) {
           </span>
           <span class="monitoring-job-stat"><small>处理</small><strong>${item.processedContacts}</strong></span>
           <span class="monitoring-job-stat"><small>简历</small><strong>${item.businessResumeAcquisitions}</strong></span>
-          <span class="monitoring-job-stat monitoring-job-stat--danger"><small>异常</small><strong>${item.anomalies}</strong></span>
         </button>
       `).join("")
     : '<div class="empty-inline">当前筛选条件下暂无处理数据</div>';
