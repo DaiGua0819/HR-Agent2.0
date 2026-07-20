@@ -11,6 +11,7 @@ OPERATION_B = "运营B"
 INVESTMENT_TRADING = "投资交易策略研究员（量化与市场情绪方向）"
 INVESTMENT_TRADING_DISPLAY = "投资策略研究"
 AI_PRODUCT_MANAGER = "AI产品经理"
+FULLSTACK_ENGINEER = "全栈工程师"
 
 
 def canonical_resume_job_type(value: object) -> str:
@@ -52,6 +53,8 @@ def canonical_resume_job_type(value: object) -> str:
         or "ai pm" in text.lower()
     ):
         return AI_PRODUCT_MANAGER
+    if "资深全栈工程师" in compact:
+        return FULLSTACK_ENGINEER
     return text
 
 

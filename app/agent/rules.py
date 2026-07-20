@@ -610,7 +610,7 @@ def _best_named_match(
             score = 3
         elif candidate in compact:
             score = 2
-        elif compact in candidate:
+        elif compact in candidate and bool(payload.get("allowReverseSubstringMatch", True)):
             score = 1
         elif _ellipsis_wildcard_match(compact, candidate) or _ellipsis_wildcard_match(
             candidate, compact

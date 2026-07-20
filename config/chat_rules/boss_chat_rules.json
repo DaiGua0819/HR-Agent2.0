@@ -227,6 +227,39 @@
         "已收到或已求过简历时不重复发送话术、不重复求简历。",
         "简历入库岗位归类为AI产品经理，并按AI产品经理JD评分规则评分。"
       ]
+    },
+    "资深全栈工程师": {
+      "category": "senior_fullstack_direct_resume",
+      "template": "该岗位不发送筛选问题，不回答候选人问题，先从两句简历话术里随机发送一句，再点击求简历。",
+      "directResume": true,
+      "resumeJobType": "全栈工程师",
+      "allowReverseSubstringMatch": false,
+      "aliases": [
+        "资深全栈工程师（AI 原生 B2B 平台 ）",
+        "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
+        "资深全栈工程师(AI原生B2B平台)",
+        "资深全栈工程师(AI原生B2B平台/工程Owner)"
+      ],
+      "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+      "resumeRequestPrompts": [
+        "你好，方便发一份简历过来吗",
+        "你好，可以看看简历吗"
+      ],
+      "rolePrompt": "资深全栈工程师按直求简历流程处理：不发送筛选问题，不回答候选人的任何问题；若未收到简历且未求过简历，从两句简历话术中随机发送一句，再执行求简历；已收到或已求过简历时不重复操作。简历入库岗位统一为全栈工程师。",
+      "talkingPoints": [
+        "资深全栈工程师",
+        "AI 原生 B2B 平台",
+        "工程 Owner",
+        "直接获取简历"
+      ],
+      "screeningQuestions": [],
+      "nextSteps": [
+        "候选人提出任何问题时不回复，继续执行直求简历流程。",
+        "未收到简历且未求过简历时，从两句简历话术里随机发送一句，再点击求简历。",
+        "候选人请求发送附件简历时直接同意/求简历。",
+        "已收到或已求过简历时不重复发送话术、不重复求简历。",
+        "简历入库岗位归类为全栈工程师。"
+      ]
     }
   },
   "rules": [
@@ -2784,6 +2817,28 @@
         "description": "AI产品经理 / AI Product Manager直求简历岗位。不发送筛选问题；未收到简历且未求过简历时从“你好，方便发一份简历过来吗”和“你好，可以看看简历吗”中随机发送一句，再点击求简历；候选人请求发送附件简历时直接同意/求简历。简历入库岗位为AI产品经理，入库后按AI产品经理JD评分规则评分。",
         "directResume": true,
         "resumeJobType": "AI产品经理",
+        "resumeRequestPrompt": "你好，方便发一份简历过来吗",
+        "resumeRequestPrompts": [
+          "你好，方便发一份简历过来吗",
+          "你好，可以看看简历吗"
+        ],
+        "screening": {},
+        "topics": {},
+        "faq": []
+      },
+      "资深全栈工程师": {
+        "matchPositions": [
+          "资深全栈工程师",
+          "资深全栈工程师（AI 原生 B2B 平台 ）",
+          "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
+          "资深全栈工程师(AI原生B2B平台)",
+          "资深全栈工程师(AI原生B2B平台/工程Owner)"
+        ],
+        "inheritsRoot": true,
+        "description": "资深全栈工程师跨平台直求简历岗位。不发送筛选问题，不回答候选人的任何问题；未收到简历且未求过简历时从两句简历话术中随机发送一句，再点击求简历；已收到或已求过则不重复。简历入库岗位统一为全栈工程师。",
+        "directResume": true,
+        "resumeJobType": "全栈工程师",
+        "allowReverseSubstringMatch": false,
         "resumeRequestPrompt": "你好，方便发一份简历过来吗",
         "resumeRequestPrompts": [
           "你好，方便发一份简历过来吗",

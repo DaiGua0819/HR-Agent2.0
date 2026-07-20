@@ -16,6 +16,7 @@ from app.agent.rules import (
     find_knowledge_answers,
     load_chat_rules,
     looks_like_question,
+    select_position_rule,
 )
 from app.agent.runner import ConversationRunner
 from app.agent.screening import analyze_position_screening
@@ -449,6 +450,43 @@ def test_boss_ai_product_manager_direct_resume_without_screening() -> None:
             "AI产品经理",
             [{"sender": "other", "text": "您好，想了解一下 AI Product Manager 岗位"}],
         ),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好，方便发一份简历过来吗"],
+        ["你好，可以看看简历吗"],
+    )
+    assert page.resume_requests == 1
+
+
+def test_senior_fullstack_platform_titles_share_resume_label() -> None:
+    rules = load_chat_rules()
+    titles = (
+        "资深全栈工程师（AI 原生 B2B 平台 ）",
+        "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
+        "资深全栈工程师(AI原生B2B平台/工程Owner)",
+    )
+
+    for title in titles:
+        rule = select_position_rule(title, rules)
+        assert rule is not None
+        assert rule["directResume"] is True
+        assert rule["positionRuleKey"] == "资深全栈工程师"
+        assert rule["resumeJobType"] == "全栈工程师"
+
+    assert select_position_rule("全栈工程师", rules) is None
+
+
+def test_boss_senior_fullstack_question_requests_resume() -> None:
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "资深全栈工程师（AI 原生 B2B 平台 ）",
+            [{"sender": "other", "text": "请问这个岗位的技术栈和工作方式是什么？"}],
+        ),
+        rules=load_chat_rules(),
     )
 
     assert state["next_action"] == "request_resume"

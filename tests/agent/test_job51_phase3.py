@@ -1668,6 +1668,24 @@ def test_job51_ai_product_manager_direct_resume_without_screening() -> None:
     assert page.resume_requests == 1
 
 
+def test_job51_senior_fullstack_question_requests_resume() -> None:
+    state, page = run_case(
+        conversation(
+            "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
+            [{"sender": "other", "text": "请问岗位是偏前端还是偏后端？"}],
+        ),
+        rules=load_chat_rules(),
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好，方便发一份简历过来吗"],
+        ["你好，可以看看简历吗"],
+    )
+    assert page.resume_requests == 1
+
+
 def test_job51_direct_resume_reuses_single_chat_context_snapshot() -> None:
     page = ContextCountingJob51Page(
         conversations=[

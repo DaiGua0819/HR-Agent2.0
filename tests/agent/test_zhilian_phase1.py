@@ -9,7 +9,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.agent.rules import find_knowledge_answer
+from app.agent.rules import find_knowledge_answer, load_chat_rules
 from app.agent.runner import ZhilianConversationRunner
 from app.browser.fake_page import FakeElement, FakePage
 from app.domain.conversation.repository import ConversationRepository
@@ -168,6 +168,24 @@ def test_zhilian_ai_product_manager_direct_resume_without_screening() -> None:
 
     state, page = run_case(
         conversation("AI PM", [{"sender": "other", "text": "您好，想了解 AI 产品经理"}])
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "direct_resume"
+    assert page.sent_messages in (
+        ["你好，方便发一份简历过来吗"],
+        ["你好，可以看看简历吗"],
+    )
+    assert page.resume_requests == 1
+
+
+def test_zhilian_senior_fullstack_question_requests_resume() -> None:
+    state, page = run_case(
+        conversation(
+            "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
+            [{"sender": "other", "text": "请问岗位主要负责哪些产品？"}],
+        ),
+        rules=load_chat_rules(),
     )
 
     assert state["next_action"] == "request_resume"
@@ -952,13 +970,23 @@ def test_system_latest_message_does_not_trigger_business_reply(tmp_path: Path) -
     assert page.sent_messages == []
 
 
-def run_case(convo: dict[str, object], llm: FakeLLM | None = None):
+def run_case(
+    convo: dict[str, object],
+    llm: FakeLLM | None = None,
+    *,
+    rules: dict[str, object] | None = None,
+):
     """运行单条会话并返回 state 与 fake page。"""
 
     page = FakePage(conversations=[convo])
     adapter = ZhilianAdapter(page, owner="宋峰峰")
     sink = InMemoryDecisionSink()
-    runner = ZhilianConversationRunner(adapter, rules=sample_rules(), llm=llm, decision_sink=sink)
+    runner = ZhilianConversationRunner(
+        adapter,
+        rules=rules or sample_rules(),
+        llm=llm,
+        decision_sink=sink,
+    )
     state = asyncio.run(runner.run_current())
     assert sink.events
     return state, page
