@@ -6,6 +6,9 @@ const state = {
   monitoringSummaryVersion: "",
   monitoringSummaryTimer: null,
   monitoringSummaryInFlight: false,
+  monitoringSummaryAbortController: null,
+  monitoringSummaryRequestSequence: 0,
+  monitoringSummaryRequestKey: "",
   monitoringFacets: { owners: [], platforms: [], jobTypes: [] },
   resumes: [],
   selectedId: "",
@@ -941,9 +944,19 @@ function monitoringJobChartSlicePath(startPercent, endPercent) {
   return `M 50 50 L ${start.x.toFixed(3)} ${start.y.toFixed(3)} A 48 48 0 ${largeArc} 1 ${end.x.toFixed(3)} ${end.y.toFixed(3)} Z`;
 }
 function moveMonitoringJobChartTooltip(event, tooltip, chart) {
-  const rect = chart.getBoundingClientRect();
-  tooltip.style.left = `${event.clientX - rect.left}px`;
-  tooltip.style.top = `${event.clientY - rect.top}px`;
+  const chartRect = chart.getBoundingClientRect();
+  const panelRect = (chart.closest(".monitoring-chart-panel") || chart).getBoundingClientRect();
+  const halfWidth = tooltip.offsetWidth / 2;
+  const horizontalPadding = 8;
+  const minimumX = panelRect.left + horizontalPadding + halfWidth;
+  const maximumX = panelRect.right - horizontalPadding - halfWidth;
+  const clampedX = minimumX <= maximumX
+    ? Math.min(Math.max(event.clientX, minimumX), maximumX)
+    : panelRect.left + panelRect.width / 2;
+  const placeBelow = event.clientY - tooltip.offsetHeight - 12 < panelRect.top + 8;
+  tooltip.classList.toggle("is-below", placeBelow);
+  tooltip.style.left = `${clampedX - chartRect.left}px`;
+  tooltip.style.top = `${event.clientY - chartRect.top}px`;
 }
 function renderMonitoringJobChart(items = []) {
   const chart = $("monitoringJobChart");
@@ -1015,10 +1028,19 @@ function renderMonitoringJobChart(items = []) {
 }
 async function loadAutomationMonitoringSummary() {
   if (!isAdminUser()) return;
-  if (state.monitoringSummaryInFlight) return;
+  const requestKey = monitoringQuery().toString();
+  if (state.monitoringSummaryInFlight && state.monitoringSummaryRequestKey === requestKey) return;
+  if (state.monitoringSummaryAbortController) state.monitoringSummaryAbortController.abort();
+  const controller = new AbortController();
+  const requestSequence = (state.monitoringSummaryRequestSequence += 1);
+  state.monitoringSummaryAbortController = controller;
+  state.monitoringSummaryRequestKey = requestKey;
   state.monitoringSummaryInFlight = true;
   try {
-    const payload = await api(`/api/automation-monitoring/daily-summary?${monitoringQuery()}`);
+    const payload = await api(`/api/automation-monitoring/daily-summary?${requestKey}`, {
+      signal: controller.signal,
+    });
+    if (requestSequence !== state.monitoringSummaryRequestSequence || requestKey !== monitoringQuery().toString()) return;
     const versionChanged = payload.version !== state.monitoringSummaryVersion;
     state.monitoringSummary = payload;
     state.monitoringSummaryVersion = payload.version || "";
@@ -1029,8 +1051,15 @@ async function loadAutomationMonitoringSummary() {
       renderMonitoringJobChart(payload.byJobPlatform || []);
     }
     $("monitoringCoverage").textContent = `${formatMonitoringDate(payload.date)} · ${payload.coverage?.events || 0} 条事件 · Asia/Shanghai`;
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    throw error;
   } finally {
-    state.monitoringSummaryInFlight = false;
+    if (state.monitoringSummaryAbortController === controller) {
+      state.monitoringSummaryAbortController = null;
+      state.monitoringSummaryRequestKey = "";
+      state.monitoringSummaryInFlight = false;
+    }
   }
 }
 function openAutomationDetails(metric = "processedContacts", jobType = "") {

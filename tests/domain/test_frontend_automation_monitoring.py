@@ -34,6 +34,12 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert "MONITORING_STATUS_POLL_MS" not in script
     assert "loadAutomationRuntimeStatus" not in script
     assert "MONITORING_SUMMARY_POLL_MS = 15000" in script
+    assert "monitoringSummaryAbortController: null" in script
+    assert 'monitoringSummaryRequestKey: ""' in script
+    assert "state.monitoringSummaryAbortController.abort()" in script
+    assert "signal: controller.signal" in script
+    assert "const requestKey = monitoringQuery().toString()" in script
+    assert "requestKey !== monitoringQuery().toString()" in script
     assert "document.visibilityState" in script
     assert "function formatMonitoringDate(value)" in script
     assert 'return `${year}/${month}/${day}`' in script
@@ -49,12 +55,15 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert "function groupMonitoringJobs(items = [])" in script
     assert "function buildMonitoringJobChartSlices(items = [])" in script
     assert "function renderMonitoringJobChart(items = [])" in script
+    assert "tooltip.offsetWidth" in script
+    assert 'tooltip.classList.toggle("is-below"' in script
     assert 'label: "其他岗位"' in script
     assert "MONITORING_JOB_CHART_COLORS" in script
     assert ".monitoring-kpi" in styles
     assert ".monitoring-date-control" in styles
     assert ".monitoring-job-chart" in styles
     assert ".monitoring-job-chart-tooltip" in styles
+    assert ".monitoring-job-chart-tooltip.is-below" in styles
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
     assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
     dashboard_rows = (

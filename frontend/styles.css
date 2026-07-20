@@ -2104,6 +2104,12 @@ h3 { font-size: 15px; }
   opacity: 1;
   transform: translate(-50%, calc(-100% - 12px)) scale(1);
 }
+.monitoring-job-chart-tooltip.is-below {
+  transform: translate(-50%, 12px) scale(0.98);
+}
+.monitoring-job-chart-tooltip.is-visible.is-below {
+  transform: translate(-50%, 12px) scale(1);
+}
 .monitoring-job-chart-legend {
   display: grid;
   gap: 8px;
