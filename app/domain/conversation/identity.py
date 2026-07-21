@@ -36,10 +36,16 @@ def resolve_or_create_session(
     )
     if existing is not None:
         preserve_trusted_identity = False
-        if existing.recent_messages_fingerprint and not verify_identity_by_recent_messages(
-            existing.recent_messages_fingerprint,
-            conversation,
-        ) and not _candidate_names_match(existing.candidate_name, candidate_name):
+        fingerprint_matches = bool(existing.recent_messages_fingerprint) and (
+            verify_identity_by_recent_messages(
+                existing.recent_messages_fingerprint,
+                conversation,
+            )
+        )
+        if not fingerprint_matches and not _candidate_names_match(
+            existing.candidate_name,
+            candidate_name,
+        ):
             warnings.append("recent_messages_not_matched")
             preserve_trusted_identity = True
         session = _updated_session(
@@ -146,7 +152,11 @@ def _updated_session(
             _stable_platform_conversation_id(conversation.id)
             or session.platform_conversation_id
         ),
-        label=conversation.candidate.label or session.label,
+        label=(
+            session.label
+            if preserve_trusted_identity
+            else conversation.candidate.label or session.label
+        ),
         current_stage=session.current_stage,
         next_action=session.next_action,
         recent_messages_fingerprint=(

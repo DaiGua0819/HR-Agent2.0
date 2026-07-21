@@ -345,6 +345,20 @@ def test_fingerprint_includes_raw_text_only_messages() -> None:
     ).hexdigest()
 
 
+def test_fingerprint_uses_raw_text_when_text_is_whitespace() -> None:
+    messages = [
+        ChatMessage(
+            sender=MessageSender.CANDIDATE,
+            text="   ",
+            raw_text="  raw fallback after normalization  ",
+        )
+    ]
+
+    assert recent_messages_fingerprint(messages) == hashlib.sha256(
+        b"raw fallback after normalization"
+    ).hexdigest()
+
+
 def test_no_id_session_reuses_legacy_raw_first_fingerprint(tmp_path: Path) -> None:
     database = tmp_path / "legacy-raw-first.sqlite"
     repository = ConversationRepository(database)
@@ -443,7 +457,11 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
         id="boss-conversation-456",
         platform=Platform.BOSS,
         owner="owner",
-        candidate=Candidate(name="Alice Smith", applied_position="Backend Engineer"),
+        candidate=Candidate(
+            name="Alice Smith",
+            applied_position="Backend Engineer",
+            label="Alice Smith Backend Engineer original conversation",
+        ),
         messages=[
             ChatMessage(
                 sender=MessageSender.CANDIDATE,
@@ -457,7 +475,11 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
         id="boss-conversation-456",
         platform=Platform.BOSS,
         owner="owner",
-        candidate=Candidate(name="Bob Jones", applied_position="Backend Engineer"),
+        candidate=Candidate(
+            name="Bob Jones",
+            applied_position="Backend Engineer",
+            label="Bob Jones Backend Engineer conflicting conversation",
+        ),
         messages=[
             ChatMessage(
                 sender=MessageSender.CANDIDATE,
@@ -470,7 +492,11 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
         id="boss-conversation-456",
         platform=Platform.BOSS,
         owner="owner",
-        candidate=Candidate(name="Bob Jones", applied_position="Backend Engineer"),
+        candidate=Candidate(
+            name="Bob Jones",
+            applied_position="Backend Engineer",
+            label="Bob Jones Backend Engineer evolved conversation",
+        ),
         messages=[
             ChatMessage(
                 sender=MessageSender.CANDIDATE,
@@ -489,10 +515,91 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
     assert "recent_messages_not_matched" in second_reopened.warnings
     assert persisted is not None
     assert persisted.candidate_name == created.session.candidate_name
+    assert persisted.label == created.session.label
     assert (
         persisted.recent_messages_fingerprint
         == created.session.recent_messages_fingerprint
     )
+
+
+def test_stable_platform_identity_warns_on_name_change_without_fingerprint(
+    tmp_path: Path,
+) -> None:
+    repository = ConversationRepository(tmp_path / "empty-fingerprint-name-change.sqlite")
+    initial = Conversation(
+        id="boss-conversation-empty-fingerprint",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Alice", applied_position="Backend Engineer"),
+        messages=[],
+        should_reply=False,
+    )
+    created = resolve_or_create_session(repository, initial)
+    changed = Conversation(
+        id="boss-conversation-empty-fingerprint",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Bob", applied_position="Backend Engineer"),
+        messages=[],
+        should_reply=False,
+    )
+
+    reopened = resolve_or_create_session(repository, changed)
+    persisted = repository.get_session(created.session.id)
+
+    assert "recent_messages_not_matched" in reopened.warnings
+    assert persisted is not None
+    assert persisted.candidate_name == "Alice"
+
+
+def test_persistence_preserves_identity_after_repeated_candidate_conflicts(
+    tmp_path: Path,
+) -> None:
+    repository = ConversationRepository(tmp_path / "persistence-conflict.sqlite")
+    persistence = ConversationPersistence(
+        repository=repository,
+        artifact_store=None,
+        adapter=SimpleNamespace(dry_run=False),
+    )
+    initial = Conversation(
+        id="boss-persistence-conflict",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Alice", applied_position="Backend Engineer"),
+        messages=[ChatMessage(sender=MessageSender.CANDIDATE, text="Alice message")],
+        should_reply=True,
+    )
+    initial_state: dict[str, object] = {}
+    persistence.attach(initial_state, initial)
+    session_id = str(initial_state["session_id"])
+    trusted = repository.get_session(session_id)
+    assert trusted is not None
+
+    warning_states = []
+    for message in ("Bob first message", "Bob second message"):
+        state: dict[str, object] = {}
+        persistence.attach(
+            state,
+            Conversation(
+                id="boss-persistence-conflict",
+                platform=Platform.BOSS,
+                owner="owner",
+                candidate=Candidate(name="Bob", applied_position="Backend Engineer"),
+                messages=[ChatMessage(sender=MessageSender.CANDIDATE, text=message)],
+                should_reply=True,
+            ),
+        )
+        warning_states.append(state)
+
+    persisted = repository.get_session(session_id)
+
+    assert all(
+        "recent_messages_not_matched" in state["identity_warnings"]
+        for state in warning_states
+    )
+    assert persisted is not None
+    assert persisted.candidate_name == trusted.candidate_name
+    assert persisted.recent_messages_fingerprint == trusted.recent_messages_fingerprint
 
 
 def test_status_label_platform_id_does_not_merge_candidates(tmp_path: Path) -> None:

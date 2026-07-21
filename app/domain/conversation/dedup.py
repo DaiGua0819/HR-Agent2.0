@@ -89,17 +89,26 @@ def _fingerprint_in_messages(
 
 
 def _effective_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
-    return [item for item in messages if normalize_message_text(item.text or item.raw_text)]
+    return [item for item in messages if _normalized_message_text(item)]
 
 
 def _fingerprint_window(messages: list[ChatMessage]) -> str:
-    parts = [normalize_message_text(item.text or item.raw_text) for item in messages]
+    parts = [_normalized_message_text(item) for item in messages]
     return _sha256("\n".join(parts))
 
 
 def _legacy_raw_fingerprint_window(messages: list[ChatMessage]) -> str:
-    parts = [normalize_message_text(item.raw_text or item.text) for item in messages]
+    parts = [_normalized_message_text(item, raw_first=True) for item in messages]
     return _sha256("\n".join(parts))
+
+
+def _normalized_message_text(message: ChatMessage, *, raw_first: bool = False) -> str:
+    values = (message.raw_text, message.text) if raw_first else (message.text, message.raw_text)
+    for value in values:
+        normalized = normalize_message_text(value)
+        if normalized:
+            return normalized
+    return ""
 
 
 def _sha256(value: str) -> str:

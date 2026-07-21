@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 from typing import Any
 
 from app.agent.state import GraphState
+from app.domain.conversation.dedup import recent_messages_fingerprint
 from app.domain.conversation.identity import resolve_or_create_session
 from app.domain.conversation.models import CandidateStatus, SessionResolution
 from app.domain.conversation.repository import ConversationRepository
@@ -45,11 +46,15 @@ class ConversationPersistence:
             return
         resolution = resolve_or_create_session(self.repository, conversation)
         self.session_resolution = resolution
-        self.repository.upsert_messages(resolution.session.id, conversation.messages)
-        fingerprint = self.repository.update_recent_fingerprint(
-            resolution.session.id,
-            conversation.messages,
-        )
+        identity_conflict = "recent_messages_not_matched" in resolution.warnings
+        if identity_conflict:
+            fingerprint = recent_messages_fingerprint(conversation.messages)
+        else:
+            self.repository.upsert_messages(resolution.session.id, conversation.messages)
+            fingerprint = self.repository.update_recent_fingerprint(
+                resolution.session.id,
+                conversation.messages,
+            )
         status = self.repository.get_status(resolution.session.id)
         self.candidate_status = status
         self.recent_messages_fingerprint = fingerprint

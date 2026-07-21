@@ -30,7 +30,7 @@ async def build_runtime_statuses(
         url = str(getattr(page, "url", "") or "")
         title = await _page_title(page)
         text = f"{url} {title}".lower()
-        security = _contains(text, "verify.html", "安全验证", "security", "captcha", "滑块")
+        security = _security_verification_required(platform, url=url, title=title)
         needs_login = _contains(text, "login", "signin", "passport", "请登录", "扫码登录")
         abnormal = _contains(text, "账号异常", "账号受限", "操作频繁", "账号冻结", "封禁")
         page_present = page is not None
@@ -98,3 +98,19 @@ async def _page_title(page: Any) -> str:
 
 def _contains(text: str, *markers: str) -> bool:
     return any(marker.lower() in text for marker in markers)
+
+
+def _security_verification_required(platform: Platform, *, url: str, title: str) -> bool:
+    lowered_url = url.lower()
+    lowered_title = title.lower()
+    if platform is Platform.BOSS:
+        return bool(
+            "verify.html" in lowered_url
+            or "/passport/" in lowered_url
+            or _contains(title, "安全验证")
+            or "security" in lowered_title
+        )
+    return bool(
+        "verify.html" in lowered_url
+        or _contains(title, "安全验证", "security", "captcha", "滑块")
+    )
