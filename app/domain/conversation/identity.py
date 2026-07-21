@@ -37,7 +37,7 @@ def resolve_or_create_session(
         if existing.recent_messages_fingerprint and not verify_identity_by_recent_messages(
             existing.recent_messages_fingerprint,
             conversation,
-        ):
+        ) and not _candidate_names_match(existing.candidate_name, candidate_name):
             warnings.append("recent_messages_not_matched")
         session = _updated_session(
             existing,
@@ -100,6 +100,16 @@ def verify_identity_by_recent_messages(
     """用历史最近消息指纹在当前页面消息列表中做辅助确认。"""
 
     return fingerprint_in_messages(stored_fingerprint, conversation.messages)
+
+
+def _candidate_names_match(stored: str, current: str) -> bool:
+    stored_normalized = "".join(stored.split()).casefold()
+    current_normalized = "".join(current.split()).casefold()
+    return bool(
+        stored_normalized
+        and current_normalized
+        and stored_normalized == current_normalized
+    )
 
 
 def _updated_session(

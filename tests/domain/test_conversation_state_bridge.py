@@ -299,6 +299,115 @@ def test_identity_includes_position_and_recent_message_fallback(tmp_path: Path) 
     assert reused.confidence == "recent_messages"
 
 
+def test_fingerprint_ignores_volatile_raw_metadata() -> None:
+    relative_metadata = [
+        ChatMessage(
+            sender=MessageSender.CANDIDATE,
+            text="Hello, I can interview tomorrow.",
+            raw_text="2 minutes ago unread Hello, I can interview tomorrow.",
+        ),
+        ChatMessage(
+            sender=MessageSender.ME,
+            text="What time works for you?",
+            raw_text="just now sent What time works for you?",
+        ),
+    ]
+    absolute_metadata = [
+        ChatMessage(
+            sender=MessageSender.CANDIDATE,
+            text="Hello, I can interview tomorrow.",
+            raw_text="2026-07-21 09:30 read Hello, I can interview tomorrow.",
+        ),
+        ChatMessage(
+            sender=MessageSender.ME,
+            text="What time works for you?",
+            raw_text="2026-07-21 09:31 read What time works for you?",
+        ),
+    ]
+
+    assert recent_messages_fingerprint(relative_metadata) == recent_messages_fingerprint(
+        absolute_metadata
+    )
+
+
+def test_stable_platform_identity_accepts_same_candidate_with_evolved_messages(
+    tmp_path: Path,
+) -> None:
+    repository = ConversationRepository(tmp_path / "stable-same-candidate.sqlite")
+    initial = Conversation(
+        id="boss-conversation-123",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Alice Smith", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="I am interested in this role.",
+                raw_text="2 minutes ago unread I am interested in this role.",
+            )
+        ],
+        should_reply=True,
+    )
+    created = resolve_or_create_session(repository, initial)
+    evolved = Conversation(
+        id="boss-conversation-123",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name=" aliceSMITH ", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="I uploaded my latest resume.",
+                raw_text="2026-07-21 09:30 read I uploaded my latest resume.",
+            )
+        ],
+        should_reply=True,
+    )
+
+    reopened = resolve_or_create_session(repository, evolved)
+
+    assert reopened.session.id == created.session.id
+    assert reopened.warnings == []
+
+
+def test_stable_platform_identity_warns_when_candidate_name_changes(
+    tmp_path: Path,
+) -> None:
+    repository = ConversationRepository(tmp_path / "stable-changed-candidate.sqlite")
+    initial = Conversation(
+        id="boss-conversation-456",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Alice Smith", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="I am interested in this role.",
+            )
+        ],
+        should_reply=True,
+    )
+    created = resolve_or_create_session(repository, initial)
+    changed_candidate = Conversation(
+        id="boss-conversation-456",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Bob Jones", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="This is a different candidate conversation.",
+            )
+        ],
+        should_reply=True,
+    )
+
+    reopened = resolve_or_create_session(repository, changed_candidate)
+
+    assert reopened.session.id == created.session.id
+    assert "recent_messages_not_matched" in reopened.warnings
+
+
 def test_status_label_platform_id_does_not_merge_candidates(tmp_path: Path) -> None:
     """Status labels like [read] are not stable platform conversation ids."""
 

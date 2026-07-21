@@ -59,7 +59,7 @@ def _effective_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
 
 
 def _fingerprint_window(messages: list[ChatMessage]) -> str:
-    parts = [normalize_message_text(item.raw_text or item.text) for item in messages]
+    parts = [normalize_message_text(item.text or item.raw_text) for item in messages]
     return _sha256("\n".join(parts))
 
 
