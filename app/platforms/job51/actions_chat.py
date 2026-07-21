@@ -46,6 +46,7 @@ from app.platforms.types import (
 SKIP_TERMS = ("平台推荐", "为你推荐的人才", "系统提示")
 REPLIED_PATTERN = re.compile(r"\[(送达|已读)\]")
 APP_DOWNLOAD_URL_PART = "app.51job.com/51job"
+CHAT_CONTEXT_RETRY_DELAYS = (0.5, 0.75, 1.0, 1.25, 1.5, 3.0)
 _TIME_LINE_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
 _UNREAD_COUNT_PATTERN = re.compile(r"^\d+$")
 _ANONYMOUS_NAME_SUFFIXES = ("女士", "先生", "同学", "小姐")
@@ -561,6 +562,25 @@ async def read_chat_context(page: BrowserPage, *, owner: str) -> Conversation:
     )
 
 
+async def read_chat_context_when_ready(page: BrowserPage, *, owner: str) -> Conversation:
+    """Wait for the selected 51job message list, not only the shared input box."""
+
+    context = await read_chat_context(page, owner=owner)
+    if _last_effective_message(context.messages) is not None:
+        return context
+
+    for delay in CHAT_CONTEXT_RETRY_DELAYS:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        candidate = await read_chat_context(page, owner=owner)
+        if not _same_chat_context_identity(context, candidate):
+            continue
+        context = candidate
+        if _last_effective_message(context.messages) is not None:
+            return context
+    return context
+
+
 async def send_message(
     page: BrowserPage,
     message: str,
@@ -690,6 +710,23 @@ def _last_effective_message(messages: list[ChatMessage]) -> ChatMessage | None:
         if message.sender != MessageSender.SYSTEM and message.text.strip():
             return message
     return None
+
+
+def _same_chat_context_identity(expected: Conversation, actual: Conversation) -> bool:
+    expected_name = expected.candidate.name.strip()
+    actual_name = actual.candidate.name.strip()
+    if expected_name and actual_name and expected_name != actual_name:
+        if not (
+            _anonymous_name_matches(expected_name, actual_name)
+            or _anonymous_name_matches(actual_name, expected_name)
+        ):
+            return False
+
+    expected_position = expected.candidate.applied_position.strip()
+    actual_position = actual.candidate.applied_position.strip()
+    if expected_position and actual_position:
+        return _position_matches(expected_position, actual_position)
+    return True
 
 
 def _position_matches(actual: str, expected: str) -> bool:

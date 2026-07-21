@@ -46,7 +46,7 @@ class Job51Adapter:
 
     async def read_chat_context(self) -> Conversation:
         if self._conversation_snapshot is None:
-            self._conversation_snapshot = await actions_chat.read_chat_context(
+            self._conversation_snapshot = await actions_chat.read_chat_context_when_ready(
                 self.page,
                 owner=self.owner,
             )

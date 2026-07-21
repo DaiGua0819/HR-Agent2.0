@@ -121,9 +121,11 @@ def test_automation_details_page_is_admin_guarded_and_queries_details() -> None:
         assert f"{action}:" in script
     for stage in (
         "candidate_rejected",
+        "chat_context_not_ready",
         "direct_resume_prompt_send_failed",
         "ignored_position",
         "last_message_not_candidate",
+        "resume_download_unavailable_skipped",
         "screening_unclear",
         "unconfigured_position",
     ):

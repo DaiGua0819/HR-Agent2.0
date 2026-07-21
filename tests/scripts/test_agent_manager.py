@@ -96,6 +96,25 @@ class AgentManagerTests(unittest.TestCase):
         self.assertFalse(result.is_anomaly)
         self.assertEqual(result.reasons, [])
 
+    def test_resume_download_unavailable_skip_is_not_an_anomaly(self) -> None:
+        result = agent_manager.classify_result(
+            {
+                "accepted": True,
+                "processed": 1,
+                "nextAction": "wait",
+                "stage": "resume_download_unavailable_skipped",
+                "decision": {
+                    "result": {
+                        "skipped": True,
+                        "reason": "resume_download_unavailable_skipped",
+                    }
+                },
+            }
+        )
+
+        self.assertFalse(result.is_anomaly)
+        self.assertEqual(result.reasons, [])
+
     def test_run_counters_include_processed_anomaly_contact(self) -> None:
         state = {"processed": 0, "anomalies": 0}
         classification = agent_manager.Classification(

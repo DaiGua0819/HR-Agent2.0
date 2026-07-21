@@ -17,7 +17,7 @@ from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
-from app.platforms.job51 import actions_resume_close
+from app.platforms.job51 import actions_chat, actions_resume_close
 from app.platforms.job51 import dom_scripts as job51_dom_scripts
 from app.platforms.job51 import resume_files as job51_resume_files
 from app.platforms.job51.actions_chat import (
@@ -1087,6 +1087,43 @@ def test_job51_read_chat_context_parses_batch_panel_candidate_message() -> None:
     assert context.should_reply is True
 
 
+def test_job51_adapter_waits_for_delayed_chat_messages(monkeypatch) -> None:
+    """The selected row may settle before its message list is mounted."""
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(actions_chat.asyncio, "sleep", no_sleep)
+    page = DelayedJob51ContextPage(
+        [
+            {
+                "id": "candidate-a",
+                "name": "Candidate A",
+                "position": "AI Product Manager",
+                "messages": [],
+                "latest_message": "Hello",
+                "unread_count": 1,
+            },
+            {
+                "id": "candidate-a",
+                "name": "Candidate A",
+                "position": "AI Product Manager",
+                "messages": [{"sender": "candidate", "text": "Hello"}],
+                "latest_message": "Hello",
+                "unread_count": 1,
+            },
+        ]
+    )
+    adapter = Job51Adapter(page, owner="宋峰峰")  # type: ignore[arg-type]
+
+    context = asyncio.run(adapter.read_chat_context())
+
+    assert page.dom_context_reads == 2
+    assert context.candidate.name == "Candidate A"
+    assert context.messages[-1].sender == MessageSender.CANDIDATE
+    assert context.should_reply is True
+
+
 def test_job51_click_thread_by_state_falls_back_to_row_index() -> None:
     """51job 行点击支持 row state fallback，避开真实虚拟列表原生点击不稳。"""
 
@@ -1795,6 +1832,57 @@ def test_job51_ai_product_manager_question_still_downloads_online_resume() -> No
     assert page.resume_requests == 0
 
 
+def test_job51_direct_resume_waits_past_empty_context_and_downloads_visible_resume(
+    monkeypatch,
+) -> None:
+    """An empty first chat read must not bypass a visible direct-role resume."""
+
+    monkeypatch.setattr(actions_chat, "CHAT_CONTEXT_RETRY_DELAYS", (0.0,))
+    convo = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "Hello"}],
+        online_resume_download_bytes=minimal_pdf_with_text(
+            "Candidate AI Product Manager"
+        ),
+        online_resume_filename="candidate.pdf",
+        preview_only=True,
+    )
+    convo["name"] = "Candidate"
+    convo["messages"] = []
+    convo["latest_message"] = "[New greeting] Hello"
+    page = FakePage(conversations=[convo])
+    adapter = Job51Adapter(page, owner="宋峰峰")
+    runner = ConversationRunner(adapter, rules=sample_rules())
+
+    state = asyncio.run(runner.run_current())
+
+    result = state["decision"]["result"]
+    assert state["stage"] == "resume_attachment_downloaded"
+    assert result["downloaded"] is True
+    assert result["sourceKind"] == "online_resume"
+
+
+def test_job51_direct_resume_question_prefixed_with_darao_is_not_closing() -> None:
+    """A polite question beginning with '打扰了' is not a closing turn."""
+
+    convo = conversation(
+        "AI Product Manager",
+        [{"sender": "other", "text": "打扰了，想了解一下AI产品经理的更多信息"}],
+        online_resume_download_bytes=minimal_pdf_with_text(
+            "Candidate AI Product Manager"
+        ),
+        online_resume_filename="candidate.pdf",
+        preview_only=True,
+    )
+    convo["name"] = "Candidate"
+    state, page = run_case(convo)
+
+    result = state["decision"]["result"]
+    assert state["stage"] == "resume_attachment_downloaded"
+    assert result["downloaded"] is True
+    assert page.sent_messages == []
+
+
 def test_job51_ellipsis_position_matches_investment_direct_resume() -> None:
     """51job 列表会截断长岗位名，省略号岗位仍应命中投资岗直求简历规则。"""
 
@@ -2428,26 +2516,29 @@ def test_job51_resume_identity_guard_accepts_matching_candidate_pdf() -> None:
     assert "Current Candidate" in str(result["filePath"])
 
 
-def test_job51_request_resume_rejects_preview_only() -> None:
-    """聊天里可见的在线简历预览文字不能被计为已下载简历。"""
+def test_job51_request_resume_does_not_request_for_unverified_preview() -> None:
+    """Unverified preview text must not trigger an attachment fallback."""
 
     page = FakePage(
         conversations=[
-            conversation(
-                "销售管培生",
-                [{"sender": "other", "text": "已发在线简历"}],
-                preview_only=True,
-            )
+            {
+                **conversation(
+                    "销售管培生",
+                    [{"sender": "other", "text": "已发在线简历"}],
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+            }
         ]
     )
     adapter = Job51Adapter(page, owner="和新红")
     result = asyncio.run(adapter.request_resume())
-    assert result["requested"] is True
-    assert result["confirmed"] is True
+    assert result["requested"] is False
+    assert result["blocked"] is True
     assert result["downloaded"] is False
-    assert result["reason"] == "online_resume_not_exportable_attachment_requested"
+    assert result["reason"] == "online_resume_preview_not_verified"
     assert result["onlineResumeFailure"]["reason"] == "online_resume_preview_not_verified"
-    assert page.resume_requests == 1
+    assert page.resume_requests == 0
 
 
 def test_job51_preview_only_online_resume_uses_save_download_before_request() -> None:
@@ -2527,29 +2618,31 @@ def test_job51_online_resume_uses_toolbar_save_when_legacy_id_is_missing() -> No
     assert page.resume_requests == 0
 
 
-def test_job51_online_resume_without_export_requests_attachment_resume() -> None:
-    """A visible online resume without an export control must fall back to an attachment request."""
+def test_job51_online_resume_without_export_is_skipped_without_request() -> None:
+    """A visible resume without a download control is a normal no-message skip."""
 
     page = OnlineResumeEntryPage(
         conversations=[
-            conversation(
-                "AI Product Manager",
-                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
-                preview_only=True,
-            )
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+            }
         ]
     )
     adapter = Job51Adapter(page, owner="和新红")
 
     result = asyncio.run(adapter.request_resume())
 
-    assert result["requested"] is True
-    assert result["confirmed"] is True
+    assert result["requested"] is False
+    assert result["skipped"] is True
     assert result["downloaded"] is False
-    assert result["reason"] == "online_resume_not_exportable_attachment_requested"
-    assert result["onlineResumeFailure"]["reason"] == "online_resume_download_link_missing"
-    assert result["onlineResumeFailure"]["download"]["reason"] == "fake_download_missing"
-    assert page.resume_requests == 1
+    assert result["reason"] == "resume_download_unavailable_skipped"
+    assert result["onlineResumeFailure"]["reason"] == "online_resume_export_not_available"
+    assert page.resume_requests == 0
     assert page.resume_preview_closes == 1
 
 
@@ -2573,22 +2666,27 @@ def test_job51_online_resume_does_not_fetch_blob_without_visible_export_control(
 
     result = asyncio.run(adapter.request_resume())
 
-    assert result["requested"] is True
+    assert result["requested"] is False
+    assert result["skipped"] is True
     assert result["downloaded"] is False
     assert result["onlineResumeFailure"]["reason"] == "online_resume_export_not_available"
-    assert page.resume_requests == 1
+    assert result["reason"] == "resume_download_unavailable_skipped"
+    assert page.resume_requests == 0
 
 
-def test_job51_runner_does_not_send_attachment_message_when_native_request_is_unavailable() -> None:
-    """An unavailable online export must fail without sending a text fallback."""
+def test_job51_runner_skips_missing_download_without_anomaly_action() -> None:
+    """An unavailable online export is skipped without any outgoing fallback."""
 
     page = OnlineResumeWithoutNativeRequestPage(
         conversations=[
-            conversation(
-                "AI Product Manager",
-                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
-                preview_only=True,
-            )
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+            }
         ]
     )
     adapter = Job51Adapter(page, owner="和新红")
@@ -2597,10 +2695,12 @@ def test_job51_runner_does_not_send_attachment_message_when_native_request_is_un
     state = asyncio.run(runner.run_current())
 
     result = state["decision"]["result"]
-    assert state["stage"] == "request_resume_action_failed"
+    assert state["next_action"] == "wait"
+    assert state["stage"] == "resume_download_unavailable_skipped"
     assert result["requested"] is False
+    assert result["skipped"] is True
     assert "textRequestSent" not in result
-    assert result["reason"] == "online_resume_not_exportable_attachment_request_unavailable"
+    assert result["reason"] == "resume_download_unavailable_skipped"
     assert page.sent_messages == []
     assert page.resume_requests == 0
 
@@ -2610,11 +2710,14 @@ def test_job51_runner_does_not_send_common_phrase_in_new_greeting_view() -> None
 
     page = NewGreetingOnlineResumeWithoutNativeRequestPage(
         conversations=[
-            conversation(
-                "AI Product Manager",
-                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
-                preview_only=True,
-            )
+            {
+                **conversation(
+                    "AI Product Manager",
+                    [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                    preview_only=True,
+                ),
+                "online_resume_export_available": False,
+            }
         ]
     )
     adapter = Job51Adapter(page, owner="和新红")
@@ -2623,8 +2726,9 @@ def test_job51_runner_does_not_send_common_phrase_in_new_greeting_view() -> None
     state = asyncio.run(runner.run_current())
 
     result = state["decision"]["result"]
-    assert state["stage"] == "request_resume_action_failed"
+    assert state["stage"] == "resume_download_unavailable_skipped"
     assert result["requested"] is False
+    assert result["skipped"] is True
     assert "textRequestSent" not in result
     assert page.sent_messages == []
     assert state.get("sent_messages", []) == []
@@ -2647,6 +2751,7 @@ def test_job51_online_preview_failure_does_not_message_another_candidate() -> No
         [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
         preview_only=True,
     )
+    target["online_resume_export_available"] = False
     target["name"] = "Target Candidate"
     wrong = conversation(
         "AI Product Manager",
@@ -2662,7 +2767,7 @@ def test_job51_online_preview_failure_does_not_message_another_candidate() -> No
 
     state = asyncio.run(runner.run_current())
 
-    assert state["stage"] == "request_resume_action_failed"
+    assert state["stage"] == "resume_download_unavailable_skipped"
     assert page.escape_presses == 0
     assert target["messages"] == [
         {"sender": "other", "text": "您好，我对职位很感兴趣"}
@@ -2678,6 +2783,7 @@ def test_job51_resume_failure_sends_nothing_if_page_changes_candidate_after_clos
         [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
         preview_only=True,
     )
+    target["online_resume_export_available"] = False
     target["name"] = "Target Candidate"
     wrong = conversation(
         "AI Product Manager",
@@ -2694,8 +2800,9 @@ def test_job51_resume_failure_sends_nothing_if_page_changes_candidate_after_clos
     state = asyncio.run(runner.run_current())
 
     result = state["decision"]["result"]
-    assert state["stage"] == "request_resume_action_failed"
+    assert state["stage"] == "resume_download_unavailable_skipped"
     assert result["requested"] is False
+    assert result["skipped"] is True
     assert "textRequestSent" not in result
     assert page.sent_messages == []
     assert target["messages"] == [
@@ -2704,7 +2811,7 @@ def test_job51_resume_failure_sends_nothing_if_page_changes_candidate_after_clos
     assert wrong["messages"] == [{"sender": "other", "text": "另一个候选人"}]
 
 
-def test_job51_attachment_without_download_link_blocks_without_request() -> None:
+def test_job51_attachment_without_download_link_skips_without_request() -> None:
     """附件卡存在但真实下载链接缺失时，明确 blocked，不继续点求简历。"""
 
     page = FakePage(
@@ -2720,7 +2827,8 @@ def test_job51_attachment_without_download_link_blocks_without_request() -> None
 
     result = asyncio.run(adapter.request_resume())
 
-    assert result["blocked"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "resume_download_unavailable_skipped"
     assert result["downloaded"] is False
     assert result["requested"] is False
     assert page.resume_requests == 0

@@ -47,6 +47,8 @@ from app.evaluation.decision_log import GLOBAL_DECISION_SINK, InMemoryDecisionSi
 from app.platforms.base import PlatformAdapter
 from app.platforms.types import Conversation, MessageSender
 
+RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON = "resume_download_unavailable_skipped"
+
 
 async def run_once(state: GraphState) -> GraphState:
     """给定账号与会话上下文，运行 LangGraph 一轮。"""
@@ -105,6 +107,12 @@ class ConversationRunner:
             return self._finish(state, "skip", "unconfigured_position")
         state["position_rule"] = rule
         state["rule_source"] = rule.get("ruleSource", "")
+
+        if not conversation.messages and is_direct_resume_rule(rule):
+            handled, _ = await self._preflight_resume_request(state)
+            if handled:
+                return handled
+            return self._finish(state, "wait", "chat_context_not_ready")
 
         last = last_non_system(conversation)
         if not last or last.sender != MessageSender.CANDIDATE:
@@ -578,6 +586,17 @@ class ConversationRunner:
         request_state = await self.adapter.inspect_resume_request_state()
         if request_state.has_resume_attachment:
             result = await self._request_resume(state)
+            if self._resume_download_unavailable_skipped(result):
+                return (
+                    self._finish(
+                        state,
+                        "wait",
+                        RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON,
+                        **extra,
+                        result=result,
+                    ),
+                    request_state,
+                )
             if result.get("downloaded") and result.get("filePath"):
                 return (
                     self._finish(
@@ -677,6 +696,15 @@ class ConversationRunner:
         success_reason: str,
         **extra: Any,
     ) -> GraphState:
+        if self._resume_download_unavailable_skipped(result):
+            state["resume_requested"] = False
+            return self._finish(
+                state,
+                "wait",
+                RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON,
+                result=result,
+                **extra,
+            )
         if result.get("candidateUnavailable"):
             state["resume_requested"] = False
             return self._finish(
@@ -724,6 +752,14 @@ class ConversationRunner:
             or result.get("acceptedResumeConsent")
             or result.get("consentHandled")
             or (result.get("downloaded") and result.get("filePath"))
+        )
+
+    @staticmethod
+    def _resume_download_unavailable_skipped(result: dict[str, Any]) -> bool:
+        return bool(
+            result.get("skipped")
+            and str(result.get("reason") or "")
+            == RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON
         )
 
     def _knowledge_answer(self, text: str, conversation: Conversation) -> str | None:
@@ -928,10 +964,15 @@ def _candidate_closing_turn(
     compact = re.sub(r"[\s，。！？!?、,.；;：:]+", "", str(text or "").lower())
     if not compact:
         return False
+    if compact.startswith("打扰了"):
+        closing_tail = compact[len("打扰了") :]
+        if not closing_tail or any(
+            term in closing_tail for term in ("谢谢", "感谢", "不打扰", "祝好")
+        ):
+            return True
     if any(
         term in compact
         for term in (
-            "打扰了",
             "不打扰了",
             "先不打扰",
             "感谢您的时间",

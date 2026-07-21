@@ -63,6 +63,13 @@ __all__ = [
     "validate_resume_bytes",
 ]
 
+RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON = "resume_download_unavailable_skipped"
+_DOWNLOAD_CONTROL_UNAVAILABLE_REASONS = {
+    "attachment_button_not_found",
+    "attachment_download_link_missing",
+    "online_resume_export_not_available",
+}
+
 
 async def inspect_resume_request_state(page: BrowserPage) -> ResumeRequestState:
     """检查当前 51job 会话是否已有真实简历或已求过简历。"""
@@ -135,7 +142,9 @@ async def request_or_download_resume(
                 if online.get("ok"):
                     return {"requested": False, "resumeReceived": True, **online}
                 if online.get("blocked") and online.get("buttonFound"):
-                    return {"requested": False, "downloaded": False, **online}
+                    return await _finish_online_resume_failure(page, online)
+            if _download_control_unavailable(result):
+                return _resume_download_unavailable_skip(result)
             return {"requested": False, "downloaded": False, **result}
         if not payload.get("previewOnly"):
             clicked, confirmed = await _request_resume_with_confirm(page)
@@ -149,7 +158,7 @@ async def request_or_download_resume(
         )
         if online.get("ok"):
             return {"requested": False, "resumeReceived": True, **online}
-        return await _request_attachment_after_online_failure(page, online)
+        return await _finish_online_resume_failure(page, online)
     online = await _download_online_resume(
         page,
         candidate_name=candidate_name,
@@ -159,7 +168,7 @@ async def request_or_download_resume(
     if online.get("ok"):
         return {"requested": False, "resumeReceived": True, **online}
     if online.get("blocked") and online.get("buttonFound"):
-        return await _request_attachment_after_online_failure(page, online)
+        return await _finish_online_resume_failure(page, online)
     content = await _generic_attachment_bytes(page, payload)
     if isinstance(content, str):
         content = content.encode("utf-8")
@@ -566,26 +575,52 @@ async def _request_resume_with_confirm(page: BrowserPage) -> tuple[bool, bool]:
     return True, confirmed
 
 
-async def _request_attachment_after_online_failure(
+async def _finish_online_resume_failure(
     page: BrowserPage,
     online_failure: dict[str, object],
 ) -> dict[str, object]:
-    """Close an unusable online preview and request an attachment resume instead."""
+    """Close an unusable preview without sending an attachment fallback."""
 
     cleanup = await cleanup_resume_overlays(page)
-    clicked, confirmed = await _request_resume_with_confirm(page)
+    if _download_control_unavailable(online_failure):
+        return _resume_download_unavailable_skip(
+            online_failure,
+            online_failure_key="onlineResumeFailure",
+            cleanup=cleanup,
+        )
     return {
-        "requested": clicked,
-        "confirmed": confirmed,
+        "requested": False,
+        "confirmed": False,
         "downloaded": False,
-        "reason": (
-            "online_resume_not_exportable_attachment_requested"
-            if clicked
-            else "online_resume_not_exportable_attachment_request_unavailable"
-        ),
+        **online_failure,
         "onlineResumeFailure": online_failure,
         "cleanup": cleanup,
     }
+
+
+def _download_control_unavailable(result: dict[str, object]) -> bool:
+    return str(result.get("reason") or "") in _DOWNLOAD_CONTROL_UNAVAILABLE_REASONS
+
+
+def _resume_download_unavailable_skip(
+    failure: dict[str, object],
+    *,
+    online_failure_key: str = "resumeFailure",
+    cleanup: dict[str, object] | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "ok": True,
+        "requested": False,
+        "confirmed": False,
+        "downloaded": False,
+        "skipped": True,
+        "reason": RESUME_DOWNLOAD_UNAVAILABLE_SKIP_REASON,
+        "unavailableReason": str(failure.get("reason") or ""),
+        online_failure_key: failure,
+    }
+    if cleanup is not None:
+        result["cleanup"] = cleanup
+    return result
 
 
 async def _confirm_button_visible(page: BrowserPage) -> dict[str, object]:

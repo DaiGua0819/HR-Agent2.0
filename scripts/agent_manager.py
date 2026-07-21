@@ -28,6 +28,7 @@ DEFAULT_TOPOLOGY_PATH = SKILL_ROOT / "references" / "topology.json"
 ANOMALY_PATTERN = re.compile(
     r"failed|mismatch|ambiguous|stale_|_stale|not_closed|blocked|unknown_question|"
     r"unconfigured_position|download_error|security_verification|login_required|"
+    r"chat_context_not_ready|"
     r"conversation_changed|identity_changed|identity_warning|not_matched|"
     r"changed_before_send|online_resume_save_target_untrusted|"
     r"online_resume_save_dialog_not_visible|download_not_captured",
