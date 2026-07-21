@@ -6,6 +6,7 @@ import hashlib
 
 from app.domain.conversation.dedup import (
     fingerprint_in_messages,
+    legacy_raw_fingerprint_in_messages,
     recent_messages_fingerprint,
 )
 from app.domain.conversation.models import ConversationSession, SessionResolution
@@ -34,17 +35,20 @@ def resolve_or_create_session(
         position=position,
     )
     if existing is not None:
+        preserve_trusted_identity = False
         if existing.recent_messages_fingerprint and not verify_identity_by_recent_messages(
             existing.recent_messages_fingerprint,
             conversation,
         ) and not _candidate_names_match(existing.candidate_name, candidate_name):
             warnings.append("recent_messages_not_matched")
+            preserve_trusted_identity = True
         session = _updated_session(
             existing,
             conversation,
             fingerprint=fingerprint,
             confidence="platform_id_position",
             warnings=warnings,
+            preserve_trusted_identity=preserve_trusted_identity,
         )
         return SessionResolution(repository.save_session(session), "platform_id_position", warnings)
 
@@ -58,6 +62,9 @@ def resolve_or_create_session(
             matched_recent_messages = verify_identity_by_recent_messages(
                 candidate.recent_messages_fingerprint,
                 conversation,
+            ) or legacy_raw_fingerprint_in_messages(
+                candidate.recent_messages_fingerprint,
+                conversation.messages,
             )
             if matched_recent_messages:
                 session = _updated_session(
@@ -119,12 +126,17 @@ def _updated_session(
     fingerprint: str,
     confidence: str,
     warnings: list[str],
+    preserve_trusted_identity: bool = False,
 ) -> ConversationSession:
     return ConversationSession(
         id=session.id,
         platform=session.platform,
         owner=session.owner,
-        candidate_name=conversation.candidate.name.strip() or session.candidate_name,
+        candidate_name=(
+            session.candidate_name
+            if preserve_trusted_identity
+            else conversation.candidate.name.strip() or session.candidate_name
+        ),
         position=conversation.candidate.applied_position.strip() or session.position,
         applied_position=(
             conversation.candidate.applied_position.strip()
@@ -137,7 +149,11 @@ def _updated_session(
         label=conversation.candidate.label or session.label,
         current_stage=session.current_stage,
         next_action=session.next_action,
-        recent_messages_fingerprint=fingerprint or session.recent_messages_fingerprint,
+        recent_messages_fingerprint=(
+            session.recent_messages_fingerprint
+            if preserve_trusted_identity
+            else fingerprint or session.recent_messages_fingerprint
+        ),
         identity_confidence=confidence,
         identity_warnings=warnings,
         last_seen_at=session.last_seen_at,

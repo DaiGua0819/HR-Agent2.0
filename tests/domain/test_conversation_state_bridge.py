@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 import threading
 import zipfile
@@ -330,6 +331,70 @@ def test_fingerprint_ignores_volatile_raw_metadata() -> None:
     )
 
 
+def test_fingerprint_includes_raw_text_only_messages() -> None:
+    messages = [
+        ChatMessage(
+            sender=MessageSender.CANDIDATE,
+            text="",
+            raw_text="  raw-text-only   message  ",
+        )
+    ]
+
+    assert recent_messages_fingerprint(messages) == hashlib.sha256(
+        b"raw-text-only message"
+    ).hexdigest()
+
+
+def test_no_id_session_reuses_legacy_raw_first_fingerprint(tmp_path: Path) -> None:
+    database = tmp_path / "legacy-raw-first.sqlite"
+    repository = ConversationRepository(database)
+    initial = Conversation(
+        id="",
+        platform=Platform.JOB51,
+        owner="owner",
+        candidate=Candidate(name="Alice", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="Initial normalized message.",
+                raw_text="2 minutes ago   unread   hello",
+            )
+        ],
+        should_reply=True,
+    )
+    created = resolve_or_create_session(repository, initial)
+    legacy_fingerprint = hashlib.sha256(b"2 minutes ago unread hello").hexdigest()
+    with connect(database) as connection:
+        connection.execute(
+            """
+            UPDATE conversation_sessions
+            SET recent_messages_fingerprint = ?
+            WHERE id = ?
+            """,
+            (legacy_fingerprint, created.session.id),
+        )
+        connection.commit()
+    current = Conversation(
+        id="",
+        platform=Platform.JOB51,
+        owner="owner",
+        candidate=Candidate(name="Alice", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="Current normalized message changed.",
+                raw_text="2 minutes ago unread hello",
+            )
+        ],
+        should_reply=True,
+    )
+
+    reopened = resolve_or_create_session(repository, current)
+
+    assert reopened.session.id == created.session.id
+    assert reopened.confidence == "recent_messages"
+
+
 def test_stable_platform_identity_accepts_same_candidate_with_evolved_messages(
     tmp_path: Path,
 ) -> None:
@@ -388,7 +453,7 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
         should_reply=True,
     )
     created = resolve_or_create_session(repository, initial)
-    changed_candidate = Conversation(
+    first_changed_candidate = Conversation(
         id="boss-conversation-456",
         platform=Platform.BOSS,
         owner="owner",
@@ -401,11 +466,33 @@ def test_stable_platform_identity_warns_when_candidate_name_changes(
         ],
         should_reply=True,
     )
+    second_changed_candidate = Conversation(
+        id="boss-conversation-456",
+        platform=Platform.BOSS,
+        owner="owner",
+        candidate=Candidate(name="Bob Jones", applied_position="Backend Engineer"),
+        messages=[
+            ChatMessage(
+                sender=MessageSender.CANDIDATE,
+                text="These are Bob's evolved messages.",
+            )
+        ],
+        should_reply=True,
+    )
 
-    reopened = resolve_or_create_session(repository, changed_candidate)
+    first_reopened = resolve_or_create_session(repository, first_changed_candidate)
+    second_reopened = resolve_or_create_session(repository, second_changed_candidate)
+    persisted = repository.get_session(created.session.id)
 
-    assert reopened.session.id == created.session.id
-    assert "recent_messages_not_matched" in reopened.warnings
+    assert first_reopened.session.id == created.session.id
+    assert "recent_messages_not_matched" in first_reopened.warnings
+    assert "recent_messages_not_matched" in second_reopened.warnings
+    assert persisted is not None
+    assert persisted.candidate_name == created.session.candidate_name
+    assert (
+        persisted.recent_messages_fingerprint
+        == created.session.recent_messages_fingerprint
+    )
 
 
 def test_status_label_platform_id_does_not_merge_candidates(tmp_path: Path) -> None:
