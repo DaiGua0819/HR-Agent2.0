@@ -26,7 +26,6 @@ from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.boss import actions as boss_actions
 from app.platforms.boss import dom_scripts as boss_dom_scripts
 from app.platforms.boss.adapter import BossAdapter
-from app.platforms.types import ResumeRequestState
 from app.platforms.zhilian.adapter import ZhilianAdapter
 
 
@@ -953,6 +952,30 @@ def test_boss_ai_intern_answers_known_question_before_initial_phrase() -> None:
     assert page.sent_messages == ["8-11点，13-17点", phrase]
 
 
+def test_boss_ai_intern_answers_standard_clock_in_time_after_basic_accept() -> None:
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {
+                    "sender": "other",
+                    "text": "都能接受，可以问一下公司上下班标准打卡时间是几点？",
+                },
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert page.sent_messages == ["8-11点，13-17点"]
+    assert page.resume_requests == 1
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "basic_accept"
+
+
 def test_any_required_screening_accepts_explicit_alternative_experience() -> None:
     screening = {
         "mode": "ask_any_required_question",
@@ -1221,15 +1244,22 @@ def test_boss_request_resume_skips_frozen_candidate_without_clicking(monkeypatch
     assert click_attempts == []
 
 
-def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
-    """候选人主动发附件简历时，recruiter_request_resume 应点击授权卡片的“同意”。"""
+def test_boss_request_resume_ignores_pending_consent_and_only_requests_resume(
+    monkeypatch,
+) -> None:
+    """候选人主动发附件时也不得点同意，只走求简历动作。"""
 
     page = BossHardResumeActionPage(pending_resume_consent=True)
 
     async def fake_mouse_click(target_page, rect, **kwargs):
         _ = kwargs
-        if rect.get("source") == "boss_resume_consent_rect":
-            target_page.resume_consent_clicked = True
+        source = rect.get("source")
+        if source == "boss_request_resume_button_rect":
+            target_page.resume_button_clicked = True
+        elif source == "boss_request_resume_confirm_rect":
+            target_page.resume_confirm_clicked = True
+        elif source == "boss_resume_consent_rect":
+            raise AssertionError("BOSS pending consent must not be clicked")
         return {"ok": True, "method": "humanized_mouse"}
 
     monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
@@ -1237,9 +1267,10 @@ def test_boss_request_resume_uses_mouse_for_resume_consent(monkeypatch) -> None:
     result = asyncio.run(boss_actions.request_resume(page))
 
     assert result["requested"] is True
-    assert result["acceptedResumeConsent"] is True
-    assert page.resume_consent_clicked is True
-    assert page.resume_button_clicked is False
+    assert result["confirmed"] is True
+    assert page.resume_consent_clicked is False
+    assert page.resume_button_clicked is True
+    assert page.resume_confirm_clicked is True
     assert page.dom_click_scripts_called == []
 
 
@@ -1252,186 +1283,10 @@ def test_boss_resume_state_requires_actionable_consent_button() -> None:
     assert "pendingResumeConsent: Boolean(consentPrompt && consentActionable)" in script
 
 
-def test_boss_resume_consent_rect_excludes_disabled_button() -> None:
-    script = boss_actions.actions_resume._BOSS_RESUME_CONSENT_RECT_JS
-
-    assert 'classList.contains("disabled")' in script
-    assert 'pointerEvents !== "none"' in script
-
-
-def test_boss_resume_consent_preserves_failed_mouse_click_diagnostics(monkeypatch) -> None:
-    async def fake_safe_eval(page, script, arg=None):
-        _ = page, script, arg
-        return {
-            "found": True,
-            "source": "boss_resume_consent_rect",
-            "x": 826.0,
-            "y": 98.0,
-            "width": 111.0,
-            "height": 34.0,
-        }
-
-    async def fake_mouse_click(page, rect, **kwargs):
-        _ = page, rect, kwargs
-        return {
-            "ok": False,
-            "reason": "resume_consent_still_pending",
-            "target": {"x": 881.5, "y": 115.0},
-        }
-
-    async def fake_find_button(page, selector, expected_text):
-        _ = page, selector, expected_text
-        return None
-
-    monkeypatch.setattr(boss_actions.actions_resume, "_safe_eval_dict", fake_safe_eval)
-    monkeypatch.setattr(boss_actions.actions_resume, "boss_click_rect", fake_mouse_click)
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "_find_button_by_text",
-        fake_find_button,
-    )
-
-    result = asyncio.run(boss_actions.actions_resume._click_resume_consent(FakePage()))
-
-    assert result["clicked"] is False
-    assert result["reason"] == "resume_consent_still_pending"
-    assert result["humanizedClick"]["target"] == {"x": 881.5, "y": 115.0}
-
-
-def test_boss_resume_consent_accepts_attachment_state_change_when_click_is_unverified(
+def test_boss_request_resume_confirms_request_when_consent_card_appears(
     monkeypatch,
 ) -> None:
-    """The received attachment is stronger evidence than stale consent-card DOM."""
-
-    states = iter(
-        (
-            ResumeRequestState(
-                has_resume_attachment=False,
-                already_requested=False,
-                pending_resume_consent=True,
-                summary="before",
-            ),
-            ResumeRequestState(
-                has_resume_attachment=True,
-                already_requested=False,
-                pending_resume_consent=True,
-                summary="after",
-            ),
-        )
-    )
-
-    async def fake_inspect(page):
-        _ = page
-        return next(states)
-
-    async def fake_click(page):
-        _ = page
-        return {"clicked": False, "reason": "resume_consent_button_not_found"}
-
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "inspect_resume_request_state",
-        fake_inspect,
-    )
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "_click_resume_consent",
-        fake_click,
-    )
-
-    result = asyncio.run(boss_actions.request_resume(FakePage()))
-
-    assert result["ok"] is True
-    assert result["outcome"] == "resume_consent_accepted"
-    assert result["acceptedResumeConsent"] is True
-    assert result["resumeReceived"] is True
-
-
-def test_boss_resume_consent_verifier_accepts_received_attachment(monkeypatch) -> None:
-    async def fake_inspect(page):
-        _ = page
-        return ResumeRequestState(
-            has_resume_attachment=True,
-            already_requested=False,
-            pending_resume_consent=True,
-            summary="attachment received while consent card remains mounted",
-        )
-
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "inspect_resume_request_state",
-        fake_inspect,
-    )
-
-    result = asyncio.run(boss_actions.actions_resume._resume_consent_accepted(FakePage()))
-
-    assert result["verified"] is True
-    assert result["reason"] == "resume_attachment_received"
-
-
-def test_boss_resume_consent_dismisses_stale_request_dialog_before_accepting(
-    monkeypatch,
-) -> None:
-    states = iter(
-        (
-            ResumeRequestState(
-                has_resume_attachment=False,
-                already_requested=False,
-                pending_resume_consent=True,
-                summary="before",
-            ),
-            ResumeRequestState(
-                has_resume_attachment=False,
-                already_requested=False,
-                pending_resume_consent=False,
-                summary="after",
-            ),
-        )
-    )
-    events: list[str] = []
-
-    async def fake_inspect(page):
-        _ = page
-        return next(states)
-
-    async def fake_dismiss(page):
-        _ = page
-        events.append("dismiss")
-        return {"dismissed": True}
-
-    async def fake_click(page):
-        _ = page
-        events.append("consent")
-        return {"clicked": True}
-
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "inspect_resume_request_state",
-        fake_inspect,
-    )
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "_dismiss_stale_resume_request_dialog",
-        fake_dismiss,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        boss_actions.actions_resume,
-        "_click_resume_consent",
-        fake_click,
-    )
-
-    result = asyncio.run(boss_actions.request_resume(FakePage()))
-
-    assert result["ok"] is True
-    assert events == ["dismiss", "consent"]
-    assert result["dialogDismiss"] == {"dismissed": True}
-
-
-def test_boss_request_resume_switches_to_consent_when_resume_arrives_before_confirm(
-    monkeypatch,
-) -> None:
-    """确认弹窗出现后候选人发来简历时，不得继续点击旧确认按钮。"""
+    """待同意附件卡片出现时仍只完成求简历确认，不点击同意。"""
 
     page = BossHardResumeActionPage()
 
@@ -1442,7 +1297,7 @@ def test_boss_request_resume_switches_to_consent_when_resume_arrives_before_conf
             target_page.resume_button_clicked = True
             target_page.pending_resume_consent = True
         elif source == "boss_resume_consent_rect":
-            target_page.resume_consent_clicked = True
+            raise AssertionError("BOSS pending consent must not be clicked")
         elif source == "boss_request_resume_confirm_rect":
             target_page.resume_confirm_clicked = True
         return {"ok": True, "method": "humanized_mouse"}
@@ -1452,10 +1307,9 @@ def test_boss_request_resume_switches_to_consent_when_resume_arrives_before_conf
     result = asyncio.run(boss_actions.request_resume(page))
 
     assert result["ok"] is True
-    assert result["outcome"] == "resume_consent_accepted"
-    assert result["acceptedResumeConsent"] is True
-    assert page.resume_consent_clicked is True
-    assert page.resume_confirm_clicked is False
+    assert result["outcome"] == "request_confirmed"
+    assert page.resume_consent_clicked is False
+    assert page.resume_confirm_clicked is True
 
 
 def test_boss_request_resume_reports_dialog_replacement_without_terminal_state(

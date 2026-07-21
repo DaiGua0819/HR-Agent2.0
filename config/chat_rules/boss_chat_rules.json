@@ -3211,6 +3211,9 @@
         "topic": "scheduleAndRest",
         "questionPatterns": [
           "工作时间",
+          "上下班时间",
+          "打卡时间",
+          "标准打卡时间",
           "几点上班",
           "几点下班"
         ],

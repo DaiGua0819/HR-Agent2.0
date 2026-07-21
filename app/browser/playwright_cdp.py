@@ -85,7 +85,23 @@ JOB51_ONLINE_RESUME_SAVE_TARGET_JS = r"""
     );
     return positive && !negative;
   }).sort((a, b) => b.rect.left - a.rect.left);
-  const target = semantic[0] || null;
+  const ordered = [...controls].sort((a, b) => a.rect.left - b.rect.left);
+  const cluster = ordered.find((item, index) => {
+    const next = ordered.slice(index + 1, index + 4);
+    if (next.length !== 3) return false;
+    const labels = next.map((entry) => entry.label);
+    if (!/收藏|favorite|collect/i.test(labels[0])) return false;
+    if (!/转发|forward|share/i.test(labels[1])) return false;
+    if (!/打印|print/i.test(labels[2])) return false;
+    const sequence = [item, ...next];
+    return sequence.every((entry, offset) => {
+      if (offset === 0) return true;
+      const previous = sequence[offset - 1];
+      const gap = entry.rect.left - previous.rect.right;
+      return Math.abs(entry.rect.top - item.rect.top) <= 8 && gap >= -4 && gap <= 24;
+    });
+  }) || null;
+  const target = semantic[0] || cluster;
   if (!target) {
     return {
       found: false,
@@ -105,7 +121,9 @@ JOB51_ONLINE_RESUME_SAVE_TARGET_JS = r"""
     trusted: true,
     x: target.rect.left + target.rect.width / 2,
     y: target.rect.top + target.rect.height / 2,
-    source: "job51_toolbar_semantic_save",
+    source: semantic[0]
+      ? "job51_toolbar_semantic_save"
+      : "job51_toolbar_save_before_named_cluster",
     label: target.label.slice(0, 120),
     selector: `[${marker}='trusted']`,
   };
@@ -353,6 +371,23 @@ class PlaywrightCDPPage:
                 )
                 if direct.get("ok"):
                     return {"clicked": clicked, **direct}
+
+            popup_url = str(clicked.get("popupInitialUrl") or "")
+            if opened_new_page and popup_url:
+                popup_fetch = await self._fetch_zhilian_temporary_url(popup_url)
+                clicked["popupUrlFetch"] = {
+                    key: value for key, value in popup_fetch.items() if key != "bytes"
+                }
+                if popup_fetch.get("ok") and popup_fetch.get("bytes"):
+                    return {
+                        "ok": True,
+                        "clicked": clicked,
+                        "filename": popup_fetch.get("filename")
+                        or "zhilian_resume_attachment",
+                        "bytes": popup_fetch["bytes"],
+                        "path": "",
+                        "source": "zhilian_popup_url_fetch",
+                    }
 
             if opened_new_page and self._page_is_closed(target_page):
                 clicked["popupClosedBeforeCapture"] = True
@@ -678,6 +713,56 @@ class PlaywrightCDPPage:
             "url": str(payload.get("url") or ""),
         }
 
+    async def _fetch_zhilian_temporary_url(self, url: str) -> dict[str, Any]:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "attachment.zhaopin.com"
+            or parsed.path != "/resumeapi/parsev2/downloadFileTemporary"
+        ):
+            return {"ok": False, "reason": "untrusted_zhilian_attachment_url"}
+        request = getattr(self.page.context, "request", None)
+        getter = getattr(request, "get", None)
+        if not callable(getter):
+            return {"ok": False, "reason": "context_request_unavailable"}
+        try:
+            response = await getter(url, timeout=15000)
+            content = await response.body()
+            headers = dict(getattr(response, "headers", {}) or {})
+            status = int(getattr(response, "status", 0) or 0)
+            ok = bool(getattr(response, "ok", False))
+        except Exception as error:
+            return {
+                "ok": False,
+                "reason": "zhilian_attachment_url_fetch_failed",
+                "error": str(error),
+            }
+        if not ok or not content:
+            return {
+                "ok": False,
+                "reason": "zhilian_attachment_url_empty",
+                "status": status,
+            }
+        content_type = str(headers.get("content-type") or "")
+        if "text/html" in content_type.lower() or content.lstrip().lower().startswith(b"<html"):
+            return {
+                "ok": False,
+                "reason": "zhilian_attachment_url_returned_html",
+                "status": status,
+                "contentType": content_type,
+            }
+        disposition = str(headers.get("content-disposition") or "")
+        filename = ""
+        if "filename=" in disposition.lower():
+            filename = disposition.split("=", 1)[1].strip().strip('"\'')
+        return {
+            "ok": True,
+            "status": status,
+            "contentType": content_type,
+            "filename": filename,
+            "bytes": content,
+        }
+
     async def _click_pdf_viewer_download(
         self,
         page: Any,
@@ -746,6 +831,7 @@ class PlaywrightCDPPage:
                 source = str(target.get("source") or "")
                 if target.get("trusted") is not True or source not in {
                     "job51_toolbar_semantic_save",
+                    "job51_toolbar_save_before_named_cluster",
                 }:
                     return {
                         "ok": False,

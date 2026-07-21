@@ -60,7 +60,6 @@ REQUEST_RESUME_CONFIRM_BUTTON = (
     ".btn-primary, .confirm-btn, .sure-btn"
 )
 REQUEST_RESUME_CONFIRM_TEXTS = ("确认", "确定", "发送请求", "发起请求", "继续")
-RESUME_CONSENT_TEXT = "同意"
 UNSUITABLE_BUTTON_TEXT = "不合适"
 
 COMMON_PHRASE_BUTTON = "button, [role='button'], .common-phrase, .phrase-entry"

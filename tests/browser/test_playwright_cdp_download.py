@@ -179,6 +179,27 @@ def test_zhilian_attachment_download_reports_popup_closed_before_capture(
     assert popup.wait_timeout_calls == 0
 
 
+def test_zhilian_attachment_download_fetches_trusted_temporary_popup_url(
+    tmp_path: Path,
+) -> None:
+    popup = _AutoClosingRawPage()
+    popup.url = (
+        "https://attachment.zhaopin.com/resumeapi/parsev2/downloadFileTemporary"
+        "?file=trusted-token&fileName=resume.pdf"
+    )
+    original = _ZhilianRawPage(opened_page=popup)
+    request = _ContextRequest(b"%PDF-1.7\ncontext-fetch\n%%EOF")
+    original.context.request = request
+    page = _ZhilianUUIDDownloadPage(original, tmp_path)
+
+    result = asyncio.run(page._click_zhilian_attachment_resume_download(timeout_ms=200))
+
+    assert result["ok"] is True
+    assert result["source"] == "zhilian_popup_url_fetch"
+    assert result["bytes"] == b"%PDF-1.7\ncontext-fetch\n%%EOF"
+    assert request.urls == [popup.url]
+
+
 def test_zhilian_download_sets_uuid_download_behavior(
     monkeypatch,
     tmp_path: Path,
@@ -286,6 +307,45 @@ def test_job51_download_rejects_positional_toolbar_guess_without_clicking(
     assert raw.toolbar_save_clicks == 0
     assert raw.confirm_clicks == 0
     assert raw.expect_download_calls == 0
+
+
+def test_job51_download_accepts_trusted_save_before_named_toolbar_cluster(
+    tmp_path: Path,
+) -> None:
+    download_file = tmp_path / "resume.pdf"
+    download_file.write_bytes(b"%PDF-1.7\nbody\n%%EOF")
+    raw = _Job51DownloadRawPage(
+        cdp_should_fail=False,
+        download=_Download(path=str(download_file), suggested_filename="resume.pdf"),
+        save_visible=False,
+        toolbar_save_visible=True,
+        toolbar_target={
+            "found": True,
+            "trusted": True,
+            "x": 1054,
+            "y": 20,
+            "source": "job51_toolbar_save_before_named_cluster",
+            "label": "ibtn",
+            "selector": "[data-codex-job51-save-target='trusted']",
+        },
+    )
+    page = _Job51UUIDDownloadPage(raw, tmp_path)
+
+    result = asyncio.run(page._click_job51_online_resume_download(timeout_ms=15000))
+
+    assert result["ok"] is True
+    assert result["clicked"]["source"] == "job51_toolbar_save_before_named_cluster"
+    assert raw.toolbar_save_clicks == 1
+    assert raw.confirm_clicks == 1
+
+
+def test_job51_save_target_recognizes_named_toolbar_cluster() -> None:
+    script = playwright_cdp.JOB51_ONLINE_RESUME_SAVE_TARGET_JS
+
+    assert "job51_toolbar_save_before_named_cluster" in script
+    assert "收藏" in script
+    assert "转发" in script
+    assert "打印" in script
 
 
 def test_job51_download_remeasures_trusted_toolbar_target_after_hover_shift(
@@ -746,6 +806,32 @@ class _Context:
         if event != "page" or self.opened_page is None:
             raise TimeoutError("no popup")
         return self.opened_page
+
+
+class _ContextRequest:
+    def __init__(self, body: bytes) -> None:
+        self.body_bytes = body
+        self.urls: list[str] = []
+
+    async def get(self, url: str, *, timeout: int) -> _ContextResponse:
+        _ = timeout
+        self.urls.append(url)
+        return _ContextResponse(self.body_bytes)
+
+
+class _ContextResponse:
+    ok = True
+    status = 200
+    headers = {
+        "content-type": "application/pdf",
+        "content-disposition": 'attachment; filename="resume.pdf"',
+    }
+
+    def __init__(self, body: bytes) -> None:
+        self.body_bytes = body
+
+    async def body(self) -> bytes:
+        return self.body_bytes
 
 
 class _Locator:

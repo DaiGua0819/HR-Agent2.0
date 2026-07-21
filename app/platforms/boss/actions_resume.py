@@ -175,41 +175,6 @@ async def _validate_stale_resume_request_cancel(
     )
 
 
-async def _click_resume_consent(page: BrowserPage) -> dict[str, object]:
-    rect = await _safe_eval_dict(page, _BOSS_RESUME_CONSENT_RECT_JS)
-    rect_click: dict[str, object] = {}
-    if rect.get("found"):
-        rect_click = await boss_click_rect(
-            page,
-            rect,
-            label="BOSS同意接收简历",
-            verify=lambda: _resume_consent_accepted(page),
-        )
-        if rect_click.get("ok"):
-            return {"clicked": True, "humanizedClick": rect_click, "rect": rect}
-    consent = await _find_button_by_text(
-        page,
-        selectors.REQUEST_RESUME_BUTTON,
-        selectors.RESUME_CONSENT_TEXT,
-    )
-    if consent is None:
-        return {
-            "clicked": False,
-            "reason": rect_click.get("reason")
-            or rect.get("reason")
-            or "resume_consent_button_not_found",
-            "rect": rect,
-            "humanizedClick": rect_click,
-        }
-    result = await boss_click_element(
-        page,
-        consent,
-        label="BOSS同意接收简历",
-        verify=lambda: _resume_consent_accepted(page),
-    )
-    return {"clicked": bool(result.get("ok")), "humanizedClick": result, "rect": rect}
-
-
 async def _click_request_resume_button(page: BrowserPage) -> dict[str, object]:
     trusted_click = await _trusted_click_visible_request_resume_button(page)
     if trusted_click.get("ok"):
@@ -268,31 +233,12 @@ async def _trusted_click_visible_request_resume_confirm(page: BrowserPage) -> di
     }
 
 
-async def _resume_consent_accepted(page: BrowserPage) -> dict[str, object]:
-    state = await inspect_resume_request_state(page)
-    verified = bool(state.has_resume_attachment or not state.pending_resume_consent)
-    if state.has_resume_attachment:
-        reason = "resume_attachment_received"
-    elif verified:
-        reason = ""
-    else:
-        reason = "resume_consent_still_pending"
-    return {
-        "verified": verified,
-        "reason": reason,
-    }
-
-
 async def _resume_request_completed(page: BrowserPage) -> dict[str, object]:
     state = await inspect_resume_request_state(page)
-    verified = bool(
-        state.already_requested or state.has_resume_attachment or state.pending_resume_consent
-    )
+    verified = bool(state.already_requested or state.has_resume_attachment)
     reason = "resume_request_not_completed"
     if state.already_requested:
         reason = "already_requested"
-    elif state.pending_resume_consent:
-        reason = "resume_consent_pending"
     elif state.has_resume_attachment:
         reason = "resume_attachment_received"
     return {
@@ -360,28 +306,6 @@ async def _handle_terminal_resume_state(
     click: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     before_state = before_state or state
-    if state.pending_resume_consent:
-        dialog_dismiss = await _dismiss_stale_resume_request_dialog(page)
-        consent_click = await _click_resume_consent(page)
-        after_consent = await inspect_resume_request_state(page)
-        accepted = bool(
-            after_consent.has_resume_attachment
-            or (consent_click.get("clicked") and not after_consent.pending_resume_consent)
-        )
-        return {
-            "ok": accepted,
-            "outcome": "resume_consent_accepted" if accepted else "resume_consent_accept_failed",
-            "requested": accepted,
-            "acceptedResumeConsent": accepted,
-            "consentHandled": accepted,
-            "resumeReceived": bool(after_consent.has_resume_attachment),
-            "reason": "" if accepted else "resume_consent_accept_failed",
-            "beforeState": _resume_state_payload(before_state),
-            "afterState": _resume_state_payload(after_consent),
-            "click": consent_click,
-            "dialogDismiss": dialog_dismiss,
-            "stateChangeClick": click or {},
-        }
     if state.has_resume_attachment:
         return {
             "ok": True,
@@ -415,7 +339,7 @@ async def _resume_confirm_pre_click_guard(
     selector: str,
 ) -> dict[str, object]:
     state = await inspect_resume_request_state(page)
-    if state.already_requested or state.has_resume_attachment or state.pending_resume_consent:
+    if state.already_requested or state.has_resume_attachment:
         return {
             "verified": False,
             "reason": "resume_request_state_changed",
@@ -494,62 +418,6 @@ def _resume_state_from_text(text: str) -> dict[str, object]:
         "summary": text[-500:],
         "source": "text_fallback",
     }
-
-
-_BOSS_RESUME_CONSENT_RECT_JS = r"""
-() => {
-  const marker = "boss_resume_consent_rect";
-  const visible = (el) => {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" &&
-      rect.width > 0 && rect.height > 0;
-  };
-  const actionable = (el) => {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    return !el.classList.contains("disabled") &&
-      !el.hasAttribute("disabled") &&
-      el.getAttribute("aria-disabled") !== "true" &&
-      style.pointerEvents !== "none";
-  };
-  const text = (el) => (el && (el.innerText || el.textContent) || "").replace(/\s+/g, "");
-  const containers = Array.from(document.querySelectorAll(
-    ".message-item, .conversation-message, .chat-message-list, .custom-card, " +
-    ".card-wrap, .card-wrapper, .dialog-wrap.active, body"
-  )).filter((el) => visible(el) && text(el).includes("简历") && text(el).includes("是否同意"));
-  const scoped = containers.length ? containers : [document.body];
-  const candidates = [];
-  for (const root of scoped) {
-    candidates.push(...Array.from(root.querySelectorAll(
-      "span.card-btn, a.btn, button, [role='button'], .btn"
-    )));
-  }
-  const matches = candidates
-    .filter((el) => visible(el) && actionable(el) && text(el) === "同意")
-    .sort((a, b) => {
-      const priority = (el) => el.matches("span.card-btn") ? 0 : el.matches("a.btn") ? 1 : 2;
-      return priority(a) - priority(b);
-    });
-  if (!matches.length) {
-    return { found: false, reason: "resume_consent_button_not_found", source: marker };
-  }
-  const target = matches[0];
-  const rect = target.getBoundingClientRect();
-  return {
-    found: true,
-    source: marker,
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    tag: target.tagName.toLowerCase(),
-    className: String(target.className || ""),
-    text: text(target),
-  };
-}
-"""
 
 
 _BOSS_REQUEST_RESUME_BUTTON_RECT_JS = r"""
