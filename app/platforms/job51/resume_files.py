@@ -84,7 +84,11 @@ def save_resume_bytes(
             "memory": existing,
         }
     directory = PROJECT_ROOT / "data" / "downloads" / "job51"
-    existing_file = _find_existing_resume_file(directory, digest)
+    existing_file = _find_existing_resume_file(
+        directory,
+        digest,
+        content_size=len(content),
+    )
     if existing_file is not None:
         metadata = {
             "candidateName": candidate_name,
@@ -237,7 +241,12 @@ def _write_resume_file(
     return target
 
 
-def _find_existing_resume_file(directory: Path, digest: str) -> Path | None:
+def _find_existing_resume_file(
+    directory: Path,
+    digest: str,
+    *,
+    content_size: int | None = None,
+) -> Path | None:
     """跨进程查找已落盘的同内容简历，避免重复写多个副本。"""
 
     if not directory.exists():
@@ -246,11 +255,21 @@ def _find_existing_resume_file(directory: Path, digest: str) -> Path | None:
         if not path.is_file():
             continue
         try:
-            if resume_content_hash(path.read_bytes()) == digest:
+            if content_size is not None and path.stat().st_size != content_size:
+                continue
+            if _resume_file_hash(path) == digest:
                 return path
-        except OSError:
+        except (MemoryError, OSError):
             continue
     return None
+
+
+def _resume_file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_filename(value: str) -> str:

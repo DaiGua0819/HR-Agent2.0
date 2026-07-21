@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import io
 import zipfile
+from pathlib import Path
 
 from app.agent.graph import build_recruit_graph
 from app.agent.rules import load_chat_rules
@@ -18,6 +19,7 @@ from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
 from app.platforms.job51 import actions_resume_close
 from app.platforms.job51 import dom_scripts as job51_dom_scripts
+from app.platforms.job51 import resume_files as job51_resume_files
 from app.platforms.job51.actions_chat import (
     _new_greeting_phrase_candidates,
     _normalize_unread_rows,
@@ -2333,6 +2335,29 @@ def test_job51_resume_validation_and_memory_guard() -> None:
     )
     assert first["downloaded"] is True
     assert second["duplicate"] is True
+
+
+def test_job51_existing_resume_lookup_streams_files_without_read_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    content = b"%PDF-1.7\nstreamed duplicate\n%%EOF"
+    existing = tmp_path / "51job_candidate_role_deadbeef.pdf"
+    existing.write_bytes(content)
+
+    def fail_read_bytes(path: Path) -> bytes:
+        _ = path
+        raise AssertionError("existing resume lookup must not load whole files into memory")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    found = job51_resume_files._find_existing_resume_file(
+        tmp_path,
+        job51_resume_files.resume_content_hash(content),
+        content_size=len(content),
+    )
+
+    assert found == existing
 
 
 def test_job51_resume_identity_guard_blocks_wrong_candidate_pdf() -> None:

@@ -171,14 +171,6 @@ class ConversationRunner:
                     rule,
                     knowledge_answer=answer,
                 )
-            if looks_like_question(turn_text) and not self._is_resume_intent(turn_text):
-                state["pending_question"] = turn_text
-                return self._finish(
-                    state,
-                    "escalate",
-                    "unknown_question",
-                    evidence=turn_text,
-                )
             return await self._send_initial_ai_basic_phrase(state, conversation, rule)
 
         if answer:
@@ -237,10 +229,6 @@ class ConversationRunner:
             if failed:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
-
-        if looks_like_question(turn_text) and not self._is_resume_intent(turn_text):
-            state["pending_question"] = turn_text
-            return self._finish(state, "escalate", "unknown_question", evidence=turn_text)
 
         if rule_screening(rule) and should_prioritize_screening(turn_text, rule):
             return await self._handle_screening(state, conversation, rule, turn_text)

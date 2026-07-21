@@ -701,8 +701,8 @@ def test_ai_basic_leading_acknowledgement_accepts_without_swallowing_hesitation(
     assert hesitant.status == "unclear"
 
 
-def test_hrbp_unanswered_detail_question_escalates_before_screening() -> None:
-    """HRBP 复合细节问题没有知识答案时转人工，不覆盖原问题。"""
+def test_hrbp_unanswered_detail_question_skips_answer_and_starts_screening() -> None:
+    """HRBP 细节问题无法回答时不回复问题，直接进入筛选。"""
 
     state, page = run_case(
         Platform.BOSS,
@@ -712,9 +712,9 @@ def test_hrbp_unanswered_detail_question_escalates_before_screening() -> None:
         ),
     )
 
-    assert state["next_action"] == "escalate"
-    assert state["stage"] == "unknown_question"
-    assert page.sent_messages == []
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+    assert page.sent_messages == ["你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"]
     assert page.resume_requests == 0
 
 
@@ -734,8 +734,8 @@ def test_sales_paid_training_question_uses_question_patterns_without_requesting_
     assert page.resume_requests == 0
 
 
-def test_screening_unknown_question_escalates_without_asking_next_question() -> None:
-    """筛选岗位遇到不能回答的问句时转人工，不覆盖候选人的问题。"""
+def test_screening_unknown_question_skips_answer_and_asks_next_question() -> None:
+    """筛选岗位遇到不能回答的问句时不回复问题，继续下一筛选动作。"""
 
     state, page = run_case(
         Platform.BOSS,
@@ -745,9 +745,9 @@ def test_screening_unknown_question_escalates_without_asking_next_question() -> 
         ),
     )
 
-    assert state["next_action"] == "escalate"
-    assert state["stage"] == "unknown_question"
-    assert page.sent_messages == []
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+    assert len(page.sent_messages) == 1
 
 
 def test_boss_rhetorical_hr_attack_is_not_a_business_question() -> None:

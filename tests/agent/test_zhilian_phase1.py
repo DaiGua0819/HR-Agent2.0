@@ -256,8 +256,8 @@ def test_pure_hiring_status_question_is_silent() -> None:
     assert page.resume_requests == 0
 
 
-def test_hr_hiring_status_with_unanswered_detail_question_escalates() -> None:
-    """复合岗位细节问题没有知识答案时转人工，不发送下一条筛选题。"""
+def test_hr_hiring_status_with_unanswered_detail_question_starts_screening() -> None:
+    """复合岗位细节问题无法回答时不回复问题，直接进入筛选。"""
 
     state, page = run_case(
         conversation(
@@ -274,9 +274,9 @@ def test_hr_hiring_status_with_unanswered_detail_question_escalates() -> None:
         )
     )
 
-    assert state["next_action"] == "escalate"
-    assert state["stage"] == "unknown_question"
-    assert page.sent_messages == []
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+    assert page.sent_messages == ["你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗"]
     assert page.resume_requests == 0
 
 
@@ -877,8 +877,8 @@ def test_zhilian_resume_state_does_not_treat_request_button_as_received() -> Non
     assert requested.already_requested is True
 
 
-def test_screening_position_answers_known_question_then_asks_next_question() -> None:
-    """筛选岗位：能答先答再问，不能答则转人工保留原问题。"""
+def test_screening_position_answers_known_question_or_skips_to_next_question() -> None:
+    """筛选岗位能答时先答；不能答时不回复问题，继续筛选。"""
 
     state, page = run_case(conversation("销售管培生", [{"sender": "other", "text": "薪资多少？"}]))
     assert state["next_action"] == "ask_screening"
@@ -887,10 +887,9 @@ def test_screening_position_answers_known_question_then_asks_next_question() -> 
     state, page = run_case(
         conversation("销售管培生", [{"sender": "other", "text": "住宿政策是什么？"}])
     )
-    assert state["next_action"] == "escalate"
-    assert state["stage"] == "unknown_question"
-    assert state["pending_question"] == "住宿政策是什么？"
-    assert page.sent_messages == []
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+    assert page.sent_messages == ["你是否接受出差？"]
 
 
 def test_send_message_verification_uses_recent_mine_message_selector() -> None:
