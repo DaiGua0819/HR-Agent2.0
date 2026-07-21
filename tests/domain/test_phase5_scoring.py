@@ -57,7 +57,7 @@ def test_scoring_entrypoints_and_version_constants() -> None:
     contact_score = score_automation_contact_match("本科 电气 自动化 PLC 产线调试", "电气工程师")
     assert resume_score["level"] in {"A 优先", "B 复核"}
     assert contact_score["score"] == resume_score["score"]
-    assert POSITION_SCORING_VERSION == "v6-b2b-ai-product-manager-gates"
+    assert POSITION_SCORING_VERSION == "v7-fullstack-engineer-profile"
     assert SCORING_VERSION == "v4-agent-depth-human-feedback"
 
 
@@ -115,6 +115,78 @@ def test_operation_profiles_penalize_pure_execution_without_strategy() -> None:
     assert result["profile"] == "运营A"
     assert result["score"] <= 45
     assert result["risks"]["count"] >= 2
+
+
+def test_fullstack_engineer_scores_against_ai_native_b2b_platform_jd() -> None:
+    """全栈岗位应按工程 Owner、微信生态和 AI 平台交付证据评分。"""
+
+    result = calculate_jd_match(
+        (
+            "8年 TypeScript JavaScript React Next.js Node.js SQL API 全栈开发 "
+            "微信小程序 Taro 上线审核 企业微信 WeCom OAuth JS-SDK 消息回调 客户群 "
+            "领域模型 多租户 ReBAC OpenFGA 工作流 幂等 Outbox 审计 "
+            "Git Pull Request Code Review 自动化测试 CI/CD UAT 发布回滚 "
+            "LangGraph Agent Tool Calling RAG Eval Human-in-the-loop "
+            "Tech Lead 工程 Owner 带领2名开发 任务拆解 ToB客户现场 ERP CRM"
+        ),
+        "全栈工程师",
+    )
+
+    assert result["profile"] == "全栈工程师"
+    assert result["score"] >= 75
+    assert result["missingHardGates"] == []
+    assert {item["label"] for item in result["must"]["items"]} >= {
+        "TypeScript端到端全栈交付",
+        "微信小程序与企业微信生态",
+        "复杂业务架构与权限",
+        "工程Owner与质量门禁",
+        "AI原生研发与Agent工程",
+    }
+
+
+def test_fullstack_engineer_missing_ai_native_gate_cannot_reach_priority() -> None:
+    """缺少 Agent、RAG、评估或人工确认证据时不能进入 A 优先。"""
+
+    result = calculate_jd_match(
+        (
+            "8年 TypeScript React Next.js Node.js SQL API 微信小程序 Taro "
+            "企业微信 WeCom OAuth JS-SDK 客户群 多租户 ReBAC OpenFGA 工作流 "
+            "Git Pull Request Code Review 自动化测试 CI/CD UAT "
+            "Tech Lead 工程 Owner 带领团队 ERP CRM ToB客户现场"
+        ),
+        "全栈工程师",
+    )
+
+    assert "AI原生研发能力" in result["missingHardGates"]
+    assert result["score"] <= 74
+    assert result["level"] != "A 优先"
+
+
+def test_fullstack_engineer_spring_does_not_fake_pull_request_evidence() -> None:
+    """Spring 中的字母 pr 不能冒充 Pull Request 或 Review 证据。"""
+
+    result = calculate_jd_match(
+        (
+            "8年 TypeScript React Next.js Node.js Spring SQL 微信小程序 Taro "
+            "企业微信 WeCom OAuth JS-SDK 多租户 OpenFGA 工作流 "
+            "Agent RAG Eval Tech Lead 带领团队 ERP CRM"
+        ),
+        "全栈工程师",
+    )
+
+    assert "工程Owner能力" in result["missingHardGates"]
+    assert result["score"] <= 74
+
+
+def test_ai_product_manager_platform_suffix_keeps_ai_product_profile() -> None:
+    """职位描述包含 AI 原生 B2B 平台时仍应优先识别明确的 AI 产品经理。"""
+
+    result = calculate_jd_match(
+        "AI产品经理 B2B销售 企业级产品 CRM 权限 工作流 Agent",
+        "AI产品经理（AI原生B2B平台）",
+    )
+
+    assert result["profile"] == "AI产品经理"
 
 
 def test_ai_product_manager_scores_against_b2b_enterprise_product_jd() -> None:

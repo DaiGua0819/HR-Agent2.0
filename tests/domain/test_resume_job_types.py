@@ -10,6 +10,7 @@ def test_senior_fullstack_titles_use_fullstack_resume_label() -> None:
         "资深全栈工程师（AI 原生 B2B 平台 ）",
         "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）",
         "资深全栈工程师(AI原生B2B平台/工程Owner)",
+        "资深全栈工程...程 Owner）",
     )
 
     for title in titles:

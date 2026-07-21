@@ -216,6 +216,7 @@ class ConversationPersistence:
         if not file_path or not file_hash:
             return False
         session = self.session_resolution.session
+        position = str(result.get("resumeJobType") or session.position).strip()
         artifact = None
         try:
             artifact = self.artifact_store.record_download(
@@ -224,7 +225,7 @@ class ConversationPersistence:
                 owner=session.owner,
                 platform_conversation_id=session.platform_conversation_id,
                 candidate_name_from_platform=session.candidate_name,
-                position=session.position,
+                position=position,
                 file_path=file_path,
                 file_hash=file_hash,
                 source_kind=str(result.get("sourceKind") or result.get("source") or "download"),

@@ -16,6 +16,7 @@ from typing import Any
 from app.db.engine import connect, run_migrations
 from app.domain.resume.job_types import (
     AI_PRODUCT_MANAGER,
+    FULLSTACK_ENGINEER,
     OPERATION_A,
     OPERATION_B,
     canonical_resume_job_type,
@@ -25,7 +26,12 @@ from app.domain.scoring.engine import score_resume_for_profile
 from app.settings import AppSettings, load_settings
 
 _BASE_COLUMNS = ["id", "payload", "phone_key", "job_type", "match_score", "updated_at"]
-_AUTO_SCORE_JOB_TYPES = {OPERATION_A, OPERATION_B, AI_PRODUCT_MANAGER}
+_AUTO_SCORE_JOB_TYPES = {
+    OPERATION_A,
+    OPERATION_B,
+    AI_PRODUCT_MANAGER,
+    FULLSTACK_ENGINEER,
+}
 _BRIDGE_COLUMNS = [
     "parsed_name",
     "linked_session_id",

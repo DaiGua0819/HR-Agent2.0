@@ -53,7 +53,7 @@ def canonical_resume_job_type(value: object) -> str:
         or "ai pm" in text.lower()
     ):
         return AI_PRODUCT_MANAGER
-    if "资深全栈工程师" in compact:
+    if "资深全栈工程" in compact:
         return FULLSTACK_ENGINEER
     return text
 

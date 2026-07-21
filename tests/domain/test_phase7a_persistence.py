@@ -144,6 +144,35 @@ def test_resume_repository_auto_scores_ai_product_manager_resume_on_save(
     assert stored.match_score >= 75
 
 
+def test_resume_repository_auto_scores_fullstack_engineer_resume_on_save(
+    tmp_path: Path,
+) -> None:
+    """全栈工程师简历入库时应立即按对应 JD 写入 match_score。"""
+
+    repository = ResumeRepository(tmp_path / "fullstack_scores.sqlite")
+    repository.save(
+        Resume(
+            id="fullstack-1",
+            name="Dana",
+            job_type="全栈工程师",
+            payload={
+                "name": "Dana",
+                "rawText": (
+                    "8年 TypeScript React Next.js Node.js SQL API 微信小程序 Taro "
+                    "企业微信 WeCom OAuth JS-SDK 消息回调 多租户 ReBAC OpenFGA "
+                    "Git Pull Request Code Review 自动化测试 CI/CD UAT 发布回滚 "
+                    "LangGraph Agent RAG Eval Tech Lead 工程 Owner 带领团队"
+                ),
+            },
+        )
+    )
+
+    stored = repository.get("fullstack-1")
+    assert stored is not None
+    assert stored.match_score is not None
+    assert stored.match_score >= 75
+
+
 def test_batch_suggestions_evaluation_and_interview_persist(tmp_path: Path) -> None:
     """批量、规则建议、评估日志和面试会话都写入临时 SQLite。"""
 

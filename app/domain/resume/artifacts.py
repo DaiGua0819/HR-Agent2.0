@@ -62,6 +62,7 @@ class ResumeArtifactStore:
         """Record a successfully downloaded file without parsing it."""
 
         now = _now_iso()
+        normalized_position = canonical_resume_job_type(position) or str(position or "").strip()
         artifact = ResumeArtifact(
             id=_artifact_id(session_id, file_hash),
             session_id=session_id,
@@ -69,7 +70,7 @@ class ResumeArtifactStore:
             owner=owner,
             platform_conversation_id=platform_conversation_id,
             candidate_name_from_platform=candidate_name_from_platform,
-            position=position,
+            position=normalized_position,
             file_path=str(file_path),
             file_hash=file_hash,
             source_kind=source_kind,
@@ -84,7 +85,7 @@ class ResumeArtifactStore:
                 platform=platform,
                 owner=owner,
                 platform_conversation_id=platform_conversation_id,
-                position=position,
+                position=normalized_position,
             )
             if existing_row is not None:
                 existing = _artifact_from_row(existing_row)
@@ -102,7 +103,7 @@ class ResumeArtifactStore:
                     (
                         platform_conversation_id,
                         candidate_name_from_platform,
-                        position,
+                        normalized_position,
                         str(file_path),
                         file_hash,
                         source_kind,
@@ -289,12 +290,13 @@ def parse_artifact(
         text = _read_resume_text(Path(current.file_path))
         parsed_name = parse_resume_name(text, file_name=current.file_path)
         resume_id = _resume_id(current)
+        job_type = canonical_resume_job_type(current.position) or current.position
         resume = Resume(
             id=resume_id,
             name=parsed_name or None,
             parsed_name=parsed_name,
-            applied_position=current.position or None,
-            job_type=current.position or None,
+            applied_position=job_type or None,
+            job_type=job_type or None,
             source_platform=current.platform,
             source_owner=current.owner,
             linked_session_id=current.session_id,
@@ -309,7 +311,7 @@ def parse_artifact(
                 "platform": current.platform,
                 "owner": current.owner,
                 "candidateNameFromPlatform": current.candidate_name_from_platform,
-                "applied_position": current.position,
+                "applied_position": job_type,
                 "sourceArtifactId": current.id,
                 "filePath": current.file_path,
                 "fileHash": current.file_hash,
@@ -467,9 +469,7 @@ def _find_business_download_row(
             (session_key,),
         ).fetchone()
         if row is not None:
-            row_position = canonical_resume_job_type(row["position"])
-            if not position_key or not row_position or position_key == row_position:
-                return row
+            return row
     platform_id = str(platform_conversation_id or "").strip()
     if not platform_id or not position_key:
         return None

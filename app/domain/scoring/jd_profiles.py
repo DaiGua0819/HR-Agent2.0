@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.resume.job_types import AI_PRODUCT_MANAGER, OPERATION_A, OPERATION_B
+from app.domain.resume.job_types import (
+    AI_PRODUCT_MANAGER,
+    FULLSTACK_ENGINEER,
+    OPERATION_A,
+    OPERATION_B,
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +162,193 @@ JD_PROFILES: dict[str, JdProfile] = {
         ),
         risks=(
             JdRule("无技术证据", ("无编程", "不会编程")),
+        ),
+    ),
+    FULLSTACK_ENGINEER: JdProfile(
+        name=FULLSTACK_ENGINEER,
+        aliases=(
+            "资深全栈工程师",
+            "Full Stack Engineer",
+            "Fullstack Engineer",
+        ),
+        must_have=(
+            JdRule(
+                "TypeScript端到端全栈交付",
+                (
+                    "TypeScript",
+                    "JavaScript",
+                    "React",
+                    "Next.js",
+                    "Node.js",
+                    "全栈",
+                    "前后端",
+                    "SQL",
+                    "API",
+                ),
+            ),
+            JdRule(
+                "微信小程序与企业微信生态",
+                (
+                    "微信小程序",
+                    "小程序",
+                    "mini program",
+                    "Taro",
+                    "uni-app",
+                    "企业微信",
+                    "企微",
+                    "WeCom",
+                    "JS-SDK",
+                    "客户群",
+                    "外部联系人",
+                ),
+            ),
+            JdRule(
+                "复杂业务架构与权限",
+                (
+                    "领域模型",
+                    "多租户",
+                    "RBAC",
+                    "ABAC",
+                    "ReBAC",
+                    "OpenFGA",
+                    "权限",
+                    "工作流",
+                    "状态机",
+                    "幂等",
+                    "Outbox",
+                    "审计",
+                ),
+            ),
+            JdRule(
+                "工程Owner与质量门禁",
+                (
+                    "工程 Owner",
+                    "工程Owner",
+                    "Tech Lead",
+                    "技术负责人",
+                    "Pull Request",
+                    "Code Review",
+                    "代码审查",
+                    "自动化测试",
+                    "CI/CD",
+                    "UAT",
+                    "发布回滚",
+                    "任务拆解",
+                ),
+            ),
+            JdRule(
+                "AI原生研发与Agent工程",
+                (
+                    "Coding Agent",
+                    "Agent",
+                    "Tool Calling",
+                    "RAG",
+                    "Eval",
+                    "评估集",
+                    "Human-in-the-loop",
+                    "人工确认",
+                    "LangGraph",
+                    "大模型",
+                ),
+            ),
+        ),
+        bonus=(
+            JdRule(
+                "复杂授权与安全边界",
+                ("OpenFGA", "SpiceDB", "Casbin", "ReBAC", "最小权限", "数据安全"),
+            ),
+            JdRule(
+                "工作流与长事务",
+                ("LangGraph", "n8n", "Temporal", "BPMN", "工作流引擎", "长事务"),
+            ),
+            JdRule(
+                "企业系统与ToB集成",
+                ("ERP", "CRM", "ToB", "企业服务", "系统集成", "客户现场", "FDE"),
+            ),
+            JdRule(
+                "微信生态深度交付",
+                ("客户联系", "客户群", "服务商代开发", "多企业授权", "消息回调", "上线审核"),
+            ),
+            JdRule(
+                "团队带教与研发组织",
+                ("带领", "带队", "导师", "Mentor", "任务拆解", "DoR", "DoD", "迭代主持"),
+            ),
+        ),
+        risks=(
+            JdRule(
+                "只能承担单端局部开发",
+                ("只做前端", "只做后端", "只负责页面", "只负责接口", "不做全栈"),
+            ),
+            JdRule(
+                "盲信AI且缺少验证",
+                ("复制粘贴", "盲信生成", "不写测试", "无需测试", "不做代码审查"),
+            ),
+            JdRule(
+                "偏好推倒重来或空谈架构",
+                ("推倒重来", "全部重写", "只谈架构", "不能落地", "不做渐进迁移"),
+            ),
+            JdRule(
+                "拒绝Review与带教",
+                ("不做Review", "不愿Review", "不愿带人", "拒绝带人"),
+            ),
+        ),
+        hard_gates=(
+            JdHardGate(
+                "端到端全栈交付",
+                keyword_groups=(
+                    ("TypeScript", "JavaScript"),
+                    ("React", "Next.js", "Vue", "前端"),
+                    ("Node.js", "Node", "后端", "API", "SQL", "PostgreSQL"),
+                ),
+                minimum_groups=3,
+            ),
+            JdHardGate(
+                "微信与企微实战",
+                keyword_groups=(
+                    ("微信小程序", "小程序", "mini program", "Taro", "uni-app"),
+                    ("企业微信", "企微", "WeCom", "JS-SDK", "客户群", "外部联系人"),
+                ),
+                minimum_groups=2,
+            ),
+            JdHardGate(
+                "工程Owner能力",
+                keyword_groups=(
+                    (
+                        "Pull Request",
+                        "Code Review",
+                        "代码审查",
+                        "自动化测试",
+                        "CI/CD",
+                        "UAT",
+                    ),
+                    (
+                        "Tech Lead",
+                        "工程 Owner",
+                        "工程Owner",
+                        "技术负责人",
+                        "带领",
+                        "带队",
+                        "任务拆解",
+                    ),
+                ),
+                minimum_groups=2,
+            ),
+            JdHardGate(
+                "AI原生研发能力",
+                keyword_groups=(
+                    ("Coding Agent", "Agent", "大模型", "LLM"),
+                    (
+                        "Tool Calling",
+                        "RAG",
+                        "Eval",
+                        "评估集",
+                        "Human-in-the-loop",
+                        "人工确认",
+                        "LangGraph",
+                    ),
+                ),
+                minimum_groups=2,
+            ),
         ),
     ),
     AI_PRODUCT_MANAGER: JdProfile(

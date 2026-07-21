@@ -1357,6 +1357,136 @@ def test_runner_persists_and_parses_artifact_after_live_download(tmp_path: Path)
     assert resume.source_artifact_id == artifact.id
 
 
+def test_runner_uses_rule_resume_job_type_for_truncated_fullstack_download(
+    tmp_path: Path,
+) -> None:
+    """平台截断岗位名时，下载入库仍应使用规则中的全栈岗位并立即评分。"""
+
+    database = tmp_path / "fullstack-download.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    truncated_position = "平台岗位显示...Owner"
+    page = FakePage(
+        conversations=[
+            {
+                "id": "job51-fullstack",
+                "name": "Dana",
+                "position": truncated_position,
+                "label": f"Dana {truncated_position}",
+                "latest_message": "对方向你发送了简历",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "对方向你发送了简历"}],
+                "online_resume_bytes": (
+                    b"%PDF-1.7\n8 years TypeScript React Next.js Node.js SQL API "
+                    b"mini program Taro WeCom OAuth JS-SDK OpenFGA CI/CD Agent RAG "
+                    b"Tech Lead engineering owner\n%%EOF"
+                ),
+                "online_resume_filename": "Dana_fullstack.pdf",
+            }
+        ]
+    )
+    adapter = Job51Adapter(page, owner="和新红", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    truncated_position: {
+                        "directResume": True,
+                        "resumeJobType": "全栈工程师",
+                        "resumeRequestPrompt": "你好，可以看看简历吗",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    session = conversation_repo.get_session(str(state["session_id"]))
+    assert session is not None
+    artifact = artifact_store.find_business_download(
+        session_id=session.id,
+        platform=session.platform,
+        owner=session.owner,
+        platform_conversation_id=session.platform_conversation_id,
+        position=session.position,
+    )
+    assert artifact is not None
+    assert artifact.position == "全栈工程师"
+    resume = ResumeRepository(database).get(artifact.resume_id)
+    assert resume is not None
+    assert resume.job_type == "全栈工程师"
+    assert resume.payload["applied_position"] == "全栈工程师"
+    assert resume.match_score is not None
+
+
+def test_zhilian_uses_rule_resume_job_type_for_fullstack_download(tmp_path: Path) -> None:
+    """智联附件下载也应使用规则中的规范岗位并立即评分。"""
+
+    database = tmp_path / "zhilian-fullstack-download.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    platform_position = "智联展示岗位...Owner"
+    page = FakePage(
+        conversations=[
+            {
+                "id": "zhilian-fullstack",
+                "name": "Evan",
+                "position": platform_position,
+                "label": f"Evan {platform_position}",
+                "latest_message": "您好，附件是我的简历",
+                "unread_count": 1,
+                "messages": [{"sender": "other", "text": "您好，附件是我的简历"}],
+                "has_resume_attachment": True,
+                "resume_bytes": (
+                    b"%PDF-1.7\nTypeScript React Next.js Node.js SQL API mini program "
+                    b"Taro WeCom JS-SDK OpenFGA Pull Request Code Review CI/CD "
+                    b"Agent RAG Eval Tech Lead\n%%EOF"
+                ),
+                "resume_filename": "Evan_fullstack.pdf",
+            }
+        ]
+    )
+    adapter = ZhilianAdapter(page, owner="宋峰峰", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    platform_position: {
+                        "directResume": True,
+                        "resumeJobType": "全栈工程师",
+                        "resumeRequestPrompt": "你好，可以看看简历吗",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    session = conversation_repo.get_session(str(state["session_id"]))
+    assert session is not None
+    artifact = artifact_store.find_business_download(
+        session_id=session.id,
+        platform=session.platform,
+        owner=session.owner,
+        platform_conversation_id=session.platform_conversation_id,
+        position=session.position,
+    )
+    assert artifact is not None
+    assert artifact.position == "全栈工程师"
+    resume = ResumeRepository(database).get(artifact.resume_id)
+    assert resume is not None
+    assert resume.job_type == "全栈工程师"
+    assert resume.match_score is not None
+
+
 def test_runner_dry_run_does_not_mark_resume_completed(tmp_path: Path) -> None:
     """dry-run 只保留观察状态，不把求简历/下载/linked 状态写成真实完成。"""
 

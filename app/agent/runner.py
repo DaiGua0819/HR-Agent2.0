@@ -556,7 +556,12 @@ class ConversationRunner:
     async def _request_resume(self, state: GraphState) -> dict[str, Any]:
         """Request or download a resume without synthesizing text fallbacks."""
 
-        return await self.adapter.request_resume()
+        result = await self.adapter.request_resume()
+        rule = state.get("position_rule") or {}
+        resume_job_type = str(rule.get("resumeJobType") or "").strip()
+        if resume_job_type:
+            result["resumeJobType"] = resume_job_type
+        return result
 
     async def _send_or_fail(
         self,
