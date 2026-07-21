@@ -155,6 +155,11 @@ class ConversationRunner:
             )
 
         answer = self._knowledge_answer(turn_text, conversation)
+        unknown_question = bool(
+            not answer
+            and looks_like_question(turn_text)
+            and not self._is_resume_intent(turn_text)
+        )
         if needs_initial_ai_phrase:
             if answer:
                 failed = await self._send_or_fail(
@@ -230,12 +235,25 @@ class ConversationRunner:
                 return failed
             return self._finish(state, "answer_question", "knowledge_hit", reply=answer)
 
-        if rule_screening(rule) and should_prioritize_screening(turn_text, rule):
-            return await self._handle_screening(state, conversation, rule, turn_text)
+        if rule_screening(rule) and (
+            unknown_question or should_prioritize_screening(turn_text, rule)
+        ):
+            return await self._handle_screening(
+                state,
+                conversation,
+                rule,
+                turn_text,
+                skip_unknown_question=unknown_question,
+            )
         if self._should_handle_screening_before_knowledge(conversation, rule, turn_text):
             return await self._handle_screening(state, conversation, rule, turn_text)
 
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
+            if unknown_question:
+                return await self._request_resume_after_unknown_question(
+                    state,
+                    question=turn_text,
+                )
             phrase = initial_common_phrase(rule)
             judgement = await judge_candidate_reply(turn_text, question=phrase, llm=self.llm)
             if judgement.status in {"accept", "reject"}:
@@ -249,7 +267,13 @@ class ConversationRunner:
 
         if is_ai_basic_rule(conversation.candidate.applied_position, rule):
             return await self._handle_ai_basic(state, conversation, rule, turn_text)
-        return await self._handle_screening(state, conversation, rule, turn_text)
+        return await self._handle_screening(
+            state,
+            conversation,
+            rule,
+            turn_text,
+            skip_unknown_question=unknown_question,
+        )
 
     async def _handle_direct_resume(
         self,
@@ -386,6 +410,26 @@ class ConversationRunner:
             knowledgeAnswer=knowledge_answer,
         )
 
+    async def _request_resume_after_unknown_question(
+        self,
+        state: GraphState,
+        *,
+        question: str,
+    ) -> GraphState:
+        handled, _ = await self._preflight_resume_request(
+            state,
+            skippedUnknownQuestion=question,
+        )
+        if handled:
+            return handled
+        result = await self._request_resume(state)
+        return self._finish_resume_request_result(
+            state,
+            result,
+            success_reason="unknown_question_skipped",
+            skippedUnknownQuestion=question,
+        )
+
     async def _handle_screening(
         self,
         state: GraphState,
@@ -395,6 +439,7 @@ class ConversationRunner:
         *,
         analysis: dict[str, Any] | None = None,
         knowledge_answer: str = "",
+        skip_unknown_question: bool = False,
     ) -> GraphState:
         screening = rule_screening(rule)
         if not screening:
@@ -431,6 +476,53 @@ class ConversationRunner:
                 "screening_question_sent",
                 reply=next_question,
                 screening=analysis,
+            )
+        if skip_unknown_question and status in {"unclear", "waiting"}:
+            progress = (
+                analysis.get("progress")
+                if isinstance(analysis.get("progress"), list)
+                else []
+            )
+            next_question: dict[str, Any] = {}
+            for item in progress:
+                if not isinstance(item, dict) or item.get("status") != "not_asked":
+                    continue
+                question = item.get("question")
+                if isinstance(question, dict):
+                    next_question = question
+                    break
+            next_text = select_position_screening_question_text(next_question)
+            if next_text:
+                failed = await self._send_or_fail(
+                    state,
+                    next_text,
+                    action="ask_screening",
+                    failure_reason="screening_question_send_failed",
+                )
+                if failed:
+                    return failed
+                return self._finish(
+                    state,
+                    "ask_screening",
+                    "screening_question_sent",
+                    reply=next_text,
+                    screening=analysis,
+                    skippedUnknownQuestion=reply_text,
+                )
+            handled, _ = await self._preflight_resume_request(
+                state,
+                screening=analysis,
+                skippedUnknownQuestion=reply_text,
+            )
+            if handled:
+                return handled
+            result = await self._request_resume(state)
+            return self._finish_resume_request_result(
+                state,
+                result,
+                success_reason="unknown_question_skipped",
+                screening=analysis,
+                skippedUnknownQuestion=reply_text,
             )
         if status == "accept":
             handled, _ = await self._preflight_resume_request(

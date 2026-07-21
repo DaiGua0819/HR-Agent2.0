@@ -750,6 +750,54 @@ def test_screening_unknown_question_skips_answer_and_asks_next_question() -> Non
     assert len(page.sent_messages) == 1
 
 
+def test_screening_unknown_followup_advances_past_unclear_required_question() -> None:
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "人力资源管培生",
+            [
+                {
+                    "sender": "me",
+                    "text": "你好，我们这边在湖州长兴这边，然后还是单休，可以接受吗",
+                },
+                {"sender": "other", "text": "可以接受单休"},
+                {"sender": "me", "text": "你好，这个岗位需要出差，可以接受吗"},
+                {"sender": "other", "text": "人力岗出差吗"},
+                {"sender": "other", "text": "出差频率怎么样"},
+            ],
+        ),
+        rules=load_chat_rules(),
+    )
+
+    assert state["next_action"] == "ask_screening"
+    assert state["stage"] == "screening_question_sent"
+    assert page.sent_messages in (
+        ["你好，这个岗位要深入一线了解产品，可以接受吗"],
+        ["你好，需要到一线学习产品和业务，你能接受吗"],
+    )
+
+
+def test_ai_basic_unknown_question_after_phrase_skips_to_resume_request() -> None:
+    rules = load_chat_rules()
+    phrase = rules["positionReplies"]["AI应用开发实习生"]["initialCommonPhrase"]
+    state, page = run_case(
+        Platform.BOSS,
+        conversation(
+            "AI应用开发实习生",
+            [
+                {"sender": "me", "text": phrase},
+                {"sender": "other", "text": "这个岗位的团队氛围怎么样？"},
+            ],
+        ),
+        rules=rules,
+    )
+
+    assert state["next_action"] == "request_resume"
+    assert state["stage"] == "unknown_question_skipped"
+    assert page.sent_messages == []
+    assert page.resume_requests == 1
+
+
 def test_boss_rhetorical_hr_attack_is_not_a_business_question() -> None:
     assert looks_like_question("真不敢想你这个人事是怎么当上的") is False
     assert looks_like_question("这个岗位怎么安排面试") is True
