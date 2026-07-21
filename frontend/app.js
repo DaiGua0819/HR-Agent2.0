@@ -9,6 +9,9 @@ const state = {
   monitoringSummaryAbortController: null,
   monitoringSummaryRequestSequence: 0,
   monitoringSummaryRequestKey: "",
+  monitoringRuntimeVersion: "",
+  monitoringRuntimeAbortController: null,
+  monitoringRuntimeRequestSequence: 0,
   monitoringFacets: { owners: [], platforms: [], jobTypes: [] },
   resumes: [],
   selectedId: "",
@@ -765,10 +768,8 @@ async function loadDashboard() {
   const payload = await api("/api/dashboard/overview");
   state.dashboard = payload;
   renderSafety(payload);
-  renderQuickFilters(payload.quickFilters || []);
-  renderDailyRows(payload.recentRecords || []);
   renderAutomationControls();
-  await loadAutomationMonitoringSummary();
+  await refreshAutomationMonitoring();
 }
 function monitoringToday() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -1026,6 +1027,75 @@ function renderMonitoringJobChart(items = []) {
     `;
   }).join("");
 }
+const MONITORING_ACCOUNT_PLATFORM_ORDER = { boss: 0, job51: 1, zhilian: 2 };
+const MONITORING_ACCOUNT_REASON_LABELS = {
+  heartbeat_timeout: "心跳超时",
+  no_heartbeat: "暂无心跳",
+  heartbeat_stale: "心跳延迟",
+  login_required: "需要登录",
+  processing_messages: "正在处理消息",
+  security_verification: "需要安全验证",
+  account_abnormal: "账号异常",
+};
+function monitoringAccountStatusMeta(item = {}) {
+  if (item.securityVerification) return { label: "安全验证", tone: "danger" };
+  if (item.accountAbnormal) return { label: "账号异常", tone: "danger" };
+  if (item.needsLogin || item.status === "login_required") return { label: "待登录", tone: "warning" };
+  if (item.paused || item.status === "paused") return { label: "已暂停", tone: "muted" };
+  if (item.agentBusy || item.status === "busy") return { label: "处理中", tone: "primary" };
+  if (item.status === "ready" && item.authenticated) return { label: "正常", tone: "success" };
+  if (item.status === "stale") return { label: "状态延迟", tone: "warning" };
+  return { label: "Worker 离线", tone: "muted" };
+}
+function renderMonitoringAccountStatuses(items = []) {
+  const grid = $("monitoringAccountStatusGrid");
+  if (!grid) return;
+  const rows = [...items].sort((left, right) => {
+    const ownerOrder = String(left.owner || "").localeCompare(String(right.owner || ""), "zh-CN");
+    if (ownerOrder) return ownerOrder;
+    return (MONITORING_ACCOUNT_PLATFORM_ORDER[left.platform] ?? 99)
+      - (MONITORING_ACCOUNT_PLATFORM_ORDER[right.platform] ?? 99);
+  });
+  grid.innerHTML = rows.length
+    ? rows.map((item) => {
+        const meta = monitoringAccountStatusMeta(item);
+        const browserText = item.browserReady && item.cdpReady ? "浏览器在线" : "浏览器未就绪";
+        const loginText = item.authenticated ? "已登录" : item.needsLogin ? "待登录" : "登录未知";
+        const reason = MONITORING_ACCOUNT_REASON_LABELS[item.reason] || meta.label;
+        return `
+          <div class="monitoring-account-status-row" title="${escapeHtml(reason)}">
+            <span class="monitoring-account-identity">
+              <strong>${escapeHtml(item.owner || "未配置负责人")}</strong>
+              <small>${escapeHtml(platformName(item.platform || ""))}</small>
+            </span>
+            <span class="monitoring-account-badge monitoring-account-badge--${meta.tone}">${meta.label}</span>
+            <span class="monitoring-account-detail">${browserText} · ${loginText}</span>
+          </div>
+        `;
+      }).join("")
+    : '<div class="empty-inline">账号状态暂不可用</div>';
+}
+async function loadAutomationRuntimeStatus() {
+  if (!isAdminUser()) return;
+  if (state.monitoringRuntimeAbortController) state.monitoringRuntimeAbortController.abort();
+  const controller = new AbortController();
+  const requestSequence = (state.monitoringRuntimeRequestSequence += 1);
+  state.monitoringRuntimeAbortController = controller;
+  try {
+    const payload = await api("/api/automation-monitoring/runtime-status", { signal: controller.signal });
+    if (requestSequence !== state.monitoringRuntimeRequestSequence) return;
+    state.monitoringRuntimeVersion = payload.version || "";
+    renderMonitoringAccountStatuses(payload.targets || []);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    const grid = $("monitoringAccountStatusGrid");
+    if (grid && !grid.children.length) grid.innerHTML = '<div class="empty-inline">账号状态暂不可用</div>';
+  } finally {
+    if (state.monitoringRuntimeAbortController === controller) {
+      state.monitoringRuntimeAbortController = null;
+    }
+  }
+}
 async function loadAutomationMonitoringSummary() {
   if (!isAdminUser()) return;
   const requestKey = monitoringQuery().toString();
@@ -1066,6 +1136,9 @@ function openAutomationDetails(metric = "processedContacts", jobType = "") {
   const query = monitoringQuery({ metric, jobType });
   window.location.assign(`/app/automation-details?${query}`);
 }
+function refreshAutomationMonitoring() {
+  return Promise.allSettled([loadAutomationMonitoringSummary(), loadAutomationRuntimeStatus()]);
+}
 function stopAutomationMonitoringPolling() {
   if (state.monitoringSummaryTimer) clearInterval(state.monitoringSummaryTimer);
   state.monitoringSummaryTimer = null;
@@ -1073,7 +1146,7 @@ function stopAutomationMonitoringPolling() {
 function startAutomationMonitoringPolling() {
   stopAutomationMonitoringPolling();
   if (!isAdminUser() || state.view !== "dashboard" || document.visibilityState !== "visible") return;
-  state.monitoringSummaryTimer = setInterval(loadAutomationMonitoringSummary, MONITORING_SUMMARY_POLL_MS);
+  state.monitoringSummaryTimer = setInterval(refreshAutomationMonitoring, MONITORING_SUMMARY_POLL_MS);
 }
 function renderSafety(payload) {
   const text = payload.dryRun ? "DRY_RUN 已开启：真实副作用受保护" : "LIVE 模式：操作前请二次确认";
@@ -1106,36 +1179,6 @@ function renderServices(items) {
         )
         .join("")
     : `<div class="empty-inline">还没有 worker 状态，启动 worker 后这里会显示服务卡片。</div>`;
-}
-function renderQuickFilters(items) {
-  $("quickFilters").innerHTML = items
-    .filter((item) => canView(item.view))
-    .map((item) => `<button class="quick-card" data-quick-view="${escapeHtml(item.view)}" data-quick-tab="${escapeHtml(item.tab || "")}">${escapeHtml(item.label)}</button>`)
-    .join("");
-  document.querySelectorAll("[data-quick-view]").forEach((button) => {
-    button.onclick = () => {
-      if (button.dataset.quickTab) state.tab = button.dataset.quickTab;
-      setView(button.dataset.quickView);
-    };
-  });
-}
-function renderDailyRows(items) {
-  $("dailyRows").innerHTML = items
-    .map(
-      (item) => `
-        <tr>
-          <td>${escapeHtml((item.time || "").slice(0, 19))}</td>
-          <td>${escapeHtml(platformName(item.platform))}</td>
-          <td>${escapeHtml(item.owner || "")}</td>
-          <td>${escapeHtml(item.candidateName || "")}</td>
-          <td>${escapeHtml(item.position || "")}</td>
-          <td>${escapeHtml(item.action || "")}</td>
-          <td>${escapeHtml(item.result || (item.dryRun ? "dry-run" : ""))}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  $("dailyEmpty").style.display = items.length ? "none" : "block";
 }
 function buildTabs() {
   if (!visibleStatusTabs().some(([key]) => key === state.tab)) state.tab = "all";
@@ -3718,7 +3761,7 @@ function bindPageActions() {
     }
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
     if (state.view === "dashboard") {
-      loadAutomationMonitoringSummary();
+      refreshAutomationMonitoring();
       startAutomationMonitoringPolling();
     }
   });
@@ -3726,7 +3769,7 @@ function bindPageActions() {
     if (!isAdminUser() || document.visibilityState !== "visible") return;
     refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
     if (state.view === "dashboard") {
-      loadAutomationMonitoringSummary();
+      refreshAutomationMonitoring();
     }
   });
   document.addEventListener("keydown", (event) => {
@@ -3839,6 +3882,6 @@ async function init() {
 }
 init().catch((error) => {
   $("pageTitle").textContent = "加载失败";
-  $("dailyEmpty").style.display = "block";
-  $("dailyEmpty").textContent = error.message;
+  const monitoringCoverage = $("monitoringCoverage");
+  if (monitoringCoverage) monitoringCoverage.textContent = error.message;
 });

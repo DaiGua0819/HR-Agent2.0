@@ -23,16 +23,33 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
         "monitoringJobChart",
         "monitoringJobChartTotal",
         "monitoringJobChartLegend",
+        "monitoringAccountStatusGrid",
     ):
         assert f'id="{element_id}"' in html
 
     assert 'type="date" tabindex="-1" aria-hidden="true"' in html
+    assert 'id="quickFilters"' not in html
+    assert 'id="dailyRows"' not in html
+    assert 'id="dailyEmpty"' not in html
+    assert "最近处理明细" not in html
     assert 'id="runtimeStatusGrid"' not in html
     assert 'id="runtimeStatusUpdatedAt"' not in html
     assert "/api/automation-monitoring/daily-summary" in script
-    assert "/api/automation-monitoring/runtime-status" not in script
-    assert "MONITORING_STATUS_POLL_MS" not in script
-    assert "loadAutomationRuntimeStatus" not in script
+    assert "/api/automation-monitoring/runtime-status" in script
+    assert "function renderMonitoringAccountStatuses(items = [])" in script
+    assert "async function loadAutomationRuntimeStatus()" in script
+    assert "monitoringRuntimeAbortController: null" in script
+    assert 'label: "处理中"' in script
+    assert 'label: "待登录"' in script
+    assert 'label: "安全验证"' in script
+    assert 'label: "账号异常"' in script
+    assert 'label: "Worker 离线"' in script
+    assert 'heartbeat_timeout: "心跳超时"' in script
+    assert 'no_heartbeat: "暂无心跳"' in script
+    assert "reason.slice(3)" not in script
+    assert "renderQuickFilters" not in script
+    assert "renderDailyRows" not in script
+    assert "dailyEmpty" not in script
     assert "MONITORING_SUMMARY_POLL_MS = 15000" in script
     assert "monitoringSummaryAbortController: null" in script
     assert 'monitoringSummaryRequestKey: ""' in script
@@ -64,18 +81,17 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert ".monitoring-job-chart" in styles
     assert ".monitoring-job-chart-tooltip" in styles
     assert ".monitoring-job-chart-tooltip.is-below" in styles
+    assert ".monitoring-account-status-grid" in styles
+    assert ".monitoring-account-status-row" in styles
+    assert "grid-auto-flow: column" in styles
+    assert "height: 500px" in styles
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
     assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
-    dashboard_rows = (
-        "grid-template-rows: max-content max-content max-content max-content "
-        "max-content minmax(180px, max-content)"
-    )
-    assert dashboard_rows in styles
+    assert "grid-template-rows: auto auto auto max-content" in styles
     assert "min-width: 140px" in styles
     assert "@media (min-width: 1181px)" in styles
     assert "height: 100vh" in styles
     assert "overflow-y: auto" in styles
-    assert ".runtime-target" not in styles
     assert "@media (max-width: 1320px)" in styles
 
 

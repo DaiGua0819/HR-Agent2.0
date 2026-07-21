@@ -395,7 +395,7 @@ h3 { font-size: 15px; }
   gap: 16px;
 }
 [data-page="dashboard"].active {
-  grid-template-rows: auto auto auto minmax(300px, 1fr) auto minmax(180px, 0.75fr);
+  grid-template-rows: auto auto auto max-content;
 }
 [data-page="resumes"].active {
   grid-template-rows: minmax(0, 1fr);
@@ -1950,6 +1950,12 @@ h3 { font-size: 15px; }
 .monitoring-chart-panel {
   border-radius: 8px;
 }
+.monitoring-chart-panel {
+  display: grid;
+  grid-template-rows: auto 210px minmax(0, 1fr);
+  align-self: start;
+  height: 500px;
+}
 .monitoring-job-rows {
   min-height: 0;
   overflow: auto;
@@ -2011,11 +2017,11 @@ h3 { font-size: 15px; }
 }
 .monitoring-job-chart-body {
   display: grid;
-  grid-template-columns: minmax(180px, 210px) minmax(0, 1fr);
+  grid-template-columns: minmax(160px, 180px) minmax(0, 1fr);
   align-items: center;
-  gap: 20px;
-  min-height: 300px;
-  padding: 18px;
+  gap: 16px;
+  min-height: 0;
+  padding: 10px 16px;
 }
 .monitoring-job-chart {
   --monitoring-chart-gradient: #eef2f7;
@@ -2023,7 +2029,7 @@ h3 { font-size: 15px; }
   display: grid;
   place-items: center;
   justify-self: center;
-  width: min(210px, 100%);
+  width: min(180px, 100%);
   aspect-ratio: 1;
   overflow: visible;
   border-radius: 50%;
@@ -2139,6 +2145,83 @@ h3 { font-size: 15px; }
   font-size: 12px;
   white-space: nowrap;
 }
+.monitoring-account-status-section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  padding: 0 16px 14px;
+  border-top: 1px solid rgba(191, 219, 254, 0.42);
+}
+.monitoring-account-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+}
+.monitoring-account-status-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.monitoring-account-status-head .muted {
+  font-size: 11px;
+}
+.monitoring-account-status-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  column-gap: 18px;
+  min-height: 0;
+}
+.monitoring-account-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(191, 219, 254, 0.3);
+}
+.monitoring-account-status-row:nth-child(3n) {
+  border-bottom: 0;
+}
+.monitoring-account-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.monitoring-account-identity strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitoring-account-identity small,
+.monitoring-account-detail {
+  color: var(--muted);
+  font-size: 10px;
+}
+.monitoring-account-detail {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitoring-account-badge {
+  align-self: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.monitoring-account-badge--success { color: #166534; background: #dcfce7; }
+.monitoring-account-badge--primary { color: #1d4ed8; background: #dbeafe; }
+.monitoring-account-badge--warning { color: #92400e; background: #fef3c7; }
+.monitoring-account-badge--danger { color: #b91c1c; background: #fee2e2; }
+.monitoring-account-badge--muted { color: #475569; background: #e2e8f0; }
 @property --monitoring-chart-reveal {
   syntax: "<percentage>";
   inherits: false;
@@ -2447,7 +2530,7 @@ h3 { font-size: 15px; }
   [data-page="dashboard"].active {
     height: 100%;
     align-content: start;
-    grid-template-rows: max-content max-content max-content max-content max-content minmax(180px, max-content);
+    grid-template-rows: auto auto auto max-content;
     padding-right: 6px;
     overflow-x: hidden;
     overflow-y: auto;
@@ -2518,6 +2601,10 @@ h3 { font-size: 15px; }
   }
   .monitoring-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .monitoring-chart-panel {
+    grid-template-rows: auto auto auto;
+    height: auto;
   }
   .ts-interview-workspace {
     height: auto;
@@ -2685,6 +2772,17 @@ h3 { font-size: 15px; }
   }
   .monitoring-job-chart-legend-row strong {
     grid-column: 2;
+  }
+  .monitoring-account-status-grid {
+    grid-auto-flow: row;
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+  .monitoring-account-status-row:nth-child(3n) {
+    border-bottom: 1px solid rgba(191, 219, 254, 0.3);
+  }
+  .monitoring-account-status-row:last-child {
+    border-bottom: 0;
   }
 
   .candidate-card__heading {

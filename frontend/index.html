@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HR Agent 招聘控制台</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260720-monitoring-chart-v1" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260721-monitoring-accounts-v1" />
     <link rel="stylesheet" href="/assets/auth.css?v=20260701-green-feishu-login" />
   </head>
   <body>
@@ -149,32 +149,19 @@
                 </div>
                 <div id="monitoringJobChartLegend" class="monitoring-job-chart-legend"></div>
               </div>
+              <div class="monitoring-account-status-section">
+                <div class="monitoring-account-status-head">
+                  <h4>账号状态</h4>
+                  <span class="muted">两个负责人 · 三个平台</span>
+                </div>
+                <div
+                  id="monitoringAccountStatusGrid"
+                  class="monitoring-account-status-grid"
+                  aria-live="polite"
+                ></div>
+              </div>
             </section>
           </div>
-          <div class="dashboard-shortcuts" id="quickFilters"></div>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>最近处理明细</h3>
-              <span class="muted">来自现有控制面处理日志</span>
-            </div>
-            <div class="table-wrap compact">
-              <table>
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>平台</th>
-                    <th>负责人</th>
-                    <th>候选人</th>
-                    <th>岗位</th>
-                    <th>动作</th>
-                    <th>结果</th>
-                  </tr>
-                </thead>
-                <tbody id="dailyRows"></tbody>
-              </table>
-              <div class="empty" id="dailyEmpty">暂无处理明细</div>
-            </div>
-          </section>
         </section>
 
         <section class="page" data-page="resumes">
@@ -428,6 +415,6 @@
     </div>
     <div id="reviewerDecisionPopoverRoot" class="reviewer-decision-popover-root" role="tooltip" hidden></div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260720-monitoring-chart-v1"></script>
+    <script src="/assets/app.js?v=20260721-monitoring-accounts-v1"></script>
   </body>
 </html>
