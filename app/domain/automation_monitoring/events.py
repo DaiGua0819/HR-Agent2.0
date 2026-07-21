@@ -50,7 +50,14 @@ def build_contact_event(
     )
     requested_resume = action == "request_resume" or decision_action == "request_resume"
     anomaly_text = " ".join(
-        [action, stage, str(decision.get("reason") or ""), str(result.get("reason") or "")]
+        [
+            action,
+            stage,
+            str(decision.get("reason") or ""),
+            str(result.get("reason") or ""),
+            str(result.get("failureReason") or ""),
+            str(result.get("artifactParseStatus") or ""),
+        ]
     ).lower()
     anomaly = any(marker in anomaly_text for marker in _ANOMALY_MARKERS)
     event_id = "automation-event-" + hashlib.sha256(
@@ -83,7 +90,11 @@ def build_contact_event(
         resumeHandling=resume_handling,
         resumeFileHash=str(result.get("fileHash") or result.get("file_hash") or ""),
         anomaly=anomaly,
-        anomalyReason=str(result.get("reason") or decision.get("reason") or "") if anomaly else "",
+        anomalyReason=(
+            str(result.get("failureReason") or result.get("reason") or decision.get("reason") or "")
+            if anomaly
+            else ""
+        ),
         payload={
             "decision": decision,
             "sessionId": session_id,

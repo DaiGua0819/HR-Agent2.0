@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -184,9 +185,9 @@ def test_worker_records_normalized_monitoring_event(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["owner"] == "owner"
     assert rows[0]["platform"] == "job51"
-    assert rows[0]["contact_key"] == (
-        "session|conv-candidate-b|message|fingerprint-b"
-    )
+    assert rows[0]["contact_key"] == "session|conv-candidate-b"
+    payload = json.loads(rows[0]["payload"])
+    assert payload["recentMessagesFingerprint"] == "fingerprint-b"
 
 
 def test_worker_reuses_message_preparation_within_same_batch() -> None:

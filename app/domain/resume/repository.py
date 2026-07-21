@@ -45,11 +45,12 @@ class ResumeRepository:
         *,
         read_only: bool = False,
         memory_records: list[ResumeRecord] | None = None,
+        ensure_schema: bool = True,
     ) -> None:
         self.database_path = Path(database_path)
         self.read_only = read_only
         self._memory_records = {record.id: record for record in memory_records or []}
-        if not self._is_memory and not read_only:
+        if not self._is_memory and not read_only and ensure_schema:
             run_migrations(self.database_path)
 
     @classmethod
@@ -74,6 +75,12 @@ class ResumeRepository:
         """测试使用的纯内存 repository。"""
 
         return cls(":memory:", read_only=True, memory_records=records)
+
+    @classmethod
+    def for_initialized_database(cls, database_path: str | Path) -> ResumeRepository:
+        """Use an already-migrated writable database without rerunning DDL."""
+
+        return cls(database_path, ensure_schema=False)
 
     def count(self) -> int:
         """返回简历条数。"""
@@ -193,40 +200,65 @@ class ResumeRepository:
     def save(self, resume: Resume) -> ResumeRecord:
         """保存简历，非内存模式真实 upsert 到 SQLite。"""
 
-        record = resume.to_record()
-        if not record.updated_at:
-            record = _with_updated_at(record, _now_iso())
-        record = _with_auto_score(record)
+        record = self._record_for_save(resume)
         if self._is_memory:
             self._memory_records[record.id] = record
             return record
         self._ensure_writable()
         with connect(self.database_path) as connection:
-            connection.execute(
-                """
-                INSERT INTO resumes (
-                  id, payload, phone_key, job_type, match_score, updated_at,
-                  parsed_name, linked_session_id, linked_platform, linked_owner,
-                  linked_platform_conversation_id, source_artifact_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                  payload = excluded.payload,
-                  phone_key = excluded.phone_key,
-                  job_type = excluded.job_type,
-                  match_score = excluded.match_score,
-                  updated_at = excluded.updated_at,
-                  parsed_name = excluded.parsed_name,
-                  linked_session_id = excluded.linked_session_id,
-                  linked_platform = excluded.linked_platform,
-                  linked_owner = excluded.linked_owner,
-                  linked_platform_conversation_id = excluded.linked_platform_conversation_id,
-                  source_artifact_id = excluded.source_artifact_id
-                """,
-                _record_params(record),
-            )
+            self._upsert_record(connection, record)
             connection.commit()
         return record
+
+    def save_in_transaction(
+        self,
+        resume: Resume,
+        connection: sqlite3.Connection,
+    ) -> ResumeRecord:
+        """Save through a caller-owned transaction without committing it."""
+
+        if self._is_memory:
+            raise RuntimeError("transactional save is unavailable for memory repositories")
+        self._ensure_writable()
+        record = self._record_for_save(resume)
+        self._upsert_record(connection, record)
+        return record
+
+    @staticmethod
+    def _record_for_save(resume: Resume) -> ResumeRecord:
+        record = resume.to_record()
+        if not record.updated_at:
+            record = _with_updated_at(record, _now_iso())
+        return _with_auto_score(record)
+
+    @staticmethod
+    def _upsert_record(
+        connection: sqlite3.Connection,
+        record: ResumeRecord,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO resumes (
+              id, payload, phone_key, job_type, match_score, updated_at,
+              parsed_name, linked_session_id, linked_platform, linked_owner,
+              linked_platform_conversation_id, source_artifact_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              payload = excluded.payload,
+              phone_key = excluded.phone_key,
+              job_type = excluded.job_type,
+              match_score = excluded.match_score,
+              updated_at = excluded.updated_at,
+              parsed_name = excluded.parsed_name,
+              linked_session_id = excluded.linked_session_id,
+              linked_platform = excluded.linked_platform,
+              linked_owner = excluded.linked_owner,
+              linked_platform_conversation_id = excluded.linked_platform_conversation_id,
+              source_artifact_id = excluded.source_artifact_id
+            """,
+            _record_params(record),
+        )
 
     def update(self, resume_id: str, fields: dict[str, Any]) -> ResumeRecord | None:
         """更新简历字段并真实落库。"""

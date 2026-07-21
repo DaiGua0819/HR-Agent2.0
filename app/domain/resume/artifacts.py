@@ -87,7 +87,35 @@ class ResumeArtifactStore:
                 position=position,
             )
             if existing_row is not None:
-                return _artifact_from_row(existing_row)
+                existing = _artifact_from_row(existing_row)
+                if existing.parse_status == "parsed":
+                    return existing
+                connection.execute(
+                    """
+                    UPDATE resume_artifacts
+                    SET platform_conversation_id = ?, candidate_name_from_platform = ?,
+                        position = ?, file_path = ?, file_hash = ?, source_kind = ?,
+                        parse_status = 'pending', parsed_name = '', resume_id = '',
+                        error = '', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        platform_conversation_id,
+                        candidate_name_from_platform,
+                        position,
+                        str(file_path),
+                        file_hash,
+                        source_kind,
+                        now,
+                        existing.id,
+                    ),
+                )
+                connection.commit()
+                refreshed = connection.execute(
+                    "SELECT * FROM resume_artifacts WHERE id = ?",
+                    (existing.id,),
+                ).fetchone()
+                return _artifact_from_row(refreshed)
             connection.execute(
                 """
                 INSERT INTO resume_artifacts (
@@ -120,13 +148,16 @@ class ResumeArtifactStore:
     ) -> bool:
         """Return whether this candidate/job already has a captured resume file."""
 
-        return self.find_business_download(
-            session_id=session_id,
-            platform=platform,
-            owner=owner,
-            platform_conversation_id=platform_conversation_id,
-            position=position,
-        ) is not None
+        return (
+            self.find_business_download(
+                session_id=session_id,
+                platform=platform,
+                owner=owner,
+                platform_conversation_id=platform_conversation_id,
+                position=position,
+            )
+            is not None
+        )
 
     def find_business_download(
         self,
@@ -172,11 +203,18 @@ class ResumeArtifactStore:
             rows = connection.execute(sql, params).fetchall()
         return [_artifact_from_row(row) for row in rows]
 
-    def mark_parsed(self, artifact_id: str, *, resume_id: str, parsed_name: str) -> None:
+    def mark_parsed(
+        self,
+        artifact_id: str,
+        *,
+        resume_id: str,
+        parsed_name: str,
+        connection: Any | None = None,
+    ) -> None:
         """Mark an artifact parsed and store the generated resume id."""
 
         now = _now_iso()
-        with connect(self.database_path) as connection:
+        if connection is not None:
             connection.execute(
                 """
                 UPDATE resume_artifacts
@@ -186,7 +224,15 @@ class ResumeArtifactStore:
                 """,
                 (parsed_name, resume_id, now, artifact_id),
             )
-            connection.commit()
+            return
+        with connect(self.database_path) as owned_connection:
+            self.mark_parsed(
+                artifact_id,
+                resume_id=resume_id,
+                parsed_name=parsed_name,
+                connection=owned_connection,
+            )
+            owned_connection.commit()
 
     def mark_failed(self, artifact_id: str, error: str) -> None:
         """Mark an artifact failed while preserving its platform link."""
@@ -197,7 +243,7 @@ class ResumeArtifactStore:
                 """
                 UPDATE resume_artifacts
                 SET parse_status = 'failed', error = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND parse_status != 'parsed'
                 """,
                 (error[:1000], now, artifact_id),
             )
@@ -217,44 +263,83 @@ def parse_pending_artifacts(
     parsed: list[ResumeArtifact] = []
     for artifact in store.list_pending(limit=limit):
         try:
-            text = _read_resume_text(Path(artifact.file_path))
-            parsed_name = parse_resume_name(text, file_name=artifact.file_path)
-            resume_id = _resume_id(artifact)
-            resume_repository.save(
-                Resume(
-                    id=resume_id,
-                    name=parsed_name or None,
-                    parsed_name=parsed_name,
-                    applied_position=artifact.position or None,
-                    job_type=artifact.position or None,
-                    source_platform=artifact.platform,
-                    source_owner=artifact.owner,
-                    linked_session_id=artifact.session_id,
-                    linked_platform=artifact.platform,
-                    linked_owner=artifact.owner,
-                    linked_platform_conversation_id=artifact.platform_conversation_id,
-                    source_artifact_id=artifact.id,
-                    updated_at=_now_iso(),
-                    payload={
-                        "name": parsed_name,
-                        "rawText": text,
-                        "platform": artifact.platform,
-                        "owner": artifact.owner,
-                        "candidateNameFromPlatform": artifact.candidate_name_from_platform,
-                        "applied_position": artifact.position,
-                        "sourceArtifactId": artifact.id,
-                        "filePath": artifact.file_path,
-                        "fileHash": artifact.file_hash,
-                    },
-                )
-            )
-            store.mark_parsed(artifact.id, resume_id=resume_id, parsed_name=parsed_name)
-            current = store.get(artifact.id)
-            if current is not None:
-                parsed.append(current)
-        except Exception as error:
-            store.mark_failed(artifact.id, str(error))
+            current = parse_artifact(store, resume_repository, artifact)
+        except ResumeArtifactProcessingError:
+            continue
+        if current.parse_status == "parsed":
+            parsed.append(current)
     return parsed
+
+
+class ResumeArtifactProcessingError(RuntimeError):
+    """The artifact could not reach a durable parsed or failed state."""
+
+
+def parse_artifact(
+    store: ResumeArtifactStore,
+    resume_repository: ResumeRepository,
+    artifact: ResumeArtifact,
+) -> ResumeArtifact:
+    """Parse one downloaded artifact without scanning the pending backlog."""
+
+    current = store.get(artifact.id) or artifact
+    if current.parse_status == "parsed":
+        return current
+    try:
+        text = _read_resume_text(Path(current.file_path))
+        parsed_name = parse_resume_name(text, file_name=current.file_path)
+        resume_id = _resume_id(current)
+        resume = Resume(
+            id=resume_id,
+            name=parsed_name or None,
+            parsed_name=parsed_name,
+            applied_position=current.position or None,
+            job_type=current.position or None,
+            source_platform=current.platform,
+            source_owner=current.owner,
+            linked_session_id=current.session_id,
+            linked_platform=current.platform,
+            linked_owner=current.owner,
+            linked_platform_conversation_id=current.platform_conversation_id,
+            source_artifact_id=current.id,
+            updated_at=_now_iso(),
+            payload={
+                "name": parsed_name,
+                "rawText": text,
+                "platform": current.platform,
+                "owner": current.owner,
+                "candidateNameFromPlatform": current.candidate_name_from_platform,
+                "applied_position": current.position,
+                "sourceArtifactId": current.id,
+                "filePath": current.file_path,
+                "fileHash": current.file_hash,
+            },
+        )
+        with connect(store.database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM resume_artifacts WHERE id = ?",
+                (current.id,),
+            ).fetchone()
+            locked = _artifact_from_row(row) if row is not None else current
+            if locked.parse_status == "parsed":
+                return locked
+            resume_repository.save_in_transaction(resume, connection)
+            store.mark_parsed(
+                current.id,
+                resume_id=resume_id,
+                parsed_name=parsed_name,
+                connection=connection,
+            )
+            connection.commit()
+    except Exception as error:
+        try:
+            store.mark_failed(current.id, str(error))
+        except Exception as mark_error:
+            raise ResumeArtifactProcessingError(
+                f"{error}; mark_failed_error={mark_error}"
+            ) from error
+    return store.get(current.id) or current
 
 
 def _artifact_id(session_id: str, file_hash: str) -> str:
@@ -312,9 +397,7 @@ def _read_docx_text(path: Path) -> str:
         if not paragraph.tag.endswith("}p"):
             continue
         text = "".join(
-            str(node.text or "")
-            for node in paragraph.iter()
-            if node.tag.endswith("}t")
+            str(node.text or "") for node in paragraph.iter() if node.tag.endswith("}t")
         ).strip()
         if text:
             paragraphs.append(text)

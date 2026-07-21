@@ -9,7 +9,8 @@ from app.agent.state import GraphState
 from app.domain.conversation.identity import resolve_or_create_session
 from app.domain.conversation.models import CandidateStatus, SessionResolution
 from app.domain.conversation.repository import ConversationRepository
-from app.domain.resume.artifacts import ResumeArtifactStore
+from app.domain.resume.artifacts import ResumeArtifactStore, parse_artifact
+from app.domain.resume.repository import ResumeRepository
 from app.platforms.types import Conversation
 from app.settings import AppSettings, load_settings
 
@@ -26,10 +27,16 @@ class ConversationPersistence:
     ) -> None:
         self.repository = repository
         self.artifact_store = artifact_store
+        self.resume_repository = (
+            ResumeRepository.for_initialized_database(artifact_store.database_path)
+            if artifact_store is not None
+            else None
+        )
         self.adapter = adapter
         self.session_resolution: SessionResolution | None = None
         self.candidate_status: CandidateStatus | None = None
         self.recent_messages_fingerprint = ""
+        self.resume_artifact_issue: dict[str, str] = {}
 
     def attach(self, state: GraphState, conversation: Conversation) -> None:
         """Resolve the platform session and persist observed messages."""
@@ -74,18 +81,45 @@ class ConversationPersistence:
         """Return whether a real resume file has already been persisted."""
 
         status = self.candidate_status
-        if status and status.resume_downloaded:
-            return True
         if self.artifact_store is None or self.session_resolution is None:
-            return False
+            return bool(status and status.resume_downloaded)
         session = self.session_resolution.session
-        return self.artifact_store.has_business_download(
+        artifact = self.artifact_store.find_business_download(
             session_id=session.id,
             platform=session.platform,
             owner=session.owner,
             platform_conversation_id=session.platform_conversation_id,
             position=session.position,
         )
+        if artifact is None:
+            if status and status.resume_downloaded and session.platform in {"job51", "zhilian"}:
+                self.resume_artifact_issue = _resume_artifact_issue(
+                    "downloaded_status_without_artifact"
+                )
+                return False
+            return bool(status and status.resume_downloaded)
+        if artifact.parse_status == "parsed":
+            self.resume_artifact_issue = {}
+            return True
+        if self.resume_repository is None:
+            return False
+        try:
+            parsed = parse_artifact(
+                self.artifact_store,
+                self.resume_repository,
+                artifact,
+            )
+        except Exception as error:
+            self.resume_artifact_issue = _resume_artifact_issue(str(error), artifact.id)
+            return False
+        if parsed.parse_status != "parsed":
+            self.resume_artifact_issue = _resume_artifact_issue(
+                parsed.error or "artifact_not_parsed",
+                parsed.id,
+            )
+            return False
+        self.resume_artifact_issue = {}
+        return True
 
     def has_resume_request_pending(self) -> bool:
         """Return whether a prior real resume request is waiting for the candidate."""
@@ -144,11 +178,16 @@ class ConversationPersistence:
             resume_requested = resume_requested or bool(
                 result.get("requested") or result.get("confirmed")
             )
-            resume_downloaded = resume_downloaded or bool(
+            downloaded_now = bool(
                 result.get("downloaded") and result.get("filePath")
             )
             resume_path = str(result.get("filePath") or resume_path)
-            self._record_resume_artifact(result)
+            artifact_persisted = self._record_resume_artifact(result) if downloaded_now else False
+            resume_downloaded = resume_downloaded or (downloaded_now and artifact_persisted)
+
+        if self.resume_artifact_issue:
+            for key, value in self.resume_artifact_issue.items():
+                result.setdefault(key, value)
 
         payload = dict(status.payload)
         payload["lastDecision"] = {"action": action, "reason": reason}
@@ -165,25 +204,53 @@ class ConversationPersistence:
             payload=payload,
         )
 
-    def _record_resume_artifact(self, result: dict[str, Any]) -> None:
-        if self.artifact_store is None or self.session_resolution is None:
-            return
+    def _record_resume_artifact(self, result: dict[str, Any]) -> bool:
+        if (
+            self.artifact_store is None
+            or self.resume_repository is None
+            or self.session_resolution is None
+        ):
+            return False
         file_path = str(result.get("filePath") or "")
         file_hash = str(result.get("fileHash") or "")
         if not file_path or not file_hash:
-            return
+            return False
         session = self.session_resolution.session
-        self.artifact_store.record_download(
-            session_id=session.id,
-            platform=session.platform,
-            owner=session.owner,
-            platform_conversation_id=session.platform_conversation_id,
-            candidate_name_from_platform=session.candidate_name,
-            position=session.position,
-            file_path=file_path,
-            file_hash=file_hash,
-            source_kind=str(result.get("sourceKind") or result.get("source") or "download"),
-        )
+        artifact = None
+        try:
+            artifact = self.artifact_store.record_download(
+                session_id=session.id,
+                platform=session.platform,
+                owner=session.owner,
+                platform_conversation_id=session.platform_conversation_id,
+                candidate_name_from_platform=session.candidate_name,
+                position=session.position,
+                file_path=file_path,
+                file_hash=file_hash,
+                source_kind=str(result.get("sourceKind") or result.get("source") or "download"),
+            )
+            parsed = parse_artifact(
+                self.artifact_store,
+                self.resume_repository,
+                artifact,
+            )
+        except Exception as error:
+            self.resume_artifact_issue = _resume_artifact_issue(str(error))
+            result.update(self.resume_artifact_issue)
+            return artifact is not None
+        result["artifactId"] = parsed.id
+        result["artifactParseStatus"] = parsed.parse_status
+        if parsed.resume_id:
+            result["resumeId"] = parsed.resume_id
+        if parsed.parse_status != "parsed":
+            self.resume_artifact_issue = _resume_artifact_issue(
+                parsed.error or "artifact_not_parsed",
+                parsed.id,
+            )
+            result.update(self.resume_artifact_issue)
+            return True
+        self.resume_artifact_issue = {}
+        return True
 
 
 def build_persistence_from_settings(
@@ -194,3 +261,14 @@ def build_persistence_from_settings(
     resolved = settings or load_settings()
     database_path = resolved.resolved_database_path
     return ConversationRepository(database_path), ResumeArtifactStore(database_path)
+
+
+def _resume_artifact_issue(error: str, artifact_id: str = "") -> dict[str, str]:
+    issue = {
+        "artifactParseStatus": "failed",
+        "artifactParseError": str(error or "artifact_not_parsed"),
+        "failureReason": "resume_artifact_parse_failed",
+    }
+    if artifact_id:
+        issue["artifactId"] = artifact_id
+    return issue

@@ -170,6 +170,8 @@ def classify_result(payload: dict[str, Any]) -> Classification:
         (
             str(result.get("reason") or ""),
             str(result.get("outcome") or ""),
+            str(result.get("failureReason") or ""),
+            str(result.get("artifactParseStatus") or ""),
         )
     )
     send_result = (
@@ -208,9 +210,9 @@ def resume_handling(payload: dict[str, Any]) -> str:
             next_action == "request_resume" or decision_action == "request_resume"
         )
         if request_verified or reason == "boss_attachment_present_no_local_download" or outcome in {
-            "request_confirmed",
-            "resume_attachment_received",
-            "resume_consent_accepted",
+                "request_confirmed",
+                "resume_attachment_received",
+                "resume_consent_accepted",
         }:
             return "boss_request_verified_server_imap"
 

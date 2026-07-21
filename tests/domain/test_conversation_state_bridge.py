@@ -8,7 +8,10 @@ import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
+import app.domain.resume.repository as resume_repository_module
+from app.agent.persistence import ConversationPersistence
 from app.agent.runner import ConversationRunner
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
@@ -17,7 +20,11 @@ from app.domain.conversation.dedup import recent_messages_fingerprint
 from app.domain.conversation.identity import resolve_or_create_session
 from app.domain.conversation.models import CandidateStatus
 from app.domain.conversation.repository import ConversationRepository
-from app.domain.resume.artifacts import ResumeArtifactStore, parse_pending_artifacts
+from app.domain.resume.artifacts import (
+    ResumeArtifactStore,
+    parse_artifact,
+    parse_pending_artifacts,
+)
 from app.domain.resume.models import Resume
 from app.domain.resume.repository import ResumeRepository
 from app.evaluation.decision_log import InMemoryDecisionSink
@@ -25,6 +32,7 @@ from app.features.interview_center.service import InterviewCenterService
 from app.platforms.boss.adapter import BossAdapter
 from app.platforms.job51.adapter import Job51Adapter
 from app.platforms.types import Candidate, ChatMessage, Conversation, MessageSender
+from app.platforms.zhilian.adapter import ZhilianAdapter
 
 from scripts import agent_manager
 
@@ -69,8 +77,7 @@ def test_migration_rebuilds_legacy_processing_snapshots_by_canonical_key(
 ) -> None:
     database = tmp_path / "legacy-processing-snapshots.sqlite"
     with sqlite3.connect(database) as connection:
-        connection.executescript(
-            """
+        connection.executescript("""
             CREATE TABLE message_processing_snapshots (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               owner TEXT NOT NULL,
@@ -89,8 +96,7 @@ def test_migration_rebuilds_legacy_processing_snapshots_by_canonical_key(
               updated_at TEXT NOT NULL,
               UNIQUE(owner, platform, provisional_processing_key)
             );
-            """
-        )
+            """)
         connection.executemany(
             """
             INSERT INTO message_processing_snapshots (
@@ -135,13 +141,11 @@ def test_migration_rebuilds_legacy_processing_snapshots_by_canonical_key(
     run_migrations(database)
 
     with connect(database) as connection:
-        rows = connection.execute(
-            """
+        rows = connection.execute("""
             SELECT snapshot_key, provisional_processing_key, attempt_count,
                    processed_at, updated_at
             FROM message_processing_snapshots
-            """
-        ).fetchall()
+            """).fetchall()
         connection.execute(
             """
             INSERT INTO message_processing_snapshots (
@@ -185,8 +189,7 @@ def test_processing_snapshot_migration_is_safe_for_concurrent_workers(
     for attempt in range(30):
         database = tmp_path / f"concurrent-snapshot-migration-{attempt}.sqlite"
         with sqlite3.connect(database) as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE message_processing_snapshots (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   owner TEXT NOT NULL,
@@ -205,8 +208,7 @@ def test_processing_snapshot_migration_is_safe_for_concurrent_workers(
                   updated_at TEXT NOT NULL,
                   UNIQUE(owner, platform, provisional_processing_key)
                 );
-                """
-            )
+                """)
         start = threading.Barrier(2)
 
         def migrate(
@@ -410,6 +412,453 @@ def test_artifact_parse_extracts_docx_text(tmp_path: Path) -> None:
     assert resume is not None
     assert resume.parsed_name == "仲献平"
     assert "AI 产品经理" in str(resume.payload.get("rawText") or "")
+
+
+def test_parse_artifact_parses_only_the_requested_download(tmp_path: Path) -> None:
+    database = tmp_path / "single-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    first_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("single-1", "平台候选人一", "AI产品经理", ["附件简历"]),
+    ).session
+    second_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("single-2", "平台候选人二", "运营B", ["附件简历"]),
+    ).session
+    first_file = tmp_path / "first.txt"
+    second_file = tmp_path / "second.txt"
+    first_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+    second_file.write_text("姓名：李小明\nB端运营", encoding="utf-8")
+    first = artifact_store.record_download(
+        session_id=first_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="single-1",
+        candidate_name_from_platform="平台候选人一",
+        position="AI产品经理",
+        file_path=first_file,
+        file_hash="single-hash-1",
+        source_kind="attachment",
+    )
+    second = artifact_store.record_download(
+        session_id=second_session.id,
+        platform=Platform.ZHILIAN.value,
+        owner="宋峰峰",
+        platform_conversation_id="single-2",
+        candidate_name_from_platform="平台候选人二",
+        position="运营B",
+        file_path=second_file,
+        file_hash="single-hash-2",
+        source_kind="attachment",
+    )
+
+    parsed = parse_artifact(artifact_store, resume_repo, second)
+
+    assert parsed.parse_status == "parsed"
+    assert parsed.parsed_name == "李小明"
+    assert artifact_store.get(first.id).parse_status == "pending"  # type: ignore[union-attr]
+    assert resume_repo.count() == 1
+
+
+def test_parse_artifact_is_idempotent_after_success(tmp_path: Path) -> None:
+    database = tmp_path / "idempotent-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation(
+            "idempotent-conversation",
+            "平台王女士",
+            "AI产品经理",
+            ["附件简历"],
+        ),
+    ).session
+    resume_file = tmp_path / "idempotent.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="idempotent-conversation",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="idempotent-hash",
+        source_kind="attachment",
+    )
+
+    first = parse_artifact(artifact_store, resume_repo, artifact)
+    second = parse_artifact(artifact_store, resume_repo, artifact)
+
+    assert first.parse_status == "parsed"
+    assert second.resume_id == first.resume_id
+    assert resume_repo.count() == 1
+
+
+def test_parse_artifact_concurrent_calls_create_one_resume(tmp_path: Path) -> None:
+    database = tmp_path / "concurrent-parse.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("concurrent-parse", "平台王女士", "AI产品经理", ["附件简历"]),
+    ).session
+    resume_file = tmp_path / "concurrent-parse.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="concurrent-parse",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="concurrent-parse-hash",
+        source_kind="attachment",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        parsed = list(
+            executor.map(
+                lambda _: parse_artifact(artifact_store, resume_repo, artifact),
+                range(2),
+            )
+        )
+
+    assert {item.parse_status for item in parsed} == {"parsed"}
+    assert len({item.resume_id for item in parsed}) == 1
+    assert resume_repo.count() == 1
+
+
+def test_parse_artifact_failure_does_not_touch_other_pending_downloads(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "failed-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    missing_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation(
+            "failed-conversation",
+            "缺失文件候选人",
+            "AI产品经理",
+            ["附件简历"],
+        ),
+    ).session
+    untouched_session = resolve_or_create_session(
+        conversation_repo,
+        _conversation(
+            "untouched-conversation",
+            "待处理候选人",
+            "运营B",
+            ["附件简历"],
+        ),
+    ).session
+    missing = artifact_store.record_download(
+        session_id=missing_session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="failed-conversation",
+        candidate_name_from_platform="缺失文件候选人",
+        position="AI产品经理",
+        file_path=tmp_path / "missing.pdf",
+        file_hash="failed-hash",
+        source_kind="attachment",
+    )
+    untouched_file = tmp_path / "untouched.txt"
+    untouched_file.write_text("姓名：李小明", encoding="utf-8")
+    untouched = artifact_store.record_download(
+        session_id=untouched_session.id,
+        platform=Platform.ZHILIAN.value,
+        owner="宋峰峰",
+        platform_conversation_id="untouched-conversation",
+        candidate_name_from_platform="待处理候选人",
+        position="运营B",
+        file_path=untouched_file,
+        file_hash="untouched-hash",
+        source_kind="attachment",
+    )
+
+    failed = parse_artifact(artifact_store, resume_repo, missing)
+
+    assert failed.parse_status == "failed"
+    assert failed.error
+    assert artifact_store.get(untouched.id).parse_status == "pending"  # type: ignore[union-attr]
+    assert resume_repo.count() == 0
+
+
+def test_parse_artifact_rolls_back_resume_when_status_update_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "atomic-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("atomic-conversation", "平台王女士", "AI产品经理", ["附件简历"]),
+    ).session
+    resume_file = tmp_path / "atomic.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="atomic-conversation",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="atomic-hash",
+        source_kind="attachment",
+    )
+
+    def fail_status_update(*args, **kwargs) -> None:
+        _ = args, kwargs
+        raise RuntimeError("status update failed")
+
+    monkeypatch.setattr(artifact_store, "mark_parsed", fail_status_update)
+
+    failed = parse_artifact(artifact_store, resume_repo, artifact)
+
+    assert failed.parse_status == "failed"
+    assert "status update failed" in failed.error
+    assert resume_repo.count() == 0
+
+
+def test_failed_artifact_uses_latest_successful_redownload(tmp_path: Path) -> None:
+    database = tmp_path / "retry-artifact.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("retry-conversation", "平台王女士", "AI产品经理", ["附件简历"]),
+    ).session
+    missing_file = tmp_path / "missing.pdf"
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="retry-conversation",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=missing_file,
+        file_hash="failed-download-hash",
+        source_kind="attachment",
+    )
+    assert parse_artifact(artifact_store, resume_repo, artifact).parse_status == "failed"
+    replacement_file = tmp_path / "replacement.txt"
+    replacement_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+
+    replacement = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="retry-conversation",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=replacement_file,
+        file_hash="replacement-download-hash",
+        source_kind="attachment",
+    )
+    parsed = parse_artifact(artifact_store, resume_repo, replacement)
+
+    assert replacement.file_path == str(replacement_file)
+    assert replacement.file_hash == "replacement-download-hash"
+    assert parsed.parse_status == "parsed"
+    assert parsed.parsed_name == "王小丽"
+    assert resume_repo.count() == 1
+
+
+def test_persistence_does_not_rerun_migrations_during_resume_download(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "no-download-migration.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    persistence = ConversationPersistence(
+        repository=conversation_repo,
+        artifact_store=artifact_store,
+        adapter=SimpleNamespace(dry_run=False),
+    )
+    state: dict[str, object] = {}
+    persistence.attach(
+        state,
+        _conversation("no-migration", "平台王女士", "AI产品经理", ["附件简历"]),
+    )
+    resume_file = tmp_path / "no-migration.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+
+    def fail_migration(*args, **kwargs) -> None:
+        _ = args, kwargs
+        raise AssertionError("download path reran migrations")
+
+    monkeypatch.setattr(resume_repository_module, "run_migrations", fail_migration)
+    result = {
+        "downloaded": True,
+        "filePath": str(resume_file),
+        "fileHash": "no-migration-hash",
+        "sourceKind": "attachment",
+    }
+
+    persistence.finish(
+        state,
+        action="request_resume",
+        reason="resume_attachment_downloaded",
+        extra={"result": result},
+    )
+
+    artifact = artifact_store.find_business_download(
+        session_id=str(state["session_id"]),
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="no-migration",
+        position="AI产品经理",
+    )
+    assert artifact is not None
+    assert artifact.parse_status == "parsed"
+
+
+def test_persistence_surfaces_resume_parse_failure_to_manager(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "visible-parse-failure.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    persistence = ConversationPersistence(
+        repository=conversation_repo,
+        artifact_store=artifact_store,
+        adapter=SimpleNamespace(dry_run=False),
+    )
+    state: dict[str, object] = {}
+    persistence.attach(
+        state,
+        _conversation("visible-failure", "平台王女士", "AI产品经理", ["附件简历"]),
+    )
+    result = {
+        "downloaded": True,
+        "filePath": str(tmp_path / "missing.pdf"),
+        "fileHash": "visible-failure-hash",
+        "sourceKind": "attachment",
+    }
+
+    persistence.finish(
+        state,
+        action="request_resume",
+        reason="resume_attachment_downloaded",
+        extra={"result": result},
+    )
+    classification = agent_manager.classify_result(
+        {
+            "accepted": True,
+            "nextAction": "request_resume",
+            "stage": "resume_attachment_downloaded",
+            "decision": {
+                "action": "request_resume",
+                "reason": "resume_attachment_downloaded",
+                "result": result,
+            },
+        }
+    )
+
+    assert result["artifactParseStatus"] == "failed"
+    assert result["failureReason"] == "resume_artifact_parse_failed"
+    assert result["artifactParseError"]
+    assert classification.is_anomaly is True
+    assert "resume_artifact_parse_failed" in classification.reasons
+
+
+def test_artifact_record_failure_does_not_persist_false_resume_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "artifact-record-failed.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    persistence = ConversationPersistence(
+        repository=conversation_repo,
+        artifact_store=artifact_store,
+        adapter=SimpleNamespace(dry_run=False),
+    )
+    state: dict[str, object] = {}
+    persistence.attach(
+        state,
+        _conversation("record-failed", "平台王女士", "AI产品经理", ["附件简历"]),
+    )
+    resume_file = tmp_path / "record-failed.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+
+    def fail_record_download(*args, **kwargs):
+        _ = args, kwargs
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(artifact_store, "record_download", fail_record_download)
+    result = {
+        "downloaded": True,
+        "filePath": str(resume_file),
+        "fileHash": "record-failed-hash",
+        "sourceKind": "attachment",
+    }
+
+    persistence.finish(
+        state,
+        action="request_resume",
+        reason="resume_attachment_downloaded",
+        extra={"result": result},
+    )
+    status = conversation_repo.get_status(str(state["session_id"]))
+
+    assert status.resume_downloaded is False
+    assert result["artifactParseStatus"] == "failed"
+    assert result["failureReason"] == "resume_artifact_parse_failed"
+    assert persistence.has_resume_downloaded() is False
+
+
+def test_resume_completion_retries_pending_artifact_before_skipping(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "retry-pending-on-preflight.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    persistence = ConversationPersistence(
+        repository=conversation_repo,
+        artifact_store=artifact_store,
+        adapter=SimpleNamespace(dry_run=False),
+    )
+    state: dict[str, object] = {}
+    persistence.attach(
+        state,
+        _conversation("pending-preflight", "平台王女士", "AI产品经理", ["附件简历"]),
+    )
+    session_id = str(state["session_id"])
+    resume_file = tmp_path / "pending-preflight.txt"
+    resume_file.write_text("姓名：王小丽\nAI产品经理", encoding="utf-8")
+    artifact = artifact_store.record_download(
+        session_id=session_id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="pending-preflight",
+        candidate_name_from_platform="平台王女士",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="pending-preflight-hash",
+        source_kind="attachment",
+    )
+    conversation_repo.save_status(CandidateStatus(session_id=session_id, resume_downloaded=True))
+    persistence.candidate_status = conversation_repo.get_status(session_id)
+
+    assert persistence.has_resume_downloaded() is True
+    parsed = artifact_store.get(artifact.id)
+    assert parsed is not None
+    assert parsed.parse_status == "parsed"
+    assert ResumeRepository(database).get(parsed.resume_id) is not None
 
 
 def test_artifact_store_reuses_business_identity_when_dynamic_pdf_hash_changes(
@@ -736,7 +1185,16 @@ def test_runner_skips_download_when_current_session_already_has_artifact(
 
     assert state["stage"] == "resume_already_downloaded"
     assert page.resume_requests == 0
-    assert len(artifact_store.list_pending()) == 1
+    artifact = artifact_store.find_business_download(
+        session_id=old_session.id,
+        platform=Platform.JOB51.value,
+        owner="owner",
+        platform_conversation_id="old-platform-conversation",
+        position="AI产品经理",
+    )
+    assert artifact is not None
+    assert artifact.parse_status == "parsed"
+    assert ResumeRepository(database).get(artifact.resume_id) is not None
 
 
 def test_runner_skips_business_actions_for_completed_canonical_message_snapshot(
@@ -842,8 +1300,8 @@ def test_runner_skips_business_actions_for_completed_canonical_message_snapshot(
     assert sink.events == []
 
 
-def test_runner_persists_status_and_writes_artifact_after_live_download(tmp_path: Path) -> None:
-    """处理消息时写会话状态；51job 真实下载只快写 artifact，不等待解析姓名。"""
+def test_runner_persists_and_parses_artifact_after_live_download(tmp_path: Path) -> None:
+    """51job 真实下载后立即解析当前 artifact 并写入关联简历。"""
 
     database = tmp_path / "runner.sqlite"
     conversation_repo = ConversationRepository(database)
@@ -879,15 +1337,24 @@ def test_runner_persists_status_and_writes_artifact_after_live_download(tmp_path
 
     session = conversation_repo.get_session(str(state["session_id"]))
     status = conversation_repo.get_status(str(state["session_id"]))
-    artifacts = artifact_store.list_pending()
+    artifact = artifact_store.find_business_download(
+        session_id=session.id,
+        platform=session.platform,
+        owner=session.owner,
+        platform_conversation_id=session.platform_conversation_id,
+        position=session.position,
+    )
     assert state["next_action"] == "request_resume"
     assert session is not None
     assert session.current_stage == "resume_attachment_downloaded"
     assert status.resume_downloaded is True
     assert status.resume_path
-    assert len(artifacts) == 1
-    assert artifacts[0].session_id == session.id
-    assert artifacts[0].parsed_name == ""
+    assert artifact is not None
+    assert artifact.parse_status == "parsed"
+    resume = ResumeRepository(database).get(artifact.resume_id)
+    assert resume is not None
+    assert resume.linked_session_id == session.id
+    assert resume.source_artifact_id == artifact.id
 
 
 def test_runner_dry_run_does_not_mark_resume_completed(tmp_path: Path) -> None:
@@ -942,9 +1409,7 @@ def test_resume_requested_does_not_block_later_attachment_download(tmp_path: Pat
         should_reply=True,
     )
     session = resolve_or_create_session(conversation_repo, bootstrap).session
-    conversation_repo.save_status(
-        CandidateStatus(session_id=session.id, resume_requested=True)
-    )
+    conversation_repo.save_status(CandidateStatus(session_id=session.id, resume_requested=True))
     page = FakePage(
         conversations=[
             {
@@ -980,13 +1445,86 @@ def test_resume_requested_does_not_block_later_attachment_download(tmp_path: Pat
     )
 
     status = conversation_repo.get_status(str(state["session_id"]))
-    artifacts = artifact_store.list_pending()
+    artifact = artifact_store.find_business_download(
+        session_id=session.id,
+        platform=session.platform,
+        owner=session.owner,
+        platform_conversation_id=session.platform_conversation_id,
+        position=session.position,
+    )
     assert state["next_action"] == "request_resume"
     assert state["stage"] != "resume_already_completed"
     assert state["decision"]["result"]["downloaded"] is True
     assert status.resume_requested is True
     assert status.resume_downloaded is True
-    assert len(artifacts) == 1
+    assert artifact is not None
+    assert artifact.parse_status == "parsed"
+
+
+def test_zhilian_attachment_download_is_parsed_and_linked(tmp_path: Path) -> None:
+    database = tmp_path / "zhilian-live-download.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    page = FakePage(
+        conversations=[
+            {
+                "id": "zhilian-live-download",
+                "name": "平台候选人",
+                "position": "外部财务产品顾问",
+                "label": "平台候选人 外部财务产品顾问",
+                "latest_message": "您好，这是我的附件简历，请查收 查看附件简历",
+                "unread_count": 1,
+                "messages": [
+                    {
+                        "sender": "other",
+                        "text": "您好，这是我的附件简历，请查收\n查看附件简历",
+                    }
+                ],
+                "has_resume_attachment": True,
+                "resume_bytes": b"%PDF-1.7\nName: Alice\nfinance consultant\n%%EOF",
+                "resume_filename": "Alice_finance_consultant.pdf",
+            }
+        ]
+    )
+    adapter = ZhilianAdapter(page, owner="宋峰峰", dry_run=False)
+
+    state = asyncio.run(
+        ConversationRunner(
+            adapter,
+            rules={
+                "positionReplies": {
+                    "外部财务产品顾问": {
+                        "directResume": True,
+                        "resumeRequestPrompt": "请发送简历",
+                    }
+                },
+                "companyKnowledgeBase": {},
+            },
+            conversation_repository=conversation_repo,
+            artifact_store=artifact_store,
+        ).run_current()
+    )
+
+    session = conversation_repo.get_session(str(state["session_id"]))
+    assert session is not None
+    artifact = artifact_store.find_business_download(
+        session_id=session.id,
+        platform=Platform.ZHILIAN.value,
+        owner="宋峰峰",
+        platform_conversation_id="zhilian-live-download",
+        position="外部财务产品顾问",
+    )
+    assert state["stage"] == "resume_attachment_downloaded"
+    assert artifact is not None
+    assert artifact.parse_status == "parsed"
+    resume = ResumeRepository(database).get(artifact.resume_id)
+    assert resume is not None
+    assert resume.linked_platform == Platform.ZHILIAN.value
+    assert resume.linked_owner == "宋峰峰"
+    assert resume.payload["platform"] == Platform.ZHILIAN.value
+    assert resume.payload["owner"] == "宋峰峰"
+    assert resume.linked_session_id == session.id
+    assert resume.linked_platform_conversation_id == "zhilian-live-download"
 
 
 def test_boss_existing_attachment_marks_received_without_download(tmp_path: Path) -> None:

@@ -503,6 +503,36 @@ def test_contact_event_builder_applies_boss_resume_and_question_semantics() -> N
     assert event.payload["recentMessagesFingerprint"] == "message-hash"
 
 
+def test_contact_event_marks_local_resume_parse_failure_as_anomaly() -> None:
+    event = build_contact_event(
+        owner="宋峰峰",
+        platform="job51",
+        state={
+            "conversation_id": "conversation-parse-failed",
+            "session_id": "session-parse-failed",
+            "recent_messages_fingerprint": "message-hash",
+            "candidate": {"name": "候选人甲"},
+            "applied_position": "AI产品经理",
+            "next_action": "request_resume",
+            "stage": "resume_attachment_downloaded",
+            "decision": {
+                "action": "request_resume",
+                "result": {
+                    "downloaded": True,
+                    "artifactParseStatus": "failed",
+                    "failureReason": "resume_artifact_parse_failed",
+                },
+            },
+        },
+        occurred_at="2026-07-20T01:00:00+00:00",
+    )
+
+    assert event.resume_acquired is True
+    assert event.resume_handling == "local_resume_downloaded"
+    assert event.anomaly is True
+    assert event.anomaly_reason == "resume_artifact_parse_failed"
+
+
 def _event(
     *,
     event_id: str,
