@@ -13,6 +13,10 @@ from app.domain.resume.models import ResumeRecord
 from app.domain.resume.repository import ResumeRepository
 from app.features.interview_center.asset_sync import BitableAssetSync
 from app.features.interview_center.calendar_sync import FeishuCalendarClient
+from app.features.interview_center.candidate_matcher import (
+    decide_calendar_auto_binding,
+    match_calendar_event_candidates,
+)
 from app.features.interview_center.feishu.bitable import (
     FeishuBitableClient,
     MockFeishuBitableClient,
@@ -28,6 +32,49 @@ from app.features.interview_center.service import InterviewCenterService
 from app.features.interview_center.store import InMemoryInterviewStore, SQLiteInterviewStore
 from app.settings import load_settings
 from fastapi.testclient import TestClient
+
+
+def test_calendar_matching_ignores_single_character_resume_names() -> None:
+    """A one-character parsed name must not hijack a longer calendar identity."""
+
+    event = {
+        "title": "张师诗初试",
+        "description": "",
+        "location": "",
+        "attendees": [],
+        "meetingUrl": "https://vc.feishu.cn/j/example",
+    }
+    resumes = [
+        {
+            "id": "wrong-ai-intern",
+            "name": "张",
+            "job_type": "AI应用开发实习生",
+        },
+        {
+            "id": "correct-operation",
+            "name": "张师诗",
+            "job_type": "运营B",
+        },
+    ]
+
+    matches = match_calendar_event_candidates(event, resumes)
+    decision = decide_calendar_auto_binding(matches)
+
+    assert [item["resumeId"] for item in matches] == ["correct-operation"]
+    assert decision["bind"] is True
+    assert decision["match"]["resumeId"] == "correct-operation"
+
+
+def test_calendar_matching_leaves_single_character_only_result_unmatched() -> None:
+    """Without a reliable full name, calendar sync must wait for manual matching."""
+
+    matches = match_calendar_event_candidates(
+        {"title": "张师诗初试", "attendees": []},
+        [{"id": "wrong-ai-intern", "name": "张", "job_type": "AI应用开发实习生"}],
+    )
+
+    assert matches == []
+    assert decide_calendar_auto_binding(matches)["status"] == "needs_match"
 
 
 def test_bitable_route_resolution_uses_old_default_tables() -> None:

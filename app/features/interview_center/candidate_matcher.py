@@ -104,7 +104,7 @@ def match_calendar_event_candidates(
         score = 0
         reasons: list[str] = []
         exact_identity_match = False
-        if name and _normalize_event_text([name]) in event_text:
+        if _is_reliable_identity_name(name) and _normalize_event_text([name]) in event_text:
             score += 90
             exact_identity_match = True
             reasons.append("event_exact_candidate_name")
@@ -189,6 +189,19 @@ def decide_calendar_auto_binding(
 
 def _normalize_event_text(values: list[Any]) -> str:
     return "".join(clean_text(value).lower() for value in values if clean_text(value))
+
+
+def _is_reliable_identity_name(value: Any) -> bool:
+    """Reject truncated names that are too weak for automatic calendar binding."""
+
+    text = clean_text(value).replace(" ", "")
+    if not text:
+        return False
+    chinese_characters = [character for character in text if "\u4e00" <= character <= "\u9fff"]
+    if chinese_characters and len(chinese_characters) == len(text):
+        return len(chinese_characters) >= 2
+    alphanumeric = "".join(character for character in text if character.isalnum())
+    return len(alphanumeric) >= 3
 
 
 def _resume_value(resume: Any, *keys: str) -> str:
