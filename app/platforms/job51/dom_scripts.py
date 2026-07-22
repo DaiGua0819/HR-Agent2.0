@@ -1176,20 +1176,36 @@ ONLINE_RESUME_PREVIEW_STATE_JS = r"""
     return style.display !== "none" && style.visibility !== "hidden" &&
       Number(style.opacity || "1") > 0 && rect.width > 0 && rect.height > 0;
   };
-  const firstVisible = (selector) => Array.from(document.querySelectorAll(selector)).find(visible);
-  const save = firstVisible("#sensor_imresume_download");
-  const print = firstVisible("#IMResumePrint");
-  const root = print || (save && save.closest(
-    "#IMResumePrint, .imresume-container, .resume-preview, .el-dialog, [role='dialog']"
+  const firstVisible = (selector, root = document) =>
+    Array.from(root.querySelectorAll(selector)).find(visible);
+  const previewRoot = firstVisible(
+    "#IMResumePrint, .imresume-container, .resume-preview, .resume-detail, " +
+    "[data-resume-preview], [class*='imresume-container'], [class*='resume-preview']"
+  );
+  const save = firstVisible("#sensor_imresume_download") || (previewRoot && firstVisible(
+    "[id*='imresume'][id*='download'], [data-action*='download'], " +
+    "[aria-label*='下载'], [title*='下载'], [class*='download'], [class*='save']",
+    previewRoot
   ));
-  const verified = Boolean(save || print);
+  const frame = firstVisible("iframe[src*='resume'], iframe[title*='简历']");
+  const root = previewRoot || frame || (save && save.closest(
+    "#IMResumePrint, .imresume-container, .resume-preview, .resume-detail, " +
+    "[data-resume-preview], .el-dialog, [role='dialog']"
+  ));
+  const headerText = text(root).slice(0, 600);
+  const hasResumeSections = /简历|个人信息|基本信息|求职意向|工作经历|教育经历|项目经历/.test(
+    headerText
+  );
+  const verified = Boolean(save || frame || (previewRoot && hasResumeSections));
   return {
     verified,
     hasSaveButton: Boolean(save),
-    hasPrintPreview: Boolean(print),
-    headerText: text(root).slice(0, 600),
+    hasPrintPreview: Boolean(previewRoot),
+    hasResumeFrame: Boolean(frame),
+    headerText,
     source: save ? "online_resume_save_button" :
-      (print ? "online_resume_print_preview" : "online_resume_preview_not_visible"),
+      (frame ? "online_resume_frame" :
+        (previewRoot ? "online_resume_preview_container" : "online_resume_preview_not_visible")),
     reason: verified ? "" : "online_resume_preview_not_verified",
   };
 }

@@ -14,6 +14,7 @@ from pathlib import Path
 from app.agent.graph import build_recruit_graph
 from app.agent.rules import load_chat_rules
 from app.agent.runner import ConversationRunner
+from app.browser import reliable_support
 from app.browser.fake_page import FakePage
 from app.core.constants import Platform
 from app.evaluation.decision_log import InMemoryDecisionSink
@@ -3101,6 +3102,80 @@ def test_job51_online_resume_falls_back_to_trusted_top_right_click() -> None:
     assert page.top_right_clicks == 1
 
 
+def test_job51_online_resume_waits_for_slow_preview_without_clicking_twice(
+    monkeypatch,
+) -> None:
+    """A slow preview must settle after one trusted click, without a legacy re-click."""
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(reliable_support.asyncio, "sleep", no_sleep)
+    page = SlowOnlineResumePreviewPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+            )
+        ],
+        message_card_available=False,
+        ready_after_checks=5,
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened["verified"] is True
+    assert page.top_right_clicks == 1
+    assert page.legacy_dom_clicks == 0
+    assert page.preview_checks >= 5
+
+
+def test_job51_online_resume_does_not_legacy_reclick_after_trusted_click() -> None:
+    """Once a trusted entry was clicked, a failed verification must not toggle it again."""
+
+    page = NeverVerifiedOnlineResumePage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+            )
+        ],
+        message_card_available=False,
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened["verified"] is False
+    assert page.top_right_clicks == 1
+    assert page.legacy_dom_clicks == 0
+
+
+def test_job51_online_resume_accepts_alternate_visible_preview_container() -> None:
+    """The preview verifier must support the alternate resume-detail container."""
+
+    page = AlternateOnlineResumePreviewPage(
+        conversations=[
+            conversation(
+                "AI Product Manager",
+                [{"sender": "other", "text": "您好，我对职位很感兴趣"}],
+                online_resume_download_bytes=b"%PDF-1.7\nbody\n%%EOF",
+                online_resume_filename="candidate.pdf",
+            )
+        ],
+        message_card_available=False,
+    )
+
+    opened = asyncio.run(_open_online_resume_preview(page))  # type: ignore[arg-type]
+
+    assert opened["verified"] is True
+    assert opened["source"] == "top_right_online_resume_trusted"
+    assert page.top_right_clicks == 1
+
+
 def test_job51_proactive_uses_shared_thresholds_and_mode_switch() -> None:
     """51job 人才望远镜切回传统模式，跳过已看卡片，复用门槛后 Hi 聊。"""
 
@@ -3754,6 +3829,82 @@ class OnlineResumeEntryElement:
     async def attr(self, name: str) -> str | None:
         _ = name
         return None
+
+
+class SlowOnlineResumePreviewPage(OnlineResumeEntryPage):
+    """The preview becomes verifiable several polls after the first click."""
+
+    def __init__(
+        self,
+        *args: object,
+        ready_after_checks: int = 5,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.is_fake = False
+        self.ready_after_checks = ready_after_checks
+        self.preview_checks = 0
+        self.legacy_dom_clicks = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_online_resume":
+            self.legacy_dom_clicks += 1
+        if (
+            script == "job51.online_resume_preview_state"
+            or "job51_online_resume_preview_state" in script
+        ):
+            self.preview_checks += 1
+            ready = bool(self.current_conversation().get("online_resume_opened")) and (
+                self.preview_checks >= self.ready_after_checks
+            )
+            return {
+                "verified": ready,
+                "source": "slow_online_resume_preview" if ready else "preview_loading",
+                "reason": "" if ready else "online_resume_preview_not_verified",
+            }
+        return await super().eval_js(script, arg)
+
+
+class NeverVerifiedOnlineResumePage(OnlineResumeEntryPage):
+    """The trusted click occurs, but the preview never becomes visible."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.legacy_dom_clicks = 0
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.click_online_resume":
+            self.legacy_dom_clicks += 1
+        if (
+            script == "job51.online_resume_preview_state"
+            or "job51_online_resume_preview_state" in script
+        ):
+            return {
+                "verified": False,
+                "source": "preview_missing",
+                "reason": "online_resume_preview_not_verified",
+            }
+        return await super().eval_js(script, arg)
+
+
+class AlternateOnlineResumePreviewPage(OnlineResumeEntryPage):
+    """The account renders a resume-detail preview instead of the legacy ids."""
+
+    async def eval_js(self, script: str, arg: object | None = None) -> object:
+        if script == "job51.online_resume_preview_state":
+            return {}
+        if "job51_online_resume_preview_state" in script:
+            supports_alternate = ".resume-detail" in script and "data-resume-preview" in script
+            opened = bool(self.current_conversation().get("online_resume_opened"))
+            return {
+                "verified": bool(opened and supports_alternate),
+                "source": "alternate_resume_preview",
+                "reason": (
+                    "" if opened and supports_alternate
+                    else "online_resume_preview_not_verified"
+                ),
+            }
+        return await super().eval_js(script, arg)
 
 
 class HiddenMountedOnlineResumePage(OnlineResumeEntryPage):

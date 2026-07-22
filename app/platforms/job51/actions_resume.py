@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 
 from app.browser.base import BrowserPage
+from app.browser.interaction_profile import load_interaction_profile
 from app.browser.reliable_actions import reliable_click_element
 from app.platforms.job51 import selectors
 from app.platforms.job51.actions_resume_close import cleanup_resume_overlays, resume_overlay_state
@@ -50,6 +52,7 @@ ONLINE_RESUME_TOP_RIGHT_ENTRY_SELECTOR = (
     ".chat-new-header [class*='online']"
 )
 ONLINE_RESUME_LABEL = "\u5728\u7ebf\u7b80\u5386"
+ONLINE_RESUME_PREVIEW_VERIFY_TIMEOUT_MS = 12000
 
 __all__ = [
     "InMemoryResumeDownloadMemory",
@@ -390,6 +393,8 @@ async def _open_online_resume_preview_from_entries(page: BrowserPage) -> dict[st
     )
     if message_card.get("verified"):
         return message_card
+    if message_card.get("clicked"):
+        return message_card
 
     top_right = await _trusted_click_online_resume_entry(
         page,
@@ -400,14 +405,15 @@ async def _open_online_resume_preview_from_entries(page: BrowserPage) -> dict[st
     )
     if top_right.get("verified"):
         return top_right
+    if top_right.get("clicked"):
+        return top_right
 
     legacy = await _safe_eval_dict(page, "job51.click_online_resume")
     if not legacy:
         legacy = await _safe_eval_dict(page, CLICK_ONLINE_RESUME_JS)
     if not legacy.get("clicked"):
         return _best_online_resume_open_failure(message_card, top_right, legacy)
-    await asyncio.sleep(1)
-    visible = await _online_resume_preview_ready(page)
+    visible = await _wait_online_resume_preview_ready(page)
     return {
         **legacy,
         "verified": bool(visible.get("verified")),
@@ -424,6 +430,11 @@ async def _trusted_click_online_resume_entry(
     label: str,
     strict_label: bool,
 ) -> dict[str, object]:
+    profile = replace(
+        load_interaction_profile(),
+        max_retries=1,
+        verify_timeout_ms=ONLINE_RESUME_PREVIEW_VERIFY_TIMEOUT_MS,
+    )
     for element in await page.query_all(selector):
         text = " ".join((await element.text()).split())
         element_id = str(await element.attr("id") or "")
@@ -436,6 +447,7 @@ async def _trusted_click_online_resume_entry(
             element,
             label=label,
             verify=lambda: _online_resume_preview_ready(page),
+            profile=profile,
         )
         if result.get("ok"):
             return {
@@ -534,6 +546,23 @@ async def _online_resume_preview_ready(page: BrowserPage) -> dict[str, object]:
     if download.get("verified"):
         return download
     return state or download
+
+
+async def _wait_online_resume_preview_ready(page: BrowserPage) -> dict[str, object]:
+    """Poll a legacy DOM click long enough for the preview route to settle."""
+
+    deadline = (
+        asyncio.get_running_loop().time()
+        + ONLINE_RESUME_PREVIEW_VERIFY_TIMEOUT_MS / 1000
+    )
+    last = {"verified": False, "reason": "online_resume_preview_not_verified"}
+    while True:
+        last = await _online_resume_preview_ready(page)
+        if last.get("verified") or asyncio.get_running_loop().time() >= deadline:
+            return last
+        if bool(getattr(page, "is_fake", False)):
+            return last
+        await asyncio.sleep(0.2)
 
 
 def _best_online_resume_open_failure(
