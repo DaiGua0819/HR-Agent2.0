@@ -413,8 +413,39 @@
         <footer class="resume-conversation-readonly">只读历史记录 · 不会向招聘平台发送消息</footer>
       </section>
     </div>
+    <div id="interviewConfirmModal" class="interview-confirm-root" data-state="closed" hidden>
+      <div id="interviewConfirmBackdrop" class="interview-confirm-backdrop"></div>
+      <section
+        class="interview-confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="interviewConfirmTitle"
+        aria-describedby="interviewConfirmDescription"
+      >
+        <header class="interview-confirm-head">
+          <div>
+            <span class="interview-confirm-eyebrow">发起平台沟通</span>
+            <h3 id="interviewConfirmTitle">确认约面试</h3>
+          </div>
+          <button id="interviewConfirmCloseBtn" class="interview-confirm-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </header>
+        <p id="interviewConfirmDescription" class="interview-confirm-description"></p>
+        <p class="interview-confirm-note">确认后，系统会核对平台联系人，执行“换微信”并发送“加我微信沟通”。</p>
+        <footer class="interview-confirm-actions">
+          <button id="interviewConfirmCancelBtn" class="ts-btn" type="button">取消</button>
+          <button id="interviewConfirmSubmitBtn" class="ts-btn ts-btn--primary" type="button">确认发起</button>
+        </footer>
+      </section>
+    </div>
+    <div id="interviewFeedback" class="interview-feedback" data-state="closed" role="status" aria-live="polite" hidden>
+      <div class="interview-feedback-copy">
+        <strong id="interviewFeedbackTitle"></strong>
+        <span id="interviewFeedbackMessage"></span>
+      </div>
+      <button id="interviewFeedbackCloseBtn" class="interview-feedback-close" type="button" title="关闭提示" aria-label="关闭提示">×</button>
+    </div>
     <div id="reviewerDecisionPopoverRoot" class="reviewer-decision-popover-root" role="tooltip" hidden></div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260721-monitoring-accounts-v1"></script>
+    <script src="/assets/app.js?v=20260722-interview-confirm-v1"></script>
   </body>
 </html>

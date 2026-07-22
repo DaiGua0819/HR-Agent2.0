@@ -177,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260721-monitoring-accounts-v1" in html
+    assert "/assets/app.js?v=20260722-interview-confirm-v1" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -829,7 +829,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260721-monitoring-accounts-v1" in html
+    assert "/assets/app.js?v=20260722-interview-confirm-v1" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1839,16 +1839,34 @@ def test_resume_pagination_uses_editable_frosted_page_status() -> None:
     assert "text-align: center" in input_block
 
 
-def test_interview_button_uses_preflight_then_live_confirmation() -> None:
-    """Interview invite should be a two-step preflight/live confirmation flow."""
+def test_interview_button_confirms_in_place_then_reports_result() -> None:
+    """Interview invite should confirm and report results without changing views."""
 
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
+    assert 'id="interviewConfirmModal"' in html
+    assert 'role="alertdialog"' in html
+    assert 'id="interviewConfirmSubmitBtn"' in html
+    assert 'id="interviewFeedback"' in html
+    assert "function openInterviewConfirm()" in script
+    assert "async function submitInterviewInvite()" in script
+    request_block = script.split("async function requestInterview()", 1)[1].split(
+        "function openInterviewConfirm()", 1
+    )[0]
+    assert 'setView("interviews")' not in request_block
+    assert "openInterviewConfirm();" in request_block
+    assert '"dryRun": true' in script
+    assert '"confirmLive": true' in script
+    assert '"dryRun": false' in script
+    assert 'showInterviewFeedback("success"' in script
+    assert 'showInterviewFeedback("error"' in script
+    assert ".interview-confirm-dialog" in styles
+    assert '.interview-feedback[data-tone="success"]' in styles
     assert "async function confirmInterviewInvite()" in script
     assert "async function selectInterviewSession(sessionId)" in script
     assert "renderInterviewPreflight" in script
-    assert '"confirmLive": true' in script
-    assert '"dryRun": false' in script
     assert '"selectedSessionId": sessionId' in script
     assert "data-select-interview-session" in script
     assert "确认发起约面试" in script

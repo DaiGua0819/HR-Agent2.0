@@ -42,6 +42,11 @@ const state = {
   interviewDateStart: "",
   interviewDateEnd: "",
   interviewBusy: false,
+  interviewConfirmResumeId: "",
+  interviewConfirmBusy: false,
+  interviewConfirmPreviousFocus: null,
+  interviewConfirmCloseTimer: null,
+  interviewFeedbackTimer: null,
   resumePageCache: new Map(),
   resumeContextCache: new Map(),
   resumePrefetchingPages: new Set(),
@@ -2869,13 +2874,140 @@ async function advanceAfterReviewAction(id) {
 }
 async function requestInterview() {
   if (!state.selectedId || !state.context || !canAction("interview:invite")) return;
-  const payload = await api("/api/interview/invite", {
-    method: "POST",
-    body: JSON.stringify({ "resumeId": state.selectedId, "dryRun": true }),
-  });
-  state.interviewSelection = { resume: state.context.resume, preflight: payload, live: null };
-  setView("interviews");
-  renderInterviewDetail();
+  openInterviewConfirm();
+}
+function openInterviewConfirm() {
+  const modal = $("interviewConfirmModal");
+  const resume = state.context?.resume || selectedResume() || {};
+  if (!modal || !state.selectedId || state.interviewConfirmBusy) return;
+  if (state.interviewConfirmCloseTimer) clearTimeout(state.interviewConfirmCloseTimer);
+  state.interviewConfirmCloseTimer = null;
+  state.interviewConfirmResumeId = state.selectedId;
+  state.interviewConfirmPreviousFocus = document.activeElement;
+  const name = resumeName(resume) || "该候选人";
+  const job = resumeJob(resume) || "未标注岗位";
+  $("interviewConfirmDescription").textContent = `确认向 ${name}（${job}）发起约面试吗？`;
+  setInterviewConfirmBusy(false);
+  modal.hidden = false;
+  modal.dataset.state = "opening";
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (modal.hidden || state.interviewConfirmResumeId !== state.selectedId) return;
+    modal.dataset.state = "open";
+    $("interviewConfirmSubmitBtn").focus({ preventScroll: true });
+  }));
+}
+function finishInterviewConfirmClose() {
+  const modal = $("interviewConfirmModal");
+  if (!modal) return;
+  if (state.interviewConfirmCloseTimer) clearTimeout(state.interviewConfirmCloseTimer);
+  state.interviewConfirmCloseTimer = null;
+  modal.hidden = true;
+  modal.dataset.state = "closed";
+  state.interviewConfirmResumeId = "";
+  const previousFocus = state.interviewConfirmPreviousFocus;
+  state.interviewConfirmPreviousFocus = null;
+  if (previousFocus?.focus) previousFocus.focus({ preventScroll: true });
+}
+function closeInterviewConfirm({ immediate = false, force = false } = {}) {
+  const modal = $("interviewConfirmModal");
+  if (!modal || modal.hidden || (state.interviewConfirmBusy && !force)) return;
+  if (immediate) return finishInterviewConfirmClose();
+  modal.dataset.state = "closing";
+  if (state.interviewConfirmCloseTimer) clearTimeout(state.interviewConfirmCloseTimer);
+  state.interviewConfirmCloseTimer = setTimeout(finishInterviewConfirmClose, 220);
+}
+function setInterviewConfirmBusy(busy) {
+  state.interviewConfirmBusy = Boolean(busy);
+  const dialog = $("interviewConfirmModal")?.querySelector(".interview-confirm-dialog");
+  const submit = $("interviewConfirmSubmitBtn");
+  const cancel = $("interviewConfirmCancelBtn");
+  if (dialog) dialog.classList.toggle("is-busy", state.interviewConfirmBusy);
+  if (submit) {
+    submit.disabled = state.interviewConfirmBusy;
+    submit.textContent = state.interviewConfirmBusy ? "正在发起..." : "确认发起";
+  }
+  if (cancel) cancel.disabled = state.interviewConfirmBusy;
+}
+function interviewInviteReason(payload = {}, fallback = "平台操作未完成") {
+  const reason = String(payload.reason || payload.workerResult?.reason || "");
+  const labels = {
+    missing_linked_session: "没有找到唯一关联的聊天记录，请先检查候选人的聊天记录关联。",
+    missing_platform_display_name: "缺少平台联系人姓名，无法核对候选人。",
+    search_result_not_found: "在招聘平台中没有找到该候选人。",
+    multiple_candidates_unverified: "搜索到了多个候选人，但无法确认身份。",
+    wechat_exchange_button_not_found: "当前聊天中没有找到“换微信”按钮。",
+    wechat_exchange_verification_failed: "已尝试换微信，但平台没有返回成功状态。",
+    interview_followup_send_failed: "换微信已执行，但“加我微信沟通”发送失败。",
+    live_confirmation_required: "本次操作缺少二次确认。",
+  };
+  return labels[reason] || fallback;
+}
+function hideInterviewFeedback() {
+  const feedback = $("interviewFeedback");
+  if (!feedback || feedback.hidden) return;
+  if (state.interviewFeedbackTimer) clearTimeout(state.interviewFeedbackTimer);
+  state.interviewFeedbackTimer = null;
+  feedback.dataset.state = "closing";
+  setTimeout(() => {
+    if (feedback.dataset.state !== "closing") return;
+    feedback.hidden = true;
+    feedback.dataset.state = "closed";
+  }, 200);
+}
+function showInterviewFeedback(tone, title, message) {
+  const feedback = $("interviewFeedback");
+  if (!feedback) return;
+  if (state.interviewFeedbackTimer) clearTimeout(state.interviewFeedbackTimer);
+  feedback.dataset.tone = tone;
+  $("interviewFeedbackTitle").textContent = title;
+  $("interviewFeedbackMessage").textContent = message;
+  feedback.hidden = false;
+  feedback.dataset.state = "opening";
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!feedback.hidden) feedback.dataset.state = "open";
+  }));
+  state.interviewFeedbackTimer = setTimeout(hideInterviewFeedback, 6000);
+}
+async function submitInterviewInvite() {
+  const resumeId = state.interviewConfirmResumeId;
+  if (!resumeId || state.interviewConfirmBusy || !canAction("interview:invite")) return;
+  setInterviewConfirmBusy(true);
+  try {
+    const preflight = await api("/api/interview/invite", {
+      method: "POST",
+      body: JSON.stringify({ "resumeId": resumeId, "dryRun": true }),
+    });
+    const ready = Boolean(preflight.readyToExchange || preflight.workerResult?.readyToExchange);
+    if (!preflight.accepted || !ready) {
+      throw new Error(interviewInviteReason(preflight, "预检未通过，未执行平台操作。"));
+    }
+    const live = await api("/api/interview/invite", {
+      method: "POST",
+      body: JSON.stringify({
+        "resumeId": resumeId,
+        "dryRun": false,
+        "confirmLive": true,
+        "selectedSessionId": preflight.sourceSessionId || "",
+      }),
+    });
+    if (!live.accepted) {
+      throw new Error(interviewInviteReason(live));
+    }
+    const completedAssignment = live.completedAssignment || null;
+    if (completedAssignment) {
+      const resume = state.context?.resume?.id === resumeId ? state.context.resume : selectedResume();
+      if (resume) resume.assignment = completedAssignment;
+      state.resumeContextCache.delete(resumeId);
+      if (isAdminUser()) await refreshQueueSummary();
+    }
+    closeInterviewConfirm({ force: true });
+    showInterviewFeedback("success", "约面试已发起", "已完成换微信，并发送“加我微信沟通”。");
+  } catch (error) {
+    closeInterviewConfirm({ force: true });
+    showInterviewFeedback("error", "约面试失败", error.message || "平台操作未完成，请稍后重试。");
+  } finally {
+    setInterviewConfirmBusy(false);
+  }
 }
 async function confirmInterviewInvite() {
   const selected = state.interviewSelection;
@@ -3775,6 +3907,7 @@ function bindPageActions() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideReviewerDecisionPopover();
     if (event.key === "Escape" && !$("resumeConversationModal").hidden) closeResumeConversation();
+    if (event.key === "Escape" && !$("interviewConfirmModal").hidden) closeInterviewConfirm();
   });
   $("libraryToggleBtn").onclick = toggleLibraryPanel;
   $("segmentToggleBtn").onclick = toggleSegmentPanel;
@@ -3804,6 +3937,11 @@ function bindPageActions() {
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("interviewBtn").onclick = requestInterview;
+  $("interviewConfirmBackdrop").onclick = closeInterviewConfirm;
+  $("interviewConfirmCloseBtn").onclick = closeInterviewConfirm;
+  $("interviewConfirmCancelBtn").onclick = closeInterviewConfirm;
+  $("interviewConfirmSubmitBtn").onclick = submitInterviewInvite;
+  $("interviewFeedbackCloseBtn").onclick = hideInterviewFeedback;
   $("logoutBtn").onclick = logout;
   $("prevBtn").onclick = () => move(-1);
   $("nextBtn").onclick = () => move(1);
@@ -3856,6 +3994,8 @@ async function logout() {
   await api("/api/auth/logout", { method: "POST" });
   state.user = null;
   closeResumeConversation({ immediate: true });
+  closeInterviewConfirm({ immediate: true, force: true });
+  hideInterviewFeedback();
   state.selectedId = "";
   state.context = null;
   state.jobType = "";
