@@ -1,0 +1,4 @@
+interface:
+  display_name: "招聘 Agent 管理器"
+  short_description: "安全启动、监听、停止并诊断本地招聘消息处理程序"
+  default_prompt: "Use $recruit-agent-manager to operate the configured local recruitment runtime in guarded batches, preserve logged-in CloakBrowser profiles, stop on anomalies, and diagnose failures from recorded evidence."

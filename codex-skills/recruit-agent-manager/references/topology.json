@@ -1,0 +1,35 @@
+{
+  "projectRoot": "C:\\Users\\24471\\Documents\\Codex\\2026-06-25\\codex-patchwork-recruit-gpt-agent-core\\hr-agent\\.worktrees\\interview-center-migration",
+  "requiredBranch": "interview-center-migration",
+  "pythonExecutable": "C:\\Users\\24471\\Documents\\Codex\\2026-06-25\\codex-patchwork-recruit-gpt-agent-core\\hr-agent\\.venv312\\Scripts\\python.exe",
+  "browserExecutable": "C:\\Users\\24471\\.cloakbrowser\\chromium-146.0.7680.177.4\\chrome.exe",
+  "databasePath": "C:\\Users\\24471\\Documents\\Codex\\2026-06-25\\codex-patchwork-recruit-gpt-agent-core\\hr-agent\\.worktrees\\interview-center-migration\\data\\resumes.sqlite",
+  "controlPlane": {
+    "host": "127.0.0.1",
+    "port": 18081
+  },
+  "owners": [
+    {
+      "owner": "和新红",
+      "slug": "hexinhong",
+      "profileDir": "C:\\Users\\24471\\Documents\\Codex\\2026-06-25\\codex-patchwork-recruit-gpt-agent-core\\hr-agent\\profiles\\hexinhong",
+      "cdpPort": 9222,
+      "workerPort": 8801
+    },
+    {
+      "owner": "宋峰峰",
+      "slug": "songfengfeng",
+      "profileDir": "C:\\Users\\24471\\Documents\\Codex\\2026-06-25\\codex-patchwork-recruit-gpt-agent-core\\hr-agent\\profiles\\songfengfeng",
+      "cdpPort": 9333,
+      "workerPort": 8802
+    }
+  ],
+  "runOrder": [
+    "和新红:boss",
+    "宋峰峰:boss",
+    "和新红:job51",
+    "宋峰峰:job51",
+    "和新红:zhilian",
+    "宋峰峰:zhilian"
+  ]
+}
