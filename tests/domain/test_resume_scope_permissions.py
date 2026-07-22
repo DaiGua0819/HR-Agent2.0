@@ -101,8 +101,8 @@ def test_member_cannot_read_shared_admin_queue(monkeypatch, tmp_path: Path) -> N
     assert queue.json()["detail"] == "admin_queue_forbidden"
 
 
-def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
-    """张怀滨 sees AI solution, finance, and investment-trading resumes."""
+def test_strategic_member_reads_ai_finance_investment_and_fullstack(monkeypatch) -> None:
+    """张怀滨 sees strategic direct-resume roles and fullstack resumes."""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
@@ -120,6 +120,7 @@ def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
         "外部财务产品顾问",
         "投资交易策略研究员（量化与市场情绪方向）",
         "AI产品经理",
+        "全栈工程师",
     ]
     assert {item["id"] for item in listed.json()["items"]} == {
         "resume-ai",
@@ -127,6 +128,7 @@ def test_strategic_member_reads_ai_finance_and_investment(monkeypatch) -> None:
         "resume-investment",
         "resume-investment-short",
         "resume-ai-product-manager",
+        "resume-fullstack",
     }
     assert [
         item
@@ -156,8 +158,8 @@ def test_ai_intern_member_only_reads_ai_intern_resumes(monkeypatch) -> None:
     assert forbidden.status_code == 403
 
 
-def test_caihua_member_only_reads_ai_product_manager_resumes(monkeypatch) -> None:
-    """Caihua can only read AI product manager resumes."""
+def test_caihua_member_reads_ai_product_manager_and_fullstack_resumes(monkeypatch) -> None:
+    """Caihua can read AI product manager and fullstack resumes."""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
     load_settings.cache_clear()
@@ -172,9 +174,15 @@ def test_caihua_member_only_reads_ai_product_manager_resumes(monkeypatch) -> Non
 
     load_settings.cache_clear()
     assert me.status_code == 200
-    assert me.json()["resumeScope"]["jobTypes"] == ["AI产品经理"]
-    assert [item["id"] for item in listed.json()["items"]] == ["resume-ai-product-manager"]
-    assert listed.json()["jobFacets"] == [{"jobType": "AI产品经理", "count": 1}]
+    assert me.json()["resumeScope"]["jobTypes"] == ["AI产品经理", "全栈工程师"]
+    assert [item["id"] for item in listed.json()["items"]] == [
+        "resume-ai-product-manager",
+        "resume-fullstack",
+    ]
+    assert listed.json()["jobFacets"] == [
+        {"jobType": "AI产品经理", "count": 1},
+        {"jobType": "全栈工程师", "count": 1},
+    ]
     assert forbidden_operation.status_code == 403
     assert forbidden_finance.status_code == 403
 
@@ -201,21 +209,25 @@ def test_caihua_scope_is_bound_to_open_id_instead_of_display_name(monkeypatch) -
         same_name_resumes = client.get("/api/resumes")
 
     load_settings.cache_clear()
-    assert renamed_scope.json()["resumeScope"]["jobTypes"] == ["AI产品经理"]
+    assert renamed_scope.json()["resumeScope"]["jobTypes"] == [
+        "AI产品经理",
+        "全栈工程师",
+    ]
     assert [item["id"] for item in renamed_resumes.json()["items"]] == [
-        "resume-ai-product-manager"
+        "resume-ai-product-manager",
+        "resume-fullstack",
     ]
     assert same_name_scope.json()["resumeScope"]["jobTypes"] == []
     assert same_name_resumes.json()["items"] == []
 
 
-def test_digital_members_only_read_ai_solution_and_product_manager_resumes(
+def test_digital_members_read_ai_solution_product_manager_and_fullstack_resumes(
     monkeypatch,
 ) -> None:
-    """Wang Jie and Jingzhe receive the same two-role scope by verified open_id."""
+    """Wang Jie and Jingzhe receive the same three-role scope by verified open_id."""
 
     monkeypatch.setenv("FEISHU_ALLOWED_TENANT_KEYS", "tenant-a")
-    expected_jobs = ["AI智能体解决方案负责人", "AI产品经理"]
+    expected_jobs = ["AI智能体解决方案负责人", "AI产品经理", "全栈工程师"]
     identities = [
         ("ou_64e5196c8a8c4563ffa1659415188e98", "王杰的新名字"),
         ("ou_e14f45b5432a8a67e091916e43503a14", "惊蛰的新名字"),
@@ -236,6 +248,7 @@ def test_digital_members_only_read_ai_solution_and_product_manager_resumes(
         assert {item["id"] for item in listed.json()["items"]} == {
             "resume-ai",
             "resume-ai-product-manager",
+            "resume-fullstack",
         }
         assert forbidden_operation.status_code == 403
         assert forbidden_finance.status_code == 403
@@ -319,6 +332,7 @@ def _app_for_member(open_id: str, name: str):
             _record("resume-investment", "投资交易策略研究员（量化与市场情绪方向）"),
             _record("resume-investment-short", "投资交易策略研究员"),
             _record("resume-ai-product-manager", "AI Product Manager"),
+            _record("resume-fullstack", "资深全栈工程师（AI 原生 B2B 平台 / 工程 Owner）"),
             _record("resume-ai-intern", "AI应用开发实习生"),
         ]
     )

@@ -191,6 +191,7 @@ def test_local_dev_login_can_preview_zhang_huaibin_scope() -> None:
         "外部财务产品顾问",
         "投资交易策略研究员（量化与市场情绪方向）",
         "AI产品经理",
+        "全栈工程师",
     ]
 
 
