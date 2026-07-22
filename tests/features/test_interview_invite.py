@@ -300,6 +300,53 @@ def test_zhilian_invite_waits_for_search_modal_and_opens_unique_result() -> None
     assert page.sent_messages == []
 
 
+@pytest.mark.parametrize(
+    ("result_count", "expected_reason"),
+    [
+        (0, "search_result_not_found"),
+        (2, "multiple_candidates_unverified"),
+    ],
+)
+def test_boss_invite_refuses_missing_or_ambiguous_search_results(
+    result_count: int,
+    expected_reason: str,
+) -> None:
+    """BOSS search must never guess when the candidate identity is not unique."""
+
+    page = BossSearchPanelPage(result_count=result_count)
+    adapter = BossAdapter(page, owner="宋锋峰", dry_run=True)
+
+    result = asyncio.run(adapter.invite_to_interview(_invite_payload(dry_run=True)))
+
+    assert result["accepted"] is False
+    assert result["reason"] == expected_reason
+    assert page.clicked_selectors == [".chat-search-btn"]
+    assert page.sent_messages == []
+
+
+def test_boss_invite_opens_hidden_search_and_verifies_unique_conversation() -> None:
+    """BOSS should activate hidden search, open one exact result, and verify the chat."""
+
+    page = BossSearchPanelPage(result_count=1)
+    adapter = BossAdapter(page, owner="宋锋峰", dry_run=True)
+
+    result = asyncio.run(adapter.invite_to_interview(_invite_payload(dry_run=True)))
+
+    assert result["accepted"] is True
+    assert result["readyToExchange"] is True
+    assert result["dryRun"] is True
+    assert page.activation_calls == 1
+    assert page.result_calls == 1
+    assert page.verification_calls == 2
+    assert page.clicked_selectors == [
+        ".chat-search-btn",
+        "[data-hr-agent-boss-interview-target='true']",
+    ]
+    assert page.filled_values == ["平台张先生"]
+    assert page.current_conversation().get("wechat_exchange_clicked") is not True
+    assert page.sent_messages == []
+
+
 class RecordingDispatcher:
     """Capture service dispatch payloads."""
 
@@ -411,6 +458,67 @@ class ZhilianSearchModalPage(FakePage):
     ) -> bool:
         _ = selector, timeout_ms
         return key == "Enter"
+
+
+class BossSearchPanelPage(FakePage):
+    """Model BOSS chat search where the input is hidden behind an activator."""
+
+    def __init__(self, *, result_count: int) -> None:
+        super().__init__(conversations=_invite_page(Platform.BOSS).conversations)
+        self.is_fake = False
+        self.result_count = result_count
+        self.target_open = False
+        self.activation_calls = 0
+        self.result_calls = 0
+        self.verification_calls = 0
+        self.clicked_selectors: list[str] = []
+        self.filled_values: list[str] = []
+
+    async def eval_js(self, script: str, arg: Any | None = None) -> Any:
+        if "interview_invite.boss_verify_conversation" in script:
+            self.verification_calls += 1
+            return {
+                "found": self.target_open,
+                "verified": self.target_open,
+                "reason": "" if self.target_open else "current_conversation_mismatch",
+            }
+        if "interview_invite.boss_activate_search" in script:
+            self.activation_calls += 1
+            return {"searchInputVisible": False, "activatorFound": True}
+        if "interview_invite.boss_search_result" in script:
+            self.result_calls += 1
+            return {
+                "found": self.result_count > 0,
+                "verified": self.result_count == 1,
+                "reason": (
+                    ""
+                    if self.result_count == 1
+                    else (
+                        "multiple_candidates_unverified"
+                        if self.result_count > 1
+                        else "search_result_not_found"
+                    )
+                ),
+                "resultCount": self.result_count,
+            }
+        return await super().eval_js(script, arg)
+
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
+        _ = timeout_ms
+        self.clicked_selectors.append(selector)
+        if selector == "[data-hr-agent-boss-interview-target='true']":
+            self.target_open = True
+        return True
+
+    async def fill(
+        self,
+        selector: str,
+        value: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        _ = selector, timeout_ms
+        self.filled_values.append(value)
+        return True
 
 
 class DelayedExchangeVerificationPage(FakePage):

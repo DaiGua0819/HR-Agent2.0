@@ -177,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260722-fullstack-filter-v1" in html
+    assert "/assets/app.js?v=20260722-interview-invite-feedback-v1" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -833,7 +833,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260722-fullstack-filter-v1" in html
+    assert "/assets/app.js?v=20260722-interview-invite-feedback-v1" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1864,6 +1864,7 @@ def test_interview_button_confirms_in_place_then_reports_result() -> None:
     assert 'role="alertdialog"' in html
     assert 'id="interviewConfirmSubmitBtn"' in html
     assert 'id="interviewFeedback"' in html
+    assert 'id="interviewConfirmError"' in html
     assert "function openInterviewConfirm()" in script
     assert "async function submitInterviewInvite()" in script
     request_block = script.split("async function requestInterview()", 1)[1].split(
@@ -1871,11 +1872,27 @@ def test_interview_button_confirms_in_place_then_reports_result() -> None:
     )[0]
     assert 'setView("interviews")' not in request_block
     assert "openInterviewConfirm();" in request_block
+    assert 'showInterviewFeedback("error", "无法约面试"' in request_block
+    dock_block = script.split("function renderActionDock()", 1)[1].split(
+        "function setView(view)", 1
+    )[0]
+    assert "interviewBtn.disabled" in dock_block
+    assert "!state.selectedId" in dock_block
+    assert "!state.context" in dock_block
+    assert '!canAction("interview:invite")' in dock_block
     assert '"dryRun": true' in script
     assert '"confirmLive": true' in script
     assert '"dryRun": false' in script
     assert 'showInterviewFeedback("success"' in script
     assert 'showInterviewFeedback("error"' in script
+    submit_block = script.split("async function submitInterviewInvite()", 1)[1].split(
+        "async function confirmInterviewInvite()", 1
+    )[0]
+    assert "setInterviewConfirmError(message);" in submit_block
+    assert "closeInterviewConfirm({ force: true });" not in submit_block.split(
+        "} catch (error) {", 1
+    )[1]
+    assert 'tone !== "error"' in script
     assert ".interview-confirm-dialog" in styles
     assert '.interview-feedback[data-tone="success"]' in styles
     assert "async function confirmInterviewInvite()" in script

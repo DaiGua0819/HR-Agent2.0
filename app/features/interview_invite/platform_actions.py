@@ -119,6 +119,8 @@ async def _search_contact(
     contact: dict[str, Any],
 ) -> dict[str, Any]:
     arg = {"platform": platform.value, "owner": owner, "contact": contact}
+    if platform is Platform.BOSS and not getattr(page, "is_fake", False):
+        return await _search_boss_contact(page, arg=arg, contact=contact)
     if platform is not Platform.ZHILIAN or getattr(page, "is_fake", False):
         return await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
 
@@ -168,6 +170,79 @@ async def _search_contact(
     await asyncio.sleep(0.7)
     verified = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
     return {**verified, "activation": activation, "searchResult": result}
+
+
+async def _search_boss_contact(
+    page: BrowserPage,
+    *,
+    arg: dict[str, Any],
+    contact: dict[str, Any],
+) -> dict[str, Any]:
+    current = await _eval_dict(page, _BOSS_VERIFY_CONVERSATION_JS, arg)
+    if current.get("found") and current.get("verified"):
+        return {**current, "usedSearchInput": False, "currentConversation": True}
+
+    activation = await _eval_dict(page, _BOSS_ACTIVATE_SEARCH_JS, arg)
+    if not activation.get("searchInputVisible"):
+        if not activation.get("activatorFound"):
+            return {
+                "found": False,
+                "verified": False,
+                "reason": activation.get("reason") or "search_activator_not_found",
+                "activation": activation,
+                "currentConversation": current,
+            }
+        if not await page.click(_BOSS_SEARCH_ACTIVATOR_SELECTOR, timeout_ms=3000):
+            return {
+                "found": False,
+                "verified": False,
+                "reason": "search_activator_click_failed",
+                "activation": activation,
+                "currentConversation": current,
+            }
+        await asyncio.sleep(0.35)
+
+    display_name = str(contact.get("displayName") or "").strip()
+    if not await page.fill(
+        _BOSS_SEARCH_INPUT_SELECTOR,
+        display_name,
+        timeout_ms=3000,
+    ):
+        return {
+            "found": False,
+            "verified": False,
+            "reason": "search_input_not_ready",
+            "activation": activation,
+            "currentConversation": current,
+        }
+    await asyncio.sleep(0.8)
+    result = await _eval_dict(page, _BOSS_SEARCH_RESULT_JS, arg)
+    if not result.get("found") or not result.get("verified"):
+        return {
+            **result,
+            "usedSearchInput": True,
+            "activation": activation,
+            "currentConversation": current,
+        }
+    if not await page.click(_BOSS_SEARCH_RESULT_SELECTOR, timeout_ms=3000):
+        return {
+            "found": False,
+            "verified": False,
+            "reason": "search_result_click_failed",
+            "usedSearchInput": True,
+            "activation": activation,
+            "searchResult": result,
+            "currentConversation": current,
+        }
+    await asyncio.sleep(0.7)
+    verified = await _eval_dict(page, _BOSS_VERIFY_CONVERSATION_JS, arg)
+    return {
+        **verified,
+        "usedSearchInput": True,
+        "activation": activation,
+        "searchResult": result,
+        "previousConversation": current,
+    }
 
 
 def _send_payload(result: SendResult) -> dict[str, Any]:
@@ -267,6 +342,129 @@ _ZHILIAN_SEARCH_RESULT_JS = r"""
 """
 
 
+_BOSS_ACTIVATE_SEARCH_JS = r"""
+({ platform }) => {
+  const marker = "interview_invite.boss_activate_search";
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const activeInput = Array.from(document.querySelectorAll(
+    ".chat-top-search input.search-input, input.search-input[placeholder*='搜索姓名']"
+  )).find(visible);
+  if (activeInput) {
+    return { searchInputVisible: true, activatorFound: true, platform, marker };
+  }
+  const activator = Array.from(document.querySelectorAll(".chat-search-btn")).find(visible);
+  if (!activator) {
+    return {
+      searchInputVisible: false,
+      activatorFound: false,
+      reason: "search_activator_not_found",
+      platform,
+      marker,
+    };
+  }
+  return { searchInputVisible: false, activatorFound: true, platform, marker };
+}
+"""
+
+
+_BOSS_SEARCH_RESULT_JS = r"""
+({ platform, contact }) => {
+  const marker = "interview_invite.boss_search_result";
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  document.querySelectorAll("[data-hr-agent-boss-interview-target]").forEach(
+    (node) => node.removeAttribute("data-hr-agent-boss-interview-target")
+  );
+  const displayName = String(contact?.displayName || "").trim();
+  const nameMatches = (value) => (
+    value === displayName
+    || value.startsWith(`${displayName}_`)
+    || value.startsWith(`${displayName} `)
+  );
+  const primaryRows = Array.from(document.querySelectorAll(".geek-search-list li")).filter(visible);
+  const rows = primaryRows.length
+    ? primaryRows
+    : Array.from(document.querySelectorAll(".list-container li")).filter(visible);
+  const matches = rows.filter((row) => {
+    const identity = text(row.querySelector(".content-text"));
+    return Boolean(identity && nameMatches(identity));
+  });
+  if (matches.length !== 1) {
+    return {
+      found: matches.length > 0,
+      verified: false,
+      reason: matches.length > 1
+        ? "multiple_candidates_unverified"
+        : "search_result_not_found",
+      resultCount: matches.length,
+      visibleResultCount: rows.length,
+      displayName,
+      platform,
+      marker,
+    };
+  }
+  matches[0].setAttribute("data-hr-agent-boss-interview-target", "true");
+  return {
+    found: true,
+    verified: true,
+    resultCount: 1,
+    visibleResultCount: rows.length,
+    displayName,
+    resultIdentity: text(matches[0].querySelector(".content-text")),
+    platform,
+    marker,
+  };
+}
+"""
+
+
+_BOSS_VERIFY_CONVERSATION_JS = r"""
+({ platform, contact }) => {
+  const marker = "interview_invite.boss_verify_conversation";
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const firstVisibleText = (selector) => {
+    const node = Array.from(document.querySelectorAll(selector)).find(visible);
+    return text(node);
+  };
+  const displayName = String(contact?.displayName || "").trim();
+  const position = String(contact?.appliedPosition || "").trim();
+  const activeName = firstVisibleText(".base-name, .name-box, .geek-name");
+  const activePosition = firstVisibleText(".source-job, .position-name, .job-content");
+  const nameVerified = Boolean(activeName && activeName === displayName);
+  const positionVerified = Boolean(
+    !position || (activePosition && activePosition.includes(position))
+  );
+  const verified = Boolean(nameVerified && positionVerified);
+  return {
+    found: nameVerified,
+    verified,
+    reason: verified ? "" : "current_conversation_mismatch",
+    displayName,
+    position,
+    activeName,
+    activePosition,
+    nameVerified,
+    positionVerified,
+    platform,
+    marker,
+  };
+}
+"""
+
+
 _SEARCH_CONTACT_JS = r"""
 ({ platform, contact }) => {
   const marker = "interview_invite.search_contact";
@@ -325,6 +523,11 @@ _SEARCH_CONTACT_JS = r"""
 _ZHILIAN_SEARCH_ACTIVATOR_SELECTOR = ".side-panel-header__input-button"
 _ZHILIAN_SEARCH_INPUT_SELECTOR = "input[placeholder*='搜索聊天记录']"
 _ZHILIAN_SEARCH_RESULT_SELECTOR = "[data-hr-agent-interview-target='true']"
+_BOSS_SEARCH_ACTIVATOR_SELECTOR = ".chat-search-btn"
+_BOSS_SEARCH_INPUT_SELECTOR = (
+    ".chat-top-search input.search-input, input.search-input[placeholder*='搜索姓名']"
+)
+_BOSS_SEARCH_RESULT_SELECTOR = "[data-hr-agent-boss-interview-target='true']"
 
 _LOCATE_EXCHANGE_JS = r"""
 ({ platform }) => {

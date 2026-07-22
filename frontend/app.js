@@ -735,6 +735,12 @@ function renderActionDock() {
   unsuitableBtn.textContent = "不合适";
   unsuitableBtn.onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   interviewBtn.hidden = isMemberUser();
+  interviewBtn.disabled = (
+    !state.selectedId
+    || !state.context
+    || !canAction("interview:invite")
+    || state.interviewConfirmBusy
+  );
 }
 function setView(view) {
   if (!AVAILABLE_VIEWS.has(view)) view = canView("resumes") ? "resumes" : "dashboard";
@@ -2819,7 +2825,18 @@ async function advanceAfterReviewAction(id) {
   }
 }
 async function requestInterview() {
-  if (!state.selectedId || !state.context || !canAction("interview:invite")) return;
+  if (!state.selectedId) {
+    showInterviewFeedback("error", "无法约面试", "请先选择一位候选人。");
+    return;
+  }
+  if (!state.context) {
+    showInterviewFeedback("error", "无法约面试", "候选人详情尚未加载完成，请稍后重试。");
+    return;
+  }
+  if (!canAction("interview:invite")) {
+    showInterviewFeedback("error", "无法约面试", "当前账号没有发起约面试的权限。");
+    return;
+  }
   openInterviewConfirm();
 }
 function openInterviewConfirm() {
@@ -2833,6 +2850,7 @@ function openInterviewConfirm() {
   const name = resumeName(resume) || "该候选人";
   const job = resumeJob(resume) || "未标注岗位";
   $("interviewConfirmDescription").textContent = `确认向 ${name}（${job}）发起约面试吗？`;
+  setInterviewConfirmError("");
   setInterviewConfirmBusy(false);
   modal.hidden = false;
   modal.dataset.state = "opening";
@@ -2849,6 +2867,7 @@ function finishInterviewConfirmClose() {
   state.interviewConfirmCloseTimer = null;
   modal.hidden = true;
   modal.dataset.state = "closed";
+  setInterviewConfirmError("");
   state.interviewConfirmResumeId = "";
   const previousFocus = state.interviewConfirmPreviousFocus;
   state.interviewConfirmPreviousFocus = null;
@@ -2873,6 +2892,13 @@ function setInterviewConfirmBusy(busy) {
     submit.textContent = state.interviewConfirmBusy ? "正在发起..." : "确认发起";
   }
   if (cancel) cancel.disabled = state.interviewConfirmBusy;
+  renderActionDock();
+}
+function setInterviewConfirmError(message) {
+  const error = $("interviewConfirmError");
+  if (!error) return;
+  error.textContent = String(message || "");
+  error.hidden = !error.textContent;
 }
 function interviewInviteReason(payload = {}, fallback = "平台操作未完成") {
   const reason = String(payload.reason || payload.workerResult?.reason || "");
@@ -2912,11 +2938,23 @@ function showInterviewFeedback(tone, title, message) {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (!feedback.hidden) feedback.dataset.state = "open";
   }));
-  state.interviewFeedbackTimer = setTimeout(hideInterviewFeedback, 6000);
+  if (tone !== "error") {
+    state.interviewFeedbackTimer = setTimeout(hideInterviewFeedback, 6000);
+  }
 }
 async function submitInterviewInvite() {
   const resumeId = state.interviewConfirmResumeId;
-  if (!resumeId || state.interviewConfirmBusy || !canAction("interview:invite")) return;
+  if (!resumeId) {
+    showInterviewFeedback("error", "约面试失败", "候选人状态已变化，请关闭后重新选择。");
+    return;
+  }
+  if (state.interviewConfirmBusy) return;
+  if (!canAction("interview:invite")) {
+    setInterviewConfirmError("当前账号没有发起约面试的权限。");
+    showInterviewFeedback("error", "约面试失败", "当前账号没有发起约面试的权限。");
+    return;
+  }
+  setInterviewConfirmError("");
   setInterviewConfirmBusy(true);
   try {
     const preflight = await api("/api/interview/invite", {
@@ -2949,8 +2987,9 @@ async function submitInterviewInvite() {
     closeInterviewConfirm({ force: true });
     showInterviewFeedback("success", "约面试已发起", "已完成换微信，并发送“加我微信沟通”。");
   } catch (error) {
-    closeInterviewConfirm({ force: true });
-    showInterviewFeedback("error", "约面试失败", error.message || "平台操作未完成，请稍后重试。");
+    const message = error.message || "平台操作未完成，请稍后重试。";
+    setInterviewConfirmError(message);
+    showInterviewFeedback("error", "约面试失败", message);
   } finally {
     setInterviewConfirmBusy(false);
   }
