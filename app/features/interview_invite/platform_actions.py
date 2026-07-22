@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -27,10 +28,11 @@ async def invite_to_interview(
     display_name = str(contact.get("displayName") or "").strip()
     if not display_name:
         return _failed("missing_platform_display_name", dry_run=dry_run)
-    search = await _eval_dict(
+    search = await _search_contact(
         page,
-        _SEARCH_CONTACT_JS,
-        {"platform": platform.value, "owner": owner, "contact": contact},
+        platform=platform,
+        owner=owner,
+        contact=contact,
     )
     if not search.get("found"):
         return _failed("search_result_not_found", dry_run=dry_run, search=search)
@@ -101,6 +103,27 @@ async def _eval_dict(page: BrowserPage, script: str, arg: dict[str, Any]) -> dic
     return value if isinstance(value, dict) else {"ok": False, "value": str(value)}
 
 
+async def _search_contact(
+    page: BrowserPage,
+    *,
+    platform: Platform,
+    owner: str,
+    contact: dict[str, Any],
+) -> dict[str, Any]:
+    arg = {"platform": platform.value, "owner": owner, "contact": contact}
+    if platform is Platform.ZHILIAN:
+        activation = await _eval_dict(page, _ACTIVATE_SEARCH_JS, arg)
+        if activation.get("activated"):
+            await asyncio.sleep(0.35)
+    search = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
+    for _attempt in range(3):
+        if not search.get("searchSubmitted") and not search.get("conversationOpening"):
+            break
+        await asyncio.sleep(0.9 if search.get("searchSubmitted") else 0.7)
+        search = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
+    return search
+
+
 def _send_payload(result: SendResult) -> dict[str, Any]:
     return {
         "sent": result.sent,
@@ -113,6 +136,35 @@ def _send_payload(result: SendResult) -> dict[str, Any]:
 
 def _failed(reason: str, *, dry_run: bool, **extra: Any) -> dict[str, Any]:
     return {"accepted": False, "dryRun": dry_run, "reason": reason, **extra}
+
+
+_ACTIVATE_SEARCH_JS = r"""
+({ platform }) => {
+  const marker = "interview_invite.activate_search";
+  if (platform !== "zhilian") {
+    return { activated: false, platform, marker };
+  }
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const activeInput = Array.from(document.querySelectorAll(
+    "input[placeholder*='搜索聊天记录'], input[placeholder*='姓名/职位/公司']"
+  )).find(visible);
+  if (activeInput) {
+    return { activated: false, searchInputVisible: true, platform, marker };
+  }
+  const activator = Array.from(document.querySelectorAll(
+    ".side-panel-header__input-button, [class*='side-panel-header'][class*='input-button']"
+  )).find(visible);
+  if (!activator) {
+    return { activated: false, reason: "search_activator_not_found", platform, marker };
+  }
+  activator.click();
+  return { activated: true, platform, marker };
+}
+"""
 
 
 _SEARCH_CONTACT_JS = r"""
@@ -144,19 +196,70 @@ _SEARCH_CONTACT_JS = r"""
   )).filter(visible);
   const input = searchInputs[0] || null;
   if (input) {
-    input.focus();
-    input.value = displayName;
-    input.dispatchEvent(new InputEvent("input", {
-      bubbles: true,
-      inputType: "insertText",
-      data: displayName,
-    }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+    const currentValue = String(input.value || "").trim();
+    if (currentValue !== displayName) {
+      input.focus();
+      input.value = displayName;
+      input.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: displayName,
+      }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+      input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+      return {
+        found: false,
+        verified: false,
+        searchSubmitted: true,
+        displayName,
+        position,
+        usedSearchInput: true,
+        platform,
+        marker,
+      };
+    }
   }
   const bodyText = text(document.body);
   const nameHit = bodyText.includes(displayName);
   const positionHit = !position || bodyText.includes(position);
+  if (platform === "zhilian" && input && nameHit && positionHit) {
+    const results = Array.from(document.querySelectorAll(
+      ".im-search-result, .im-search-all-results__group-list > *, [class*='im-search-result']"
+    )).filter((node) => {
+      if (!visible(node)) return false;
+      const value = text(node);
+      return value.includes(displayName) && (!position || value.includes(position));
+    });
+    const leafResults = results.filter((node) => !results.some(
+      (other) => other !== node && node.contains(other)
+    ));
+    if (leafResults.length === 1) {
+      leafResults[0].click();
+      return {
+        found: true,
+        verified: true,
+        conversationOpening: true,
+        displayName,
+        position,
+        usedSearchInput: true,
+        platform,
+        marker,
+      };
+    }
+    if (leafResults.length > 1) {
+      return {
+        found: true,
+        verified: false,
+        reason: "multiple_candidates_unverified",
+        resultCount: leafResults.length,
+        displayName,
+        position,
+        usedSearchInput: true,
+        platform,
+        marker,
+      };
+    }
+  }
   return {
     found: nameHit,
     verified: Boolean(nameHit && positionHit),

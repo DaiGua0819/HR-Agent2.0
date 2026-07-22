@@ -260,6 +260,23 @@ def test_platform_invite_live_reports_followup_send_failure() -> None:
     assert page.current_conversation()["wechat_exchange_clicked"] is True
 
 
+def test_zhilian_invite_waits_for_search_modal_and_opens_unique_result() -> None:
+    """Zhilian should activate its search modal before verifying the chat target."""
+
+    page = ZhilianSearchModalPage()
+    adapter = ZhilianAdapter(page, owner="和新红", dry_run=True)
+
+    result = asyncio.run(
+        adapter.invite_to_interview(_invite_payload(Platform.ZHILIAN, dry_run=True))
+    )
+
+    assert result["accepted"] is True
+    assert result["readyToExchange"] is True
+    assert page.activation_calls == 1
+    assert page.search_calls == 3
+    assert page.sent_messages == []
+
+
 class RecordingDispatcher:
     """Capture service dispatch payloads."""
 
@@ -322,6 +339,28 @@ class FakeBrowser:
 
     async def health(self) -> Any:
         return None
+
+
+class ZhilianSearchModalPage(FakePage):
+    """Model the async search-modal states used by the real Zhilian chat page."""
+
+    def __init__(self) -> None:
+        super().__init__(conversations=_invite_page(Platform.ZHILIAN).conversations)
+        self.activation_calls = 0
+        self.search_calls = 0
+
+    async def eval_js(self, script: str, arg: Any | None = None) -> Any:
+        if "interview_invite.activate_search" in script:
+            self.activation_calls += 1
+            return {"activated": True}
+        if "interview_invite.search_contact" in script:
+            self.search_calls += 1
+            if self.search_calls == 1:
+                return {"searchSubmitted": True, "found": False, "verified": False}
+            if self.search_calls == 2:
+                return {"conversationOpening": True, "found": True, "verified": True}
+            return {"found": True, "verified": True}
+        return await super().eval_js(script, arg)
 
 
 def _linked_resume_fixture(tmp_path: Path) -> tuple[ResumeRepository, ConversationRepository, str]:
