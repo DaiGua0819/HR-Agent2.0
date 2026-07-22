@@ -111,17 +111,55 @@ async def _search_contact(
     contact: dict[str, Any],
 ) -> dict[str, Any]:
     arg = {"platform": platform.value, "owner": owner, "contact": contact}
-    if platform is Platform.ZHILIAN:
-        activation = await _eval_dict(page, _ACTIVATE_SEARCH_JS, arg)
-        if activation.get("activated"):
-            await asyncio.sleep(0.35)
-    search = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
-    for _attempt in range(3):
-        if not search.get("searchSubmitted") and not search.get("conversationOpening"):
-            break
-        await asyncio.sleep(0.9 if search.get("searchSubmitted") else 0.7)
-        search = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
-    return search
+    if platform is not Platform.ZHILIAN or getattr(page, "is_fake", False):
+        return await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
+
+    activation = await _eval_dict(page, _ACTIVATE_SEARCH_JS, arg)
+    if not activation.get("searchInputVisible"):
+        if not activation.get("activatorFound"):
+            return {
+                "found": False,
+                "verified": False,
+                "reason": activation.get("reason") or "search_activator_not_found",
+                "activation": activation,
+            }
+        if not await page.click(_ZHILIAN_SEARCH_ACTIVATOR_SELECTOR, timeout_ms=3000):
+            return {
+                "found": False,
+                "verified": False,
+                "reason": "search_activator_click_failed",
+                "activation": activation,
+            }
+        await asyncio.sleep(0.35)
+
+    display_name = str(contact.get("displayName") or "").strip()
+    if not await page.fill(
+        _ZHILIAN_SEARCH_INPUT_SELECTOR,
+        display_name,
+        timeout_ms=3000,
+    ):
+        return {
+            "found": False,
+            "verified": False,
+            "reason": "search_input_not_ready",
+            "activation": activation,
+        }
+    await page.press(_ZHILIAN_SEARCH_INPUT_SELECTOR, "Enter", timeout_ms=3000)
+    await asyncio.sleep(0.9)
+    result = await _eval_dict(page, _ZHILIAN_SEARCH_RESULT_JS, arg)
+    if not result.get("found") or not result.get("verified"):
+        return {**result, "activation": activation}
+    if not await page.click(_ZHILIAN_SEARCH_RESULT_SELECTOR, timeout_ms=3000):
+        return {
+            "found": False,
+            "verified": False,
+            "reason": "search_result_click_failed",
+            "activation": activation,
+            "searchResult": result,
+        }
+    await asyncio.sleep(0.7)
+    verified = await _eval_dict(page, _SEARCH_CONTACT_JS, arg)
+    return {**verified, "activation": activation, "searchResult": result}
 
 
 def _send_payload(result: SendResult) -> dict[str, Any]:
@@ -153,16 +191,70 @@ _ACTIVATE_SEARCH_JS = r"""
     "input[placeholder*='搜索聊天记录'], input[placeholder*='姓名/职位/公司']"
   )).find(visible);
   if (activeInput) {
-    return { activated: false, searchInputVisible: true, platform, marker };
+    return { searchInputVisible: true, activatorFound: true, platform, marker };
   }
   const activator = Array.from(document.querySelectorAll(
     ".side-panel-header__input-button, [class*='side-panel-header'][class*='input-button']"
   )).find(visible);
   if (!activator) {
-    return { activated: false, reason: "search_activator_not_found", platform, marker };
+    return {
+      searchInputVisible: false,
+      activatorFound: false,
+      reason: "search_activator_not_found",
+      platform,
+      marker,
+    };
   }
-  activator.click();
-  return { activated: true, platform, marker };
+  return { searchInputVisible: false, activatorFound: true, platform, marker };
+}
+"""
+
+
+_ZHILIAN_SEARCH_RESULT_JS = r"""
+({ platform, contact }) => {
+  const marker = "interview_invite.zhilian_search_result";
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  document.querySelectorAll("[data-hr-agent-interview-target]").forEach(
+    (node) => node.removeAttribute("data-hr-agent-interview-target")
+  );
+  const displayName = String(contact?.displayName || "").trim();
+  const position = String(contact?.appliedPosition || "").trim();
+  const results = Array.from(document.querySelectorAll(".im-search-result")).filter(
+    (node) => {
+      if (!visible(node)) return false;
+      const value = text(node);
+      return value.includes(displayName) && (!position || value.includes(position));
+    }
+  );
+  if (results.length !== 1) {
+    return {
+      found: results.length > 0,
+      verified: false,
+      reason: results.length > 1
+        ? "multiple_candidates_unverified"
+        : "search_result_not_found",
+      resultCount: results.length,
+      displayName,
+      position,
+      platform,
+      marker,
+    };
+  }
+  results[0].setAttribute("data-hr-agent-interview-target", "true");
+  return {
+    found: true,
+    verified: true,
+    resultCount: 1,
+    displayName,
+    position,
+    platform,
+    marker,
+  };
 }
 """
 
@@ -196,70 +288,19 @@ _SEARCH_CONTACT_JS = r"""
   )).filter(visible);
   const input = searchInputs[0] || null;
   if (input) {
-    const currentValue = String(input.value || "").trim();
-    if (currentValue !== displayName) {
-      input.focus();
-      input.value = displayName;
-      input.dispatchEvent(new InputEvent("input", {
-        bubbles: true,
-        inputType: "insertText",
-        data: displayName,
-      }));
-      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-      input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
-      return {
-        found: false,
-        verified: false,
-        searchSubmitted: true,
-        displayName,
-        position,
-        usedSearchInput: true,
-        platform,
-        marker,
-      };
-    }
+    input.focus();
+    input.value = displayName;
+    input.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: displayName,
+    }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
   }
   const bodyText = text(document.body);
   const nameHit = bodyText.includes(displayName);
   const positionHit = !position || bodyText.includes(position);
-  if (platform === "zhilian" && input && nameHit && positionHit) {
-    const results = Array.from(document.querySelectorAll(
-      ".im-search-result, .im-search-all-results__group-list > *, [class*='im-search-result']"
-    )).filter((node) => {
-      if (!visible(node)) return false;
-      const value = text(node);
-      return value.includes(displayName) && (!position || value.includes(position));
-    });
-    const leafResults = results.filter((node) => !results.some(
-      (other) => other !== node && node.contains(other)
-    ));
-    if (leafResults.length === 1) {
-      leafResults[0].click();
-      return {
-        found: true,
-        verified: true,
-        conversationOpening: true,
-        displayName,
-        position,
-        usedSearchInput: true,
-        platform,
-        marker,
-      };
-    }
-    if (leafResults.length > 1) {
-      return {
-        found: true,
-        verified: false,
-        reason: "multiple_candidates_unverified",
-        resultCount: leafResults.length,
-        displayName,
-        position,
-        usedSearchInput: true,
-        platform,
-        marker,
-      };
-    }
-  }
   return {
     found: nameHit,
     verified: Boolean(nameHit && positionHit),
@@ -271,6 +312,11 @@ _SEARCH_CONTACT_JS = r"""
   };
 }
 """
+
+
+_ZHILIAN_SEARCH_ACTIVATOR_SELECTOR = ".side-panel-header__input-button"
+_ZHILIAN_SEARCH_INPUT_SELECTOR = "input[placeholder*='搜索聊天记录']"
+_ZHILIAN_SEARCH_RESULT_SELECTOR = "[data-hr-agent-interview-target='true']"
 
 _LOCATE_EXCHANGE_JS = r"""
 ({ platform }) => {

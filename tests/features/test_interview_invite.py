@@ -273,7 +273,13 @@ def test_zhilian_invite_waits_for_search_modal_and_opens_unique_result() -> None
     assert result["accepted"] is True
     assert result["readyToExchange"] is True
     assert page.activation_calls == 1
-    assert page.search_calls == 3
+    assert page.result_calls == 1
+    assert page.search_calls == 1
+    assert page.clicked_selectors == [
+        ".side-panel-header__input-button",
+        "[data-hr-agent-interview-target='true']",
+    ]
+    assert page.filled_values == ["平台张先生"]
     assert page.sent_messages == []
 
 
@@ -346,21 +352,48 @@ class ZhilianSearchModalPage(FakePage):
 
     def __init__(self) -> None:
         super().__init__(conversations=_invite_page(Platform.ZHILIAN).conversations)
+        self.is_fake = False
         self.activation_calls = 0
+        self.result_calls = 0
         self.search_calls = 0
+        self.clicked_selectors: list[str] = []
+        self.filled_values: list[str] = []
 
     async def eval_js(self, script: str, arg: Any | None = None) -> Any:
         if "interview_invite.activate_search" in script:
             self.activation_calls += 1
-            return {"activated": True}
+            return {"searchInputVisible": False, "activatorFound": True}
+        if "interview_invite.zhilian_search_result" in script:
+            self.result_calls += 1
+            return {"found": True, "verified": True, "resultCount": 1}
         if "interview_invite.search_contact" in script:
             self.search_calls += 1
-            if self.search_calls == 1:
-                return {"searchSubmitted": True, "found": False, "verified": False}
-            if self.search_calls == 2:
-                return {"conversationOpening": True, "found": True, "verified": True}
             return {"found": True, "verified": True}
         return await super().eval_js(script, arg)
+
+    async def click(self, selector: str, timeout_ms: int | None = None) -> bool:
+        _ = timeout_ms
+        self.clicked_selectors.append(selector)
+        return True
+
+    async def fill(
+        self,
+        selector: str,
+        value: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        _ = selector, timeout_ms
+        self.filled_values.append(value)
+        return True
+
+    async def press(
+        self,
+        selector: str,
+        key: str,
+        timeout_ms: int | None = None,
+    ) -> bool:
+        _ = selector, timeout_ms
+        return key == "Enter"
 
 
 def _linked_resume_fixture(tmp_path: Path) -> tuple[ResumeRepository, ConversationRepository, str]:
