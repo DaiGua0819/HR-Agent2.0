@@ -147,6 +147,7 @@ const RESUME_LIBRARY_JOB_TYPES = [
   "投资交易策略研究员（量化与市场情绪方向）",
   "AI智能体解决方案负责人",
   "AI产品经理",
+  "全栈工程师",
 ];
 const RESUME_JOB_DISPLAY_LABELS = {
   "AI应用开发实习生": "AI实习生",
@@ -159,6 +160,7 @@ const RESUME_JOB_DISPLAY_LABELS = {
   "投资交易策略研究员（量化与市场情绪方向）": "投资策略研究",
   "AI智能体解决方案负责人": "AI方案负责人",
   "AI产品经理": "AI产品经理",
+  "全栈工程师": "全栈开发",
 };
 const $ = (id) => document.getElementById(id);
 async function api(path, options = {}) {
@@ -250,6 +252,7 @@ function canonicalResumeJobType(value) {
     text.toLowerCase().includes("ai product manager") ||
     text.toLowerCase().includes("ai pm")
   ) return "AI产品经理";
+  if (compact.includes("资深全栈工程") || compact === "全栈工程师" || compact === "全栈开发") return "全栈工程师";
   return text.replace("(", "（").replace(")", "）");
 }
 function uniqueJobTypes(values) {

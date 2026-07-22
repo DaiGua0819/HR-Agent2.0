@@ -177,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260722-navigation-dashboard-v1" in html
+    assert "/assets/app.js?v=20260722-fullstack-filter-v1" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -614,6 +614,7 @@ def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
         "投资交易策略研究员（量化与市场情绪方向）",
         "AI智能体解决方案负责人",
         "AI产品经理",
+        "全栈工程师",
     ]:
         assert f'"{job_type}"' in script
     for label in [
@@ -625,10 +626,13 @@ def test_admin_resume_library_uses_legacy_all_job_tabs_and_labels() -> None:
         "投资策略研究",
         "AI方案负责人",
         "AI产品经理",
+        "全栈开发",
     ]:
         assert f'"{label}"' in script
     assert "if (values.includes(\"*\")) return uniqueJobTypes(RESUME_LIBRARY_JOB_TYPES)" in script
     assert "function canonicalResumeJobType(value)" in script
+    assert 'compact.includes("资深全栈工程")' in script
+    assert 'compact === "全栈开发"' in script
     assert "function uniqueJobTypes(values)" in script
     assert "counts.set(job, Math.max" in script
 
@@ -829,7 +833,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260722-navigation-dashboard-v1" in html
+    assert "/assets/app.js?v=20260722-fullstack-filter-v1" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
