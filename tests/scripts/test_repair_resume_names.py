@@ -62,7 +62,11 @@ def test_repair_resume_names_is_dry_run_by_default_and_preserves_timestamps(
         database,
         resume_id="resume-boss-empty",
         parsed_name="",
-        payload={"name": "", "filePath": "邮箱_8205_【AI产品经理】刘帅_10年.pdf"},
+        payload={
+            "name": "",
+            "fileName": "邮箱_8205_【AI产品经理】刘帅_10年.pdf",
+            "filePath": "data/uploads/boss-email/resume-boss-empty.pdf",
+        },
         platform="boss",
         updated_at="2026-07-21T21:05:49.391000+08:00",
     )

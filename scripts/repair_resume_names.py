@@ -64,7 +64,9 @@ def repair_resume_names(
         )
         file_name = _first_text(
             artifact["file_path"] if artifact is not None else "",
+            payload.get("fileName"),
             payload.get("filePath"),
+            payload.get("pdfPath"),
             payload.get("resumePath"),
             payload.get("path"),
         )
