@@ -91,7 +91,8 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert ".monitoring-account-status-row" in styles
     assert "grid-auto-flow: column" in styles
     assert "min-height: 500px" in styles
-    assert "grid-template-rows: repeat(3, 44px)" in styles
+    assert "grid-template-rows: repeat(3, 54px)" in styles
+    assert "padding: 9px 0 8px" in styles
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
     assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
     assert "grid-template-rows: auto auto auto max-content" in styles
