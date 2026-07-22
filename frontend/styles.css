@@ -1835,6 +1835,15 @@ h3 { font-size: 15px; }
   align-content: start;
   min-height: 112px;
 }
+.ts-interview-session-card .candidate-card__heading {
+  grid-template-columns: minmax(0, 1fr) 76px;
+}
+.ts-interview-session-card .ts-tag {
+  justify-self: end;
+  min-width: 76px;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
 .ts-interview-surface {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

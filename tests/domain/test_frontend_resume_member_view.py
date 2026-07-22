@@ -211,7 +211,7 @@ def test_member_resume_library_hides_sidebar_navigation() -> None:
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "20260722-monitoring-account-height-v1" in html
+    assert "20260722-interview-status-width-v1" in html
     assert 'class="sidebar"' not in html
     shell_block = styles.split(".member-resume-mode .ts-app-shell {", 1)[1].split("}", 1)[0]
 
@@ -346,7 +346,7 @@ def test_resume_filters_live_in_collapsible_stitch_card() -> None:
     filters_block = styles.split(".filters {", 1)[1].split("}", 1)[0]
     filter_actions_block = styles.split(".filter-actions {", 1)[1].split("}", 1)[0]
 
-    assert "20260722-monitoring-account-height-v1" in html
+    assert "20260722-interview-status-width-v1" in html
     assert "grid-template-rows: minmax(0, 1fr)" in page_block
     assert 'id="filterToggleBtn"' in html
     assert 'id="filterPanel"' in html
@@ -506,7 +506,7 @@ def test_serene_talent_theme_is_loaded_without_replacing_native_controls() -> No
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260722-monitoring-account-height-v1" in html
+    assert "20260722-interview-status-width-v1" in html
     assert "Serene Talent Ledger" in styles
     for token in [
         "--ts-primary",
@@ -1423,7 +1423,7 @@ def test_candidate_list_shows_school_tier_badge_next_to_name() -> None:
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "20260722-monitoring-account-height-v1" in html
+    assert "20260722-interview-status-width-v1" in html
     assert "function resumeSchoolTierBadge(resume)" in script
     assert 'if (level.includes("985")) return "985"' in script
     assert 'if (level.includes("211")) return "211"' in script
@@ -1452,6 +1452,22 @@ def test_candidate_score_capsule_is_aligned_in_fixed_heading_column() -> None:
     assert "min-width: 36px" in score_block
     assert "justify-self: center" in score_block
     assert "grid-column: 4" in status_block
+
+
+def test_interview_session_status_capsule_stays_on_one_line() -> None:
+    """Interview status tags use a dedicated wide column instead of the score column."""
+
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    heading_block = styles.split(
+        ".ts-interview-session-card .candidate-card__heading {", 1
+    )[1].split("}", 1)[0]
+    tag_block = styles.split(".ts-interview-session-card .ts-tag {", 1)[1].split(
+        "}", 1
+    )[0]
+
+    assert "grid-template-columns: minmax(0, 1fr) 76px" in heading_block
+    assert "min-width: 76px" in tag_block
+    assert "white-space: nowrap" in tag_block
 
 
 def test_candidate_card_metadata_uses_aligned_columns() -> None:
@@ -1760,7 +1776,7 @@ def test_stitch_workspace_fits_codex_side_browser_viewport() -> None:
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "/assets/styles.css?v=20260722-monitoring-account-height-v1" in html
+    assert "/assets/styles.css?v=20260722-interview-status-width-v1" in html
     assert "@media (max-width: 700px)" in styles
     side_browser_block = styles.split("@media (max-width: 700px)", 1)[1]
     body_block = side_browser_block.split("body {", 1)[1].split("}", 1)[0]
