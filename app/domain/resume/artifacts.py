@@ -13,7 +13,7 @@ from xml.etree import ElementTree
 from app.db.engine import connect, run_migrations
 from app.domain.resume.job_types import canonical_resume_job_type
 from app.domain.resume.models import Resume
-from app.domain.resume.name_parser import parse_resume_name
+from app.domain.resume.name_parser import choose_resume_name, parse_resume_name
 from app.domain.resume.repository import ResumeRepository
 
 
@@ -288,7 +288,12 @@ def parse_artifact(
         return current
     try:
         text = _read_resume_text(Path(current.file_path))
-        parsed_name = parse_resume_name(text, file_name=current.file_path)
+        document_name = parse_resume_name(text)
+        parsed_name = choose_resume_name(
+            platform_name=current.candidate_name_from_platform,
+            document_name=document_name,
+            file_name=current.file_path,
+        )
         resume_id = _resume_id(current)
         job_type = canonical_resume_job_type(current.position) or current.position
         resume = Resume(
@@ -311,6 +316,7 @@ def parse_artifact(
                 "platform": current.platform,
                 "owner": current.owner,
                 "candidateNameFromPlatform": current.candidate_name_from_platform,
+                "parsedNameFromDocument": document_name,
                 "applied_position": job_type,
                 "sourceArtifactId": current.id,
                 "filePath": current.file_path,

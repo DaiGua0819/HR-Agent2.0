@@ -675,6 +675,44 @@ def test_artifact_parse_backfills_resume_name_and_hard_link(tmp_path: Path) -> N
     assert resume.linked_platform_conversation_id == "platform-1"
 
 
+def test_artifact_parse_prefers_explicit_platform_name_over_document_noise(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "artifact-platform-name.sqlite"
+    conversation_repo = ConversationRepository(database)
+    artifact_store = ResumeArtifactStore(database)
+    resume_repo = ResumeRepository(database)
+    session = resolve_or_create_session(
+        conversation_repo,
+        _conversation("platform-name-1", "蔡希玮", "AI产品经理", ["附件简历"]),
+    ).session
+    resume_file = tmp_path / "51job_蔡希玮_AI 产品经理_c36b898f.pdf.txt"
+    resume_file.write_text(
+        "应聘职位：AI 产品经理（杭州）\n联系方式\n教育背景",
+        encoding="utf-8",
+    )
+    artifact = artifact_store.record_download(
+        session_id=session.id,
+        platform=Platform.JOB51.value,
+        owner="宋峰峰",
+        platform_conversation_id="platform-name-1",
+        candidate_name_from_platform="蔡希玮",
+        position="AI产品经理",
+        file_path=resume_file,
+        file_hash="platform-name-hash",
+        source_kind="attachment",
+    )
+
+    parsed = parse_artifact(artifact_store, resume_repo, artifact)
+    resume = resume_repo.get(parsed.resume_id)
+
+    assert parsed.parsed_name == "蔡希玮"
+    assert resume is not None
+    assert resume.parsed_name == "蔡希玮"
+    assert resume.payload["name"] == "蔡希玮"
+    assert resume.payload["parsedNameFromDocument"] == ""
+
+
 def test_artifact_parse_extracts_docx_text(tmp_path: Path) -> None:
     database = tmp_path / "docx-artifact.sqlite"
     conversation_repo = ConversationRepository(database)
