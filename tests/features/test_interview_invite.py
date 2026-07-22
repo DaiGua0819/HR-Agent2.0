@@ -260,6 +260,23 @@ def test_platform_invite_live_reports_followup_send_failure() -> None:
     assert page.current_conversation()["wechat_exchange_clicked"] is True
 
 
+def test_live_invite_waits_for_delayed_exchange_verification() -> None:
+    """A platform exchange may render its success state after the click returns."""
+
+    page = DelayedExchangeVerificationPage()
+    adapter = ZhilianAdapter(page, owner="和新红", dry_run=False)
+
+    result = asyncio.run(
+        adapter.invite_to_interview(_invite_payload(Platform.ZHILIAN, dry_run=False))
+    )
+
+    assert result["accepted"] is True
+    assert result["click"]["verified"] is True
+    assert result["click"]["verification"]["evidence"] == "completed_wechat_request"
+    assert page.verification_calls == 1
+    assert page.sent_messages == ["加我微信沟通"]
+
+
 def test_zhilian_invite_waits_for_search_modal_and_opens_unique_result() -> None:
     """Zhilian should activate its search modal before verifying the chat target."""
 
@@ -394,6 +411,27 @@ class ZhilianSearchModalPage(FakePage):
     ) -> bool:
         _ = selector, timeout_ms
         return key == "Enter"
+
+
+class DelayedExchangeVerificationPage(FakePage):
+    """Return the exchange success state on the follow-up verification probe."""
+
+    def __init__(self) -> None:
+        super().__init__(conversations=_invite_page(Platform.ZHILIAN).conversations)
+        self.verification_calls = 0
+
+    async def eval_js(self, script: str, arg: Any | None = None) -> Any:
+        if "interview_invite.click_wechat_exchange" in script:
+            self.current_conversation()["wechat_exchange_clicked"] = True
+            return {
+                "clicked": True,
+                "verified": False,
+                "pendingVerification": True,
+            }
+        if "interview_invite.verify_wechat_exchange" in script:
+            self.verification_calls += 1
+            return {"verified": True, "evidence": "completed_wechat_request"}
+        return await super().eval_js(script, arg)
 
 
 def _linked_resume_fixture(tmp_path: Path) -> tuple[ResumeRepository, ConversationRepository, str]:

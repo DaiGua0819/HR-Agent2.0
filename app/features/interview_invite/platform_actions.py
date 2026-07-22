@@ -64,6 +64,14 @@ async def invite_to_interview(
         _CLICK_EXCHANGE_JS,
         {"platform": platform.value, "owner": owner, "contact": contact},
     )
+    if clicked.get("pendingVerification"):
+        await asyncio.sleep(0.9)
+        verification = await _eval_dict(
+            page,
+            _VERIFY_EXCHANGE_JS,
+            {"platform": platform.value, "owner": owner, "contact": contact},
+        )
+        clicked = {**clicked, **verification, "verification": verification}
     if not clicked.get("verified"):
         return _failed(
             "wechat_exchange_verification_failed",
@@ -433,6 +441,18 @@ _LOCATE_EXCHANGE_JS = r"""
 _CLICK_EXCHANGE_JS = r"""
 ({ platform }) => {
   const marker = "interview_invite.click_wechat_exchange";
+  const existing = exchangeSuccessState();
+  if (existing.verified) {
+    return {
+      clicked: false,
+      confirmed: false,
+      verified: true,
+      alreadyExchanged: true,
+      evidence: existing.evidence,
+      platform,
+      marker,
+    };
+  }
   const result = findWechatExchangeTarget();
   const target = result.target || null;
   if (!target) {
@@ -461,23 +481,37 @@ _CLICK_EXCHANGE_JS = r"""
     });
   const confirm = confirms[0] || null;
   if (confirm) confirm.click();
-  const bodyText = compactText(document.body);
-  const verified = [
-    "\u5df2\u4ea4\u6362",
-    "\u4ea4\u6362\u5fae\u4fe1",
-    "\u5fae\u4fe1\u53f7",
-    "\u8bf7\u6c42\u5df2\u53d1\u9001",
-    "\u5df2\u53d1\u9001",
-  ].some((word) => bodyText.includes(word));
   return {
     clicked: true,
     confirmed: Boolean(confirm),
-    verified,
+    verified: false,
+    pendingVerification: true,
     label: result.label,
     targetLabel: result.targetLabel,
     platform,
     marker,
   };
+
+  function exchangeSuccessState() {
+    const completedRequest = Array.from(document.querySelectorAll(
+      ".imc-wx-request, [class*='wx-request'], [class*='wechat-request']"
+    )).filter(visible).find((node) => {
+      const value = compactText(node);
+      return value.includes("\u6211\u7684\u5fae\u4fe1\u53f7") ||
+        value.includes("\u5df2\u4ea4\u6362\u5fae\u4fe1") ||
+        node.querySelector(".is-wx-done");
+    });
+    if (completedRequest) {
+      return { verified: true, evidence: "completed_wechat_request" };
+    }
+    const bodyText = compactText(document.body);
+    const evidence = [
+      "\u5df2\u4ea4\u6362\u5fae\u4fe1",
+      "\u8bf7\u6c42\u5df2\u53d1\u9001",
+      "\u5fae\u4fe1\u8bf7\u6c42\u5df2\u53d1\u9001",
+    ].find((word) => bodyText.includes(word));
+    return { verified: Boolean(evidence), evidence: evidence || "" };
+  }
 
   function findWechatExchangeTarget() {
     const exact = "\u6362\u5fae\u4fe1";
@@ -564,5 +598,50 @@ _CLICK_EXCHANGE_JS = r"""
   function isInteractive(node) {
     return Boolean(node?.matches("button,a,[role='button']"));
   }
+}
+"""
+
+
+_VERIFY_EXCHANGE_JS = r"""
+({ platform }) => {
+  const marker = "interview_invite.verify_wechat_exchange";
+  const compactText = (node) => (
+    node?.innerText || node?.textContent || ""
+  ).trim().replace(/\s+/g, " ");
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return rect.width > 0 && rect.height > 0 &&
+      style.visibility !== "hidden" && style.display !== "none";
+  };
+  const completedRequest = Array.from(document.querySelectorAll(
+    ".imc-wx-request, [class*='wx-request'], [class*='wechat-request']"
+  )).filter(visible).find((node) => {
+    const value = compactText(node);
+    return value.includes("\u6211\u7684\u5fae\u4fe1\u53f7") ||
+      value.includes("\u5df2\u4ea4\u6362\u5fae\u4fe1") ||
+      node.querySelector(".is-wx-done");
+  });
+  if (completedRequest) {
+    return {
+      verified: true,
+      evidence: "completed_wechat_request",
+      platform,
+      marker,
+    };
+  }
+  const bodyText = compactText(document.body);
+  const evidence = [
+    "\u5df2\u4ea4\u6362\u5fae\u4fe1",
+    "\u8bf7\u6c42\u5df2\u53d1\u9001",
+    "\u5fae\u4fe1\u8bf7\u6c42\u5df2\u53d1\u9001",
+  ].find((word) => bodyText.includes(word));
+  return {
+    verified: Boolean(evidence),
+    evidence: evidence || "",
+    platform,
+    marker,
+  };
 }
 """
