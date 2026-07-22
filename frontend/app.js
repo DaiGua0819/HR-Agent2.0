@@ -113,7 +113,8 @@ const SUMMARY_PANEL_MIN_WIDTH = 180;
 const SUMMARY_PANEL_MAX_WIDTH = 460;
 const SUMMARY_PANEL_MIN_PREVIEW_WIDTH = 380;
 const tabs = [["all", "全部"], ["unread", "未看"], ["viewed", "已看"], ["suitable", "合适"], ["unsuitable", "不合适"], ["queue", "待我处理"], ["processed", "已处理"]];
-const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], queue: ["Review Queue", "待我处理"], interviews: ["Interview Center", "面试中心"], automation: ["Automation", "自动化控制"], rules: ["Rules", "规则与知识库"] };
+const pages = { dashboard: ["Manager Console", "经理驾驶舱"], resumes: ["Resume Library", "简历库"], interviews: ["Interview Center", "面试中心"] };
+const AVAILABLE_VIEWS = new Set(Object.keys(pages));
 const INTERVIEW_STATUS_LABELS = {
   synced: "已同步",
   non_interview: "非面试",
@@ -733,12 +734,9 @@ function renderActionDock() {
   interviewBtn.hidden = isMemberUser();
 }
 function setView(view) {
+  if (!AVAILABLE_VIEWS.has(view)) view = canView("resumes") ? "resumes" : "dashboard";
   if (state.user && !canView(view)) view = uiAccess().defaultView;
-  if (view === "queue") {
-    state.jobType = "";
-    state.page = 1;
-    if ($("filters")?.job_type) $("filters").job_type.value = "";
-  }
+  if (!AVAILABLE_VIEWS.has(view)) view = canView("resumes") ? "resumes" : "dashboard";
   state.view = view;
   document.querySelectorAll("[data-page]").forEach((node) => {
     node.classList.toggle("active", node.dataset.page === view);
@@ -753,9 +751,7 @@ function setView(view) {
   if (view === "dashboard") startAutomationMonitoringPolling();
   else stopAutomationMonitoringPolling();
   if (view === "resumes") loadCurrentResumeCollection();
-  if (view === "queue") loadQueue();
   if (view === "interviews") loadInterviewSessions();
-  if (view === "automation") renderAutomationControls();
 }
 function loadCurrentResumeCollection(options = {}) {
   if (state.tab === "queue") return loadQueue();
@@ -773,7 +769,6 @@ async function loadDashboard() {
   const payload = await api("/api/dashboard/overview");
   state.dashboard = payload;
   renderSafety(payload);
-  renderAutomationControls();
   await refreshAutomationMonitoring();
 }
 function monitoringToday() {
@@ -1549,18 +1544,13 @@ async function loadResumes({ preferCache = false, fromFilter = false } = {}) {
   return data;
 }
 function queueViewActive() {
-  return state.view === "queue" || (state.view === "resumes" && state.tab === "queue");
+  return state.view === "resumes" && state.tab === "queue";
 }
 function renderQueueCountIndicators() {
   const visible = isAdminUser();
   const value = state.queueSummaryLoaded ? String(state.queueTotal) : "...";
-  [$("queueNavCount"), $("queueTabCount")].forEach((node) => {
-    if (!node) return;
-    node.hidden = !visible;
-    node.textContent = visible ? value : "";
-  });
   const statusCount = document.querySelector('[data-tab="queue"] .queue-status-count');
-  if (statusCount) statusCount.textContent = value;
+  if (statusCount) statusCount.textContent = visible ? value : "";
 }
 function stopQueueSummaryPolling() {
   if (state.queueSummaryTimer) clearTimeout(state.queueSummaryTimer);
@@ -1584,10 +1574,6 @@ function startQueueSummaryPolling() {
   renderQueueCountIndicators();
   if (!isAdminUser()) return;
   refreshQueueSummary().finally(() => scheduleQueueSummaryPoll());
-}
-async function refreshQueueNow() {
-  await refreshQueueSummary({ forceList: true });
-  scheduleQueueSummaryPoll();
 }
 async function refreshQueueSummary({ forceList = false } = {}) {
   if (!isAdminUser()) return null;
@@ -1663,7 +1649,6 @@ async function loadAssignmentCollection(status, tab, { preserveSelection = false
         jobFacets: tab === "processed" ? state.processedJobFacets : state.queueJobFacets,
         queueTotal: state.queueTotal,
       }, { collection: tab });
-      $("queueList").innerHTML = `<div class="empty-inline">${tab === "processed" ? "已处理列表" : "待处理队列"}读取失败，请稍后重试。</div>`;
     }
     if (tab === "queue") state.queueVersion = "";
     console.debug("shared review queue failed", error);
@@ -1704,8 +1689,6 @@ function applySharedQueueData(data, { preserveSelection = false, collection = "q
   renderRows();
   renderMiniList();
   renderPagination();
-  renderQueuePagination();
-  renderQueue(items);
 }
 function renderRows() {
   const rows = $("resumeRows");
@@ -2009,46 +1992,6 @@ function renderPagination() {
       loadCurrentResumeCollection({ preferCache: true });
     };
   });
-}
-function renderQueuePagination() {
-  const node = $("queuePagination");
-  if (!node) return;
-  const pages = Math.max(1, state.pages || 1);
-  const current = Math.min(Math.max(1, state.page || 1), pages);
-  node.innerHTML = `
-    <span class="pagination-status">第 ${current} / ${pages} 页，共 ${state.total || 0} 份</span>
-    <div class="ts-pagination">
-      <button class="${tsButtonClass("default")}" data-queue-page-move="-1" ${current <= 1 ? "disabled" : ""}>上一页</button>
-      <button class="${tsButtonClass("primary")}" data-queue-page-move="1" ${current >= pages ? "disabled" : ""}>下一页</button>
-    </div>
-  `;
-  node.querySelectorAll("[data-queue-page-move]").forEach((button) => {
-    button.onclick = () => {
-      const nextPage = current + Number(button.dataset.queuePageMove || 0);
-      if (nextPage < 1 || nextPage > pages) return;
-      state.page = nextPage;
-      if (state.tab === "processed") loadProcessed();
-      else loadQueue();
-    };
-  });
-}
-function renderQueue(items) {
-  $("queueList").innerHTML = items.length
-    ? items
-        .map((item) => {
-          const resume = item.resume || {};
-          return `
-            <article class="task-card">
-              <strong>${escapeHtml(resumeName(resume))}</strong>
-              <span>${escapeHtml(resumeJob(resume))}</span>
-              <p>${escapeHtml(item.assignment?.note || "合适待复核")}</p>
-              <button class="${tsButtonClass("primary")}" data-open="${resume.id}" data-jump-resumes="true">查看简历</button>
-            </article>
-          `;
-        })
-        .join("")
-    : `<div class="empty-inline">当前没有待你处理的简历。</div>`;
-  bindRowActions();
 }
 function bindRowActions() {
   document.querySelectorAll("[data-open]").forEach((button) => {
@@ -3933,7 +3876,6 @@ function bindPageActions() {
     loadAutomationMonitoringSummary();
   });
   $("openAllMonitoringDetails").onclick = () => openAutomationDetails("processedContacts");
-  $("refreshQueueBtn").onclick = refreshQueueNow;
   $("suitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "suitable");
   $("unsuitableBtn").onclick = () => state.selectedId && setDecision(state.selectedId, "unsuitable");
   $("interviewBtn").onclick = requestInterview;

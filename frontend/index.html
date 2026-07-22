@@ -55,10 +55,7 @@
         <nav class="ts-nav" aria-label="主导航">
           <button class="active" data-view="dashboard" type="button">仪表盘</button>
           <button data-view="resumes" type="button">简历库</button>
-          <button data-view="queue" type="button">我的任务 <span id="queueNavCount" class="queue-count-badge" hidden></span></button>
           <button data-view="interviews" type="button">面试中心</button>
-          <button data-view="automation" type="button">自动化</button>
-          <button data-view="rules" type="button">规则库</button>
         </nav>
         <div class="ts-topbar-actions">
           <label class="ts-global-search" aria-label="全局搜索">
@@ -138,17 +135,6 @@
                   <span class="muted">按处理联系人数统计</span>
                 </div>
               </div>
-              <div class="monitoring-job-chart-body">
-                <div
-                  id="monitoringJobChart"
-                  class="monitoring-job-chart"
-                  role="img"
-                  aria-label="岗位处理占比，总计 0 人"
-                >
-                  <span id="monitoringJobChartTotal">0</span>
-                </div>
-                <div id="monitoringJobChartLegend" class="monitoring-job-chart-legend"></div>
-              </div>
               <div class="monitoring-account-status-section">
                 <div class="monitoring-account-status-head">
                   <h4>账号状态</h4>
@@ -159,6 +145,17 @@
                   class="monitoring-account-status-grid"
                   aria-live="polite"
                 ></div>
+              </div>
+              <div class="monitoring-job-chart-body">
+                <div
+                  id="monitoringJobChart"
+                  class="monitoring-job-chart"
+                  role="img"
+                  aria-label="岗位处理占比，总计 0 人"
+                >
+                  <span id="monitoringJobChartTotal">0</span>
+                </div>
+                <div id="monitoringJobChartLegend" class="monitoring-job-chart-legend"></div>
               </div>
             </section>
           </div>
@@ -304,17 +301,6 @@
           </div>
         </section>
 
-        <section class="page" data-page="queue">
-          <section class="panel fill">
-            <div class="panel-head">
-              <h3>待我处理 <span id="queueTabCount" class="queue-count-badge" hidden></span></h3>
-              <button id="refreshQueueBtn" class="ts-btn" type="button">刷新队列</button>
-            </div>
-            <div class="task-list" id="queueList"></div>
-            <div class="pagination" id="queuePagination"></div>
-          </section>
-        </section>
-
         <section class="page" data-page="interviews">
           <div class="ts-interview-workspace">
             <aside class="ts-filter-card ts-interview-sidebar" aria-label="面试会话列表">
@@ -371,25 +357,6 @@
           </div>
         </section>
 
-        <section class="page" data-page="automation">
-          <section class="panel fill">
-            <div class="panel-head">
-              <h3>自动化控制</h3>
-              <span id="automationSafety" class="safety-pill">读取中</span>
-            </div>
-            <div class="control-grid" id="automationControls"></div>
-            <div class="notice">真实副作用仍由 dry-run / live 守卫控制；本页只集中展示可操作入口。</div>
-          </section>
-        </section>
-
-        <section class="page" data-page="rules">
-          <section class="panel fill">
-            <div class="panel-head"><h3>规则与知识库</h3></div>
-            <div class="detail-block">
-              岗位规则、知识库问答、评分规则和规则建议会收口到这里。当前岗位处理逻辑仍由后端共享规则引擎负责。
-            </div>
-          </section>
-        </section>
       </main>
     </div>
     <div id="resumeConversationModal" class="resume-conversation-root" data-state="closed" hidden>
@@ -446,6 +413,6 @@
     </div>
     <div id="reviewerDecisionPopoverRoot" class="reviewer-decision-popover-root" role="tooltip" hidden></div>
     <script src="/assets/auth.js?v=20260629-feishu-login"></script>
-    <script src="/assets/app.js?v=20260722-interview-confirm-v1"></script>
+    <script src="/assets/app.js?v=20260722-navigation-dashboard-v1"></script>
   </body>
 </html>

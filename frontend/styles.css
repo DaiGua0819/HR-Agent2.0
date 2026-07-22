@@ -405,11 +405,6 @@ h3 { font-size: 15px; }
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
-[data-page="queue"].active,
-[data-page="automation"].active,
-[data-page="rules"].active {
-  grid-template-rows: 1fr;
-}
 
 .ts-resume-workspace {
   display: grid;
@@ -2124,9 +2119,9 @@ h3 { font-size: 15px; }
 }
 .monitoring-chart-panel {
   display: grid;
-  grid-template-rows: auto 210px minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(260px, auto);
   align-self: start;
-  height: 500px;
+  min-height: 500px;
 }
 .monitoring-job-rows {
   min-height: 0;
@@ -2192,8 +2187,8 @@ h3 { font-size: 15px; }
   grid-template-columns: minmax(160px, 180px) minmax(0, 1fr);
   align-items: center;
   gap: 16px;
-  min-height: 0;
-  padding: 10px 16px;
+  min-height: 260px;
+  padding: 16px;
 }
 .monitoring-job-chart {
   --monitoring-chart-gradient: #eef2f7;
@@ -2319,10 +2314,10 @@ h3 { font-size: 15px; }
 }
 .monitoring-account-status-section {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   min-height: 0;
-  padding: 0 16px 14px;
-  border-top: 1px solid rgba(191, 219, 254, 0.42);
+  padding: 0 16px 12px;
+  border-bottom: 1px solid rgba(191, 219, 254, 0.42);
 }
 .monitoring-account-status-head {
   display: flex;
@@ -2342,7 +2337,7 @@ h3 { font-size: 15px; }
   display: grid;
   grid-auto-flow: column;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, 44px);
   column-gap: 18px;
   min-height: 0;
 }

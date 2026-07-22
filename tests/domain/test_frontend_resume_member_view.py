@@ -177,7 +177,7 @@ def test_resume_library_auth_expiry_returns_to_login_instead_of_loading_forever(
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert "/assets/app.js?v=20260722-interview-confirm-v1" in html
+    assert "/assets/app.js?v=20260722-navigation-dashboard-v1" in html
     assert "function handleAuthExpired" in script
     assert "登录已失效，请重新使用飞书授权登录" in script
     assert 'error.status === 401' in script
@@ -829,7 +829,7 @@ def test_resume_preview_uses_local_pdfjs_canvas_renderer_with_image_fallback() -
     assert (vendor_root / "wasm").is_dir()
     assert (vendor_root / "VERSION").read_text(encoding="utf-8").strip() == "pdfjs-dist@6.1.200"
 
-    assert "/assets/app.js?v=20260722-interview-confirm-v1" in html
+    assert "/assets/app.js?v=20260722-navigation-dashboard-v1" in html
     assert "PDFJS_VENDOR_BASE = \"/assets/vendor/pdfjs\"" in script
     assert 'import(`${PDFJS_VENDOR_BASE}/build/pdf.mjs`)' in script
     assert "GlobalWorkerOptions.workerSrc" in script
@@ -1202,14 +1202,21 @@ def test_resume_library_dispatches_to_shared_queue_when_queue_tab_is_active() ->
     assert "return loadResumes(options);" in dispatcher_block
 
 
-def test_my_tasks_refresh_button_reloads_the_shared_queue() -> None:
-    """Administrators need an explicit refresh after another session completes a task."""
+def test_removed_top_level_pages_keep_tasks_inside_resume_library() -> None:
+    """Queue work stays in resume tabs after removing redundant top-level pages."""
 
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'id="refreshQueueBtn"' in html
-    assert '$("refreshQueueBtn").onclick = refreshQueueNow;' in script
+    for view in ("queue", "automation", "rules"):
+        assert f'data-view="{view}"' not in html
+        assert f'data-page="{view}"' not in html
+    assert "我的任务" not in html
+    assert ">自动化<" not in html
+    assert ">规则库<" not in html
+    assert '["queue", "待我处理"]' in script
+    assert '["processed", "已处理"]' in script
+    assert 'const AVAILABLE_VIEWS = new Set(Object.keys(pages));' in script
 
 
 def test_shared_queue_uses_resume_request_abort_and_sequence_guards() -> None:
@@ -1296,25 +1303,22 @@ def test_admin_queue_summary_polls_every_three_seconds_and_refreshes_on_version_
     assert 'window.addEventListener("focus"' in script
     assert "startQueueSummaryPolling();" in login_block
     assert "stopQueueSummaryPolling();" in logout_block
-    assert 'id="queueNavCount"' in html
-    assert 'id="queueTabCount"' in html
+    assert 'id="queueNavCount"' not in html
+    assert 'id="queueTabCount"' not in html
+    assert 'data-tab="queue"' in script
 
 
-def test_queue_summary_manual_refresh_and_auth_failure_cleanup_are_wired() -> None:
-    """Manual refresh is immediate and polling stops when the session is no longer usable."""
+def test_queue_summary_cleanup_remains_wired_without_task_page() -> None:
+    """Queue polling still stops cleanly after removing the standalone task page."""
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-    refresh_block = script.split("async function refreshQueueNow()", 1)[1].split(
-        "async function refreshQueueSummary",
-        1,
-    )[0]
     stop_block = script.split("function stopQueueSummaryPolling()", 1)[1].split(
         "function scheduleQueueSummaryPoll",
         1,
     )[0]
 
-    assert "await refreshQueueSummary({ forceList: true });" in refresh_block
-    assert '$("refreshQueueBtn").onclick = refreshQueueNow;' in script
+    assert "refreshQueueNow" not in script
+    assert 'id="refreshQueueBtn"' not in (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     assert "state.queueSummaryAbortController.abort()" in stop_block
     assert "clearTimeout(state.queueSummaryTimer)" in stop_block
 
@@ -1333,28 +1337,18 @@ def test_queue_list_failure_keeps_last_counts_and_retries_on_next_summary_poll()
     assert 'state.queueVersion = "";' in queue_block
 
 
-def test_my_tasks_resets_hidden_job_filter_and_has_its_own_pagination() -> None:
-    """The task page always opens the whole queue and can reach tasks after page one."""
+def test_queue_uses_resume_library_pagination_without_standalone_task_page() -> None:
+    """Pending tasks page through the resume library after removing My Tasks."""
 
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
-    set_view_block = script.split("function setView(view)", 1)[1].split(
-        "function loadCurrentResumeCollection",
-        1,
-    )[0]
-    queue_pagination_block = script.split("function renderQueuePagination()", 1)[1].split(
-        "function renderQueue(items)",
-        1,
-    )[0]
 
-    assert 'if (view === "queue")' in set_view_block
-    assert 'state.jobType = "";' in set_view_block
-    assert '$("filters").job_type.value = "";' in set_view_block
-    assert "state.page = 1;" in set_view_block
-    assert 'id="queuePagination"' in html
-    assert 'const node = $("queuePagination");' in queue_pagination_block
-    assert "loadQueue();" in queue_pagination_block
-    assert "renderQueuePagination();" in script
+    assert 'id="resumePagination"' in html
+    assert 'id="queuePagination"' not in html
+    assert "function renderQueuePagination()" not in script
+    assert "function renderQueue(items)" not in script
+    assert "renderPagination();" in script
+    assert 'if (state.tab === "queue") return loadQueue();' in script
 
 
 def test_hiding_page_aborts_inflight_queue_summary() -> None:

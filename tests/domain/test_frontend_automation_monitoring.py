@@ -34,6 +34,12 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert "最近处理明细" not in html
     assert 'id="runtimeStatusGrid"' not in html
     assert 'id="runtimeStatusUpdatedAt"' not in html
+    chart_panel = html.split('<section class="panel monitoring-chart-panel">', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert chart_panel.index('class="monitoring-account-status-section"') < chart_panel.index(
+        'class="monitoring-job-chart-body"'
+    )
     assert "/api/automation-monitoring/daily-summary" in script
     assert "/api/automation-monitoring/runtime-status" in script
     assert "function renderMonitoringAccountStatuses(items = [])" in script
@@ -84,7 +90,8 @@ def test_admin_dashboard_contains_daily_monitoring_surfaces() -> None:
     assert ".monitoring-account-status-grid" in styles
     assert ".monitoring-account-status-row" in styles
     assert "grid-auto-flow: column" in styles
-    assert "height: 500px" in styles
+    assert "min-height: 500px" in styles
+    assert "grid-template-rows: repeat(3, 44px)" in styles
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in styles
     assert "grid-template-columns: minmax(240px, 1fr) 76px 76px" in styles
     assert "grid-template-rows: auto auto auto max-content" in styles
